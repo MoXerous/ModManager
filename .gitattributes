@@ -1,0 +1,9 @@
+# force LF in the repository; the working tree is LF-only
+* text=auto eol=lf
+
+# binary-ish assets that may appear later
+*.jar binary
+*.zip binary
+*.mrpack binary
+*.png binary
+*.ico binary
