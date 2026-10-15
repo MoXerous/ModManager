@@ -188,3 +188,103 @@ _validated_update_preview_context(...)      # 7364
 | منطق «المقارنة الصرامة» و«الهدف الأفضل» في `ProfileCommonTargetWorker` |
 | نصوص الحوارات منقولة كما وردت في تقرير الوكيل |
 | `tests\qa\test_profile_pages.py` و`test_home_page.py` (اسم فقط، أجسامها لم تُقرأ) |
+
+---
+
+## 10. تصحيحات مُقحَمة (قراءة `workers.py` — 3,328 سطراً لا 3,035)
+
+> **المصدر:** `app\ui\workers.py` + `app\ui\task_signal_proxy.py` + `app\application\task_controller.py`.
+> **هذه التصحيحات تُلغي أو تُكمّل ما سبق.** كل سطر يحمل رقمه في المصدر.
+
+### 10-1. 🔴 **الإلغاء ليس `cancelled` في عمّال التحديث — بل `finished` ناجح**
+
+| العامل | كيف يُبلَّغ الإلغاء فعلاً |
+|---|---|
+| `UpdatePreviewWorker` | `finished([])` عند إلغاء مبكّر (1944) · **`finished(results)` بنتائج جزئية** (1965) |
+| `UpdateDownloadWorker` | `finished([DownloadResult(…,"cancelled",…)])` (2112/2199/2250) — **بلا `cancelled.emit` إطلاقاً** |
+| `UpdateInstallWorker` | صف `cancelled` اصطناعي واحد (2650) ثم `finished(results)` العادي (2700) |
+| `BackupScanWorker` | `break` ثم **`finished(partial_entries)`** (2312→2337) — **لا يمكن تمييزه عن مسح قصير** |
+| `BackupRestoreWorker` | صف `"cancelled"` ثم `progress(100)` **حتى بعد الإلغاء** ثم `finished` (2366/2396) |
+| `ProfileUpgradePreviewWorker` | صف `{"status":"cancelled"}` **داخل** `finished(rows)` (357) |
+| `ProfileCommonTargetWorker` | `finished({"suggested":"", "message":"…cancelled."})` (980) |
+
+**العامل الوحيد في هذه المجموعة الذي يستخدم `cancelled` الحقيقي: لا شيء.**
+مقابل ذلك **صحيح**: `ScanInstalledWorker` (1770/1781/1787) · `MrpackImportWorker` (3145/3163/3192/3202) · `MrpackInstallWorker` (3295/3323) · `ProfileUpdateBackupWorker` (2417/2437) · `ProfileBackupRestoreWorker` · `ProfileWorldImportWorker` · `ProfileExportWorker` · `MrpackExportWorker`.
+
+> **يؤكّد قرارك في F-036:** `DownloadManager` يُبلّغ الإلغاء كـ`status` داخل حمولة ناجحة. **اجعله `IpcError::Cancelled` مستقلاً في Rust.**
+> **تعارض هنا مع §3 أعلاه:** قلتُ إن «الإلغاء حالة لا استثناء» — **صحيح على مستوى `DownloadManager`، وخاطئ على مستوى العمال.** أعلى طبقة تسطّحها.
+
+### 10-2. 🔴 **الكود القديم يسمح بـ`http` في روابط `.mrpack`**
+
+`mrpack_service.py` كان يقبل `http` و`https`؛ `modpacks.md` §3.5 يذكر `HTTPS` فقط. **غير مُتحقَّق أيّهما ساري الآن** — لم أقرأ `mrpack_service.py:386` بعد.
+
+### 10-3. **`UpdateInstallWorker` — تفاصيل لم تكن موصوفة**
+
+| البند | السطر | السلوك |
+|---|---|---|
+| **ختم الأدلة في `__init__` لا `run()`** | 2593-2595 | `backup_dir` و`staging_dir` يُحسبان **عند إنشاء العامل** ⇒ إعادة تشغيل العامل تشارك الختم |
+| **القفل قبل التحقق** | 2603-2606 | `lease.acquire()` **قبل** فحص `mods_dir` |
+| **`tracker.start` قبل أول تعديل** | 2616-2637 | ✅ **الترتيب صحيح** — يسبق `staging_dir.mkdir` (2638) |
+| **حارس TOCTOU** | 2736-2746 | **يعيد حساب هاش الملف القديم** ويقارنه بـ`item.sha1` وقت المعاينة ⇒ «Local file changed since preview» |
+| **الملف موجود مسبقاً** | 2806-2838 | إن وُجد الهدف وكان **هاشه مطابقاً**: يحفظ القديم، **يحذف المنزَّل من الخلفية** (2818-2819)، ويبلّغ `success` **دون كتابة الهدف إطلاقاً** (2822-2828). وإلا ⇒ `failed` «Nothing was replaced» (2833-2838) |
+| **`mark_committing` قبل `shutil.move`** | 2842-2846 → 2854 | ✅ صحيح |
+| **⚠ التراجع قد يهبط باسم مختلف** | 2878-2888 | `_backup_old_file` و`_restore_backup` يستخدمان `unique_path` ⇒ التراجع قد ينتج **`name-1.jar`** |
+| `repo.log_download` في `try/except` | 2671-2690 | هنا مغلّف. **في `UpdateDownloadWorker` (2231-2242) ليس مغلّفاً** ⇒ فشل قاعدة يُجهض الدفعة كاملة |
+
+### 10-4. **🐛 `UpdateDownloadWorker` يترك سجلّ العملية مفتوحاً عند التحديد الفارغ**
+
+`return` عند 2148 **دون `tracker.finish()`** ⇒ سجلّ العملية يبقى `RUNNING` إلى الأبد ⇒ `journal.md` §1.6 سيبلّغه عند كل إقلاع تالٍ كعملية مقاطعة.
+**هذا علّة حقيقية في القديم، لا شرط سلوك.**
+
+### 10-5. **`UpdatePreviewWorker` لا يرى المودات المعطّلة**
+
+| العامل | مصدر الملفات | النتيجة |
+|---|---|---|
+| `UpdatePreviewWorker` | `folder.iterdir()` + suffixes `{".jar",".mrpack",".zip"}` (1927-1930) | **لا ملفات `.jar.disabled` ولا `disabled_mods/`** |
+| `ScanInstalledWorker` | `iter_local_mod_scan_files(folder)` (1749) | Top level **+** `disabled_mods/` (local_mod_classification.py:53-57) |
+
+**نفس المفهوم — «امسح مجلد mods» — بمجموعتين مختلفتين من الملفات.** مؤكَّد-behaviour، لا شرط.
+
+### 10-6. **معاينة التحديث تتجاهل التثبيتات المحفوظة**
+
+`ProfileUpgradePreviewWorker` يمرّر **`strip_pins=True`** (340-350، موثّق في 310-313) ⇒ **المعاينة تقارن أحدث لا المثبَّت.**
+`ProfileCommonTargetWorker` و`MrpackExportWorker` لا تفعلان ذلك (`MrpackExportWorker` `allow_alpha=False` افتراضياً، خلافاً لـ`ProfileUpgradePreviewWorker`).
+
+### 10-7. **«الاقتراح الصارم» ليس التقاطَع الخام**
+
+`ProfileCommonTargetWorker` (679-1178):
+1. تقاطَع جارٍ لـ`game_versions` عبر المشاريع (1007) — المشاريع بلا إصدارات قابلة للتنزيل تُستبعد (993-996).
+2. **ثم** كل مرشّح **يُتحقَّق منه بالمبدّل ضد كل المشاريع** (837-865، 1031-1035، 1070) ⇒ **أول مرشَّح يتحقَّق هو الاقتراح الصارم.**
+3. `best_upgrade` استشاري فقط، **يتطلب مشروعين على الأقل** (882-883)، ولا يُتحقَّق بالمبدّل إلا **أعلى 16 مرشّحاً** (919).
+4. **قائمة أهداف مُثبَّتة** `"1.21.11"`…"`1.20"` (1042-1046) + أولوية خاصة لـ`1.20.1` (1078-1082) — **منطق UX داخل العامل، لا في خدمة.**
+5. يصل إلى `resolver._candidate_loaders` **الخاصة** (744، مع `# noqa: SLF001`).
+6. **بلا إشارة `progress`** — وبها ثلاث أشكال مختلفة لـ«فارغ» (1010-1017 / 1168-1176 / الإلغاء) ⇒ المستهلك يجب أن يقرأ `suggested`/`message` لا الفراغ.
+
+### 10-8. **آلية رفض الاستدعاءات القديمة —Global واحدة لا لكل عامل**
+
+`main_window.py:8325-8332`: `thread.quit` مربوط بـ**الإشارات الخام** (فالخيط يتوقف دائماً)، لكن **البوابة على المسار الوسيط فقط** عبر `TaskSignalProxy._dispatch` → `TaskController.accept_terminal` (113-120)، وهي **خانة `_active_task` عالمية واحدة**.
+**⇒ أول إشارة نهائية تفوز؛ كل ما بعدها يُهمَل صامتاً.** وهذا بالضبط ما يمنع عرض نتائج بحث ملغى.
+
+### 10-9. **مسارات تعديل بلا سجلّ عمليات**
+
+| العامل | السطر | التعديل بلا journal |
+|---|---|---|
+| `BackupRestoreWorker` | 2380 | `shutil.copy2` |
+| `ProfileUpdateBackupWorker` | — | `copytree`/`copy2` في الخدمة |
+| `ProfileBackupRestoreWorker` | — | استعادة |
+| `ProfileWorldImportWorker` | — | `staging.rename(target)` |
+| `ProfileExportWorker` · `MrpackExportWorker` | — | كتابة zip |
+
+**فقط عاملان يعدّلان ملفات تحت سجلّ: `UpdateDownloadWorker` و`UpdateInstallWorker`.** وفيهما الترتيب صحيح (§10-3).
+**انقل هذا الترتيب للجميع أو اقبل أن انقطاع العملية يترك أثراً بلا أثر.**
+
+### 10-10. **تمّ التصدير أم لا**
+
+| الصنف | حقيقة |
+|---|---|
+| `ProfileFolderImportWorker` | **غير موجود** — استدعاء خدمة متزامن في `main_window.py:12795` |
+| `ProfileExportZipImportWorker` | **غير موجود** — `main_window.py:12847` |
+| `ProfileExportWorker` | **موجود** (3085-3121) · `write_profile_export_zip` · إلغاء حقيقي |
+| `MrpackExportWorker` | **موجود** (3022-3082) · **بلا مشاريع ⇒ `raise ValueError`** لا `finished([])` |
+| `MrpackImportWorker` | **موجود** (3124-3267) · **حواجب ⇒ يُتخطَّى الإثراء بالشبكة كلياً** (3172) · فشل المزوّد ⇒ **تحذير لا فشل** (3185-3189) |
+| `ProfileValidationWorker` | **موجود** (2522-2550) · **لا يفحص `cancel_requested` إطلاقاً** — فقط يوجّه `RuntimeError` |

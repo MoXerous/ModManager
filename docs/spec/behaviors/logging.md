@@ -44,7 +44,7 @@
 ### 2-1. المسارات — القاعدة (اختبار 2)
 
 `test_redacts_absolute_path_contexts_and_preserves_basename` — 4 سياقات منقّاة إلى basename.
-> **متوافق مع `storage.md` §3.5** (رسائل الترحيل تكشف اسم الملف لا المسار) و`storage.md` §4.7 (تقرير الإقلاع يكشف basename فقط).
+> **متوافق مع `storage.md` §3.5** (رسائل الترحيل تكشف اسم الملف لا المسار) و`journal.md` §1.7 (تقرير الإقلاع يكشف basename فقط).
 
 ### 2-2. السجل الخاص — القائمة السوداء (اختبار 16)
 
@@ -106,7 +106,7 @@ from app.services.log_sanitizer import (...)
 | المواصفة | التقاطع |
 |---|---|
 | `storage.md` §3.5 | `_safe_error_message`: اسم ملف لا مسار |
-| `storage.md` §4.7 | تقرير الإقلاع: basename فقط |
+| `journal.md` §1.7 | تقرير الإقلاع: basename فقط |
 | `providers.md` §2.10 | `ModrinthApiError` لا يحوي جسم الاستجابة (`"private"` غائب — اختبار) |
 | `downloads.md` §12 | رسائل التحميل نصوص حرفية بلا رموز |
 

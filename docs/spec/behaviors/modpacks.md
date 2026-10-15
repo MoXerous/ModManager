@@ -360,17 +360,19 @@ and project_id not already recorded
 | البند | الحالة | ملاحظة |
 |---|---|---|
 | **رموز مشاكل مسمّاة** (26 خطأ / 2 تحذير / 2 info) | ✅ **انقلها حرفياً** | نموذج ممتاز لـ`IpcError { code }` |
-| `renameat2` بـ`RENAME_NOREPLACE` | ⚠ يحتاج `rustix` أو `libc` | **افحص صفحة `rustix` على crates.io أولاً** (`AGENTS.md` §6) |
-| وصف `.mrpack` | ⚠ **غير مُتحقَّق** | تحقق من `docs/modrinth-app-gap-analysis.md` أو الموقع الرسمي |
-| **CurseForge zip** | ❌ **جديد تماماً** | لا تفترض أي سلوك. `manifest.json` بـ`projectID`/`fileID` و`overrides/` |
-| **بصمة CurseForge** | ❌ جديد | `foundations.md` §3.2: MurmurHash2 بعد إزالة المسافات البيضاء — **دالة صغيرة نكتبها** |
-| عدم فحص روابط العناصر المتخطّاة | ✅ نقل | قرار صحيح: لا نُجهّز قائمة بيضاء لما لن نزّله |
-| **فحص القرص أخيراً** | ⚠ قرار | راجعه عند النقل |
-| `MrpackExportSummary.warnings` قابل للتعديل رغم `frozen` | ⚠ ثغرة | `Vec<String>` مع `#[derive(Clone)]` يحلّها في Rust |
+| `renameat2` بـ`RENAME_NOREPLACE` | ⚠ يحتاج `rustix` أو `libc` | **افحص صفحة crates.io أولاً** (`AGENTS.md` §6) |
+| وصف `.mrpack` | ⚠ **غير مُتحقَّق** | §12: لا مواصفة في `gap-analysis`؛ المصدر الوحيد هو `mrpack_service.py` |
+| **CurseForge zip** | ❌ **جديد تماماً** | `manifest.json` بـ`projectID`/`fileID` — **لا مرجع** |
+| عدم فحص روابط العناصر المتخطّاة | ✅ نقل | صحيح: لا نُجهّز قائمة بيضاء لما لن نزّله |
+| `MrpackExportSummary.warnings` قابل للتعديل رغم `frozen` | ⚠ ثغرة | `Vec<String>` يحلّها في Rust |
 
 ---
 
-## 11. غير مُتحقَّق
+## 11. ملاحظات تحليل الفجوات القديم
+
+> قراءات `docs\modrinth-app-gap-analysis.md` عن `.mrpack` وCurseForge **مُنقولة إلى [`gap-analysis-notes.md`](./gap-analysis-notes.md)** (بما فيها: لا مواصفة صيغة في الوثيقة، وتعارضها الداخلي، وشرح ادّعاء `curseforge_client.py`).
+
+## 12. غير مُتحقَّق
 
 | البند |
 |---|---|

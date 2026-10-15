@@ -198,3 +198,57 @@
 | حالة رمز NUL في المسارات — **مُستنتجة من اسم اختبار**، لم يُقرأ الاختبار |
 | `test_world_import_blocks_existing_target_and_symlink_sources` — **`return` صامت بدل `skipTest`** |
 | الدالة `export_selected_profile` JSON — لم تُقرأ |
+
+---
+
+## 10. تصحيحات مُقحَمة (قراءة `workers.py`)
+
+> **المصدر:** `app\ui\workers.py` (3,328 سطراً).
+
+### 10-1. 🔴 **استيراد المجلد واستيراد zip: لا يوجد عامل إطلاقاً**
+
+| ما ظننتُه عاملاً | الحقيقة |
+|---|---|
+| `ProfileFolderImportWorker` | **غير موجود.** `preview_profile_folder_import` يُستدعى متزامناً من `main_window.py:12795` |
+| `ProfileExportZipImportWorker` | **غير موجود.** `preview_profile_export_zip_import` من `main_window.py:12847` |
+
+**غير مُتحقَّق:** هل تنفّذ هذه الخدمات قراءات قرص **على خيط الواجهة**؟ هذا خطر تجمّد، لكن لم أقرأ أجسامها.
+
+### 10-2. **عامل التصدير موجود ويعمل بخيط**
+
+`ProfileExportWorker` (3085-3121):
+- `finished = Signal(object)` · `progress(5)` قبل · `progress(100)` بعد
+- `write_profile_export_zip(plan, output_path, cancel_callback=…)` — **المُنفِّذ الوحيد**
+- **إلغاء حقيقي**: يُفحص **قبل** النداء (3099-3101)، **وبعد** عودته (3112-3114)، وفي فرع الاستثناء (3118-3119)
+- الرسالة تؤكّد «No final export zip was written» — **وهذا السلوك الذرّي يعيش في الخدمة، غير مُتحقَّق منه هنا**
+
+### 10-3. **الإلغاء هنا صحيح — بخلاف التحديث**
+
+| العامل | إلغاء حقيقي؟ |
+|---|---|
+| `ProfileExportWorker` | ✅ (3100/3113/3119) |
+| `MrpackExportWorker` (3022-3082) | ✅ (3065) — **لكن يُفحص بعد مرحلة الحل كاملة**؛ والمشاريع الفارغة ⇒ `raise ValueError` لا `finished([])` |
+| `MrpackImportWorker` (3124-3267) | ✅ خمس نقاط (3145/3163/3192/3202) — **هذا هو النمط الجيد** |
+
+### 10-4. **`MrpackImportWorker` — إثراء اختياريrizz**
+
+- **إن كان `manifest.blockers` غير فارغ ⇒ يُتخطَّى الإثراء بالشبكة كلياً** (3172) — **صفر طلبات**. ✅ ممتاز.
+- فشل المزوّد أثناء الإثراء ⇒ **تحذير** يُضاف إلى `format_warnings` والاستيراد **ينجح** (3185-3189).
+- فشل `get_project` ⇒ `ModProject` اصطناعي بعنوان `project_id` (3215-3220).
+- **بلا كتابة على القرص إطلاقاً** — قراءة فقط.
+- لا `progress(100)` عند النجاح.
+
+### 10-5. **العامل الوحيد الذي يمرّر السجلّ مباشرةً للخدمات**
+
+`MrpackInstallWorker` (3270-3328): `operation_journal: OperationJournal` **مطلوب غير اختياري**؛ ويمرّره إلى `install_mrpack_plan` و`persist_mrpack_profile` مباشرةً بدلاً من `DownloadOperationTracker`.
+**ترتيب التحقق:** فحص الإلغاء **قبل** `lease.acquire()` (3294-3300) ⇒ «يُلغى» لا «مشغول».
+
+### 10-6. **مصحّحات على ما سبق في هذه الوثيقة**
+
+| الموضع | التصحيح |
+|---|---|
+| §3.3 «ينتظر `_has_running_worker()`» | ✅ صحيح — العمّال **ينتهون themselves**؛ لا انتظار في `workers.py` |
+| §5 «`log_download`» | في `UpdateDownloadWorker` **غير مغلّف بـtry/except** ⇒ فشل قاعدة يُجهض الدفعة. في `UpdateInstallWorker` مغلّف. انظر `updates.md` §10-3 |
+| §7.2 الاستيراد «بلا استخراج» | ✅ **مؤكَّد** — `MrpackImportWorker` لا يفكّ ولا يكتب |
+| §4 «`ProfileWorldImportWorker`» | **موجود** (2483-2519) — إلغاء حقيقي + `execute_profile_world_import` |
+| §7.1 معاينة العوالم | لم يوجد عامل لها — الخدمة تُستدعى مباشرة (.)
