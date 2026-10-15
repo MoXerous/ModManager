@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["core", "cli", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+# E: is a slow USB HDD with poor small-file performance. Full debug info would
+# multiply target/ size and build time for no benefit in M0.
+[profile.dev]
+debug = "line-tables-only"
+
+# Moved here from the Tauri template: profiles are only honoured at the
+# workspace root (https://doc.rust-lang.org/cargo/reference/profiles.html).
+# Read the optimization guideline for more details:
+# https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

@@ -1,0 +1,13 @@
+[package]
+name = "mm-cli"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "modmanager"
+path = "src/main.rs"
+
+[dependencies]
+mm-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
