@@ -6,6 +6,7 @@ publish = false
 
 # لا تبعيات في M0 عمداً: تُضاف كل مكتبة مع أول وحدة تحتاجها.
 [dependencies]
+directories = "6.0.0"
 # fs2: only std-free way to probe free disk space (F-023 preflight).
 # Kept over hand-rolled FFI: 93M downloads, exact on Windows junctions.
 fs2 = "0.4.3"
