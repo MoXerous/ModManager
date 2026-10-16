@@ -47,11 +47,54 @@ pub enum ExtractError {
     Empty,
 }
 
+/// A pre-existing symlink or reparse point (e.g. NTFS junction) inside the
+/// destination would redirect writes outside it. `is_symlink` alone misses
+/// junctions, so on Windows the reparse-point attribute is checked too.
+fn is_link_or_reparse(p: &Path) -> bool {
+    match p.symlink_metadata() {
+        Ok(m) => {
+            if m.file_type().is_symlink() {
+                return true;
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                (m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 fn io_err(op: &'static str, path: &Path, source: std::io::Error) -> ExtractError {
     ExtractError::Io {
         op,
         path: path.to_path_buf(),
         source,
+    }
+}
+
+/// Fails reads past `limit` bytes: actual decompressed bytes must never
+/// exceed the declared member size (lying central-directory headers).
+struct Capped<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::other("member exceeds declared size"));
+        }
+        let cap = self.remaining.min(buf.len() as u64) as usize;
+        let n = self.inner.read(&mut buf[..cap])?;
+        self.remaining -= n as u64;
+        Ok(n)
     }
 }
 
@@ -85,17 +128,13 @@ pub fn extract_safely<R: Read + Seek>(
         if target.as_os_str().len() > MAX_JOINED_PATH_LEN {
             return Err(ExtractError::TooLong(target));
         }
-        // Refuse to write through a pre-existing symlink in the chain (TOCTOU).
+        // Refuse to write through a pre-existing symlink or junction (TOCTOU).
         let mut anc = target.parent();
         while let Some(a) = anc {
             if a == dest {
                 break;
             }
-            let is_link = a
-                .symlink_metadata()
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-            if is_link {
+            if is_link_or_reparse(a) {
                 return Err(ExtractError::Escape(a.to_path_buf()));
             }
             anc = a.parent();
@@ -107,12 +146,30 @@ pub fn extract_safely<R: Read + Seek>(
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| io_err("create_dir", parent, e))?;
         }
-        let mut reader = archive
+        let reader = archive
             .by_index(member.index)
             .map_err(|e| io_err("open", &target, e.into()))?;
-        let bytes = atomic::write_atomic(&target, &mut reader)?;
-        report.files += 1;
-        report.bytes += bytes;
+        // Cap actual bytes at declared size + 1: a lying header must fail
+        // here, not decompress unbounded into the destination. Note zip's own
+        // reader also rejects over-declared streams; either way no file lands.
+        let mut capped = Capped {
+            inner: reader,
+            remaining: member.size.saturating_add(1),
+        };
+        match atomic::write_atomic(&target, &mut capped) {
+            Ok(bytes) => {
+                report.files += 1;
+                report.bytes += bytes;
+            }
+            // The stream met or exceeded the declared size when trouble hit:
+            // the central-directory sizes lied.
+            Err(_) if capped.remaining <= 1 => {
+                return Err(ExtractError::Inspect(InspectError::BadRatio(
+                    member.name.clone(),
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     Ok(report)
 }
@@ -275,6 +332,40 @@ mod tests {
         let mut a = archive_of(&[("sub/link/evil.txt", b"x")]);
         let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
         assert!(matches!(r, Err(ExtractError::Escape(_))));
+    }
+
+    #[test]
+    fn spec_f042_extract_rejects_lying_header_actual_over_declared() {
+        // Central-directory size says 10 bytes, the deflated body is 4 KiB:
+        // inspect passes on metadata, extract must cap actual bytes and fail.
+        use zip::CompressionMethod;
+        let data = vec![b'B'; 4096];
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        w.start_file(
+            "lying.bin",
+            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+        )
+        .expect("fixture");
+        w.write_all(&data).expect("fixture");
+        let mut buf = w.finish().expect("fixture").into_inner();
+        let bytes = &mut buf;
+        let mut i = 0;
+        while i + 32 < bytes.len() {
+            if bytes[i..].starts_with(b"PK\x01\x02") {
+                bytes[i + 24..i + 28].copy_from_slice(&10u32.to_le_bytes());
+                break;
+            }
+            i += 1;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dest = dir.path().join("out");
+        let mut a = ZipArchive::new(Cursor::new(bytes.clone())).expect("fixture opens");
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        // Either the crate's own size check (Io) or the Capped backstop
+        // (BadRatio) must fire; what matters is no file and no .part land.
+        assert!(r.is_err(), "lying header must fail, got {r:?}");
+        assert!(!dest.join("lying.bin").exists());
+        no_parts_left(&dest);
     }
 
     #[test]
