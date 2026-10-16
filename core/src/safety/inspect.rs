@@ -360,7 +360,10 @@ mod tests {
             compression_ratio_min_size: 1,
             ..limits()
         };
-        eprintln!("DEBUG zero-test inspect => {:?}", inspect_zip(&mut a, &lim));
+        assert!(matches!(
+            inspect_zip(&mut a, &lim),
+            Err(InspectError::BadRatio(_))
+        ));
     }
 
     #[test]

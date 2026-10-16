@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn spec_f042_extract_writes_members_and_reports() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = archive_of(&[("mods/a.jar", b"aaa"), ("config/c.cfg", b"cc")]);
         let rep =
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn spec_f041_extract_rejects_traversal_and_writes_nothing() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = archive_of(&[("../evil.txt", b"x")]);
         assert!(extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go).is_err());
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn spec_f044_extract_never_creates_symlink() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut w = ZipWriter::new(Cursor::new(Vec::new()));
         w.start_file(
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn spec_f043_extract_enforces_limits_before_any_write() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = archive_of(&[("big.bin", &[0u8; 64])]);
         let lim = ArchiveLimits {
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn spec_f049_extract_rejects_empty_archive() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = archive_of(&[]);
         assert_eq!(
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn spec_f042_extract_cancel_leaves_no_partial() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = archive_of(&[("one.txt", b"1"), ("two.txt", b"2")]);
         let mut calls = 0;
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn spec_f044_extract_refuses_preexisting_dest_symlink() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         std::fs::create_dir_all(dest.join("sub")).expect("fixture");
         // Symlink creation needs privileges; skip honestly when unavailable.
@@ -357,7 +357,7 @@ mod tests {
             }
             i += 1;
         }
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = ZipArchive::new(Cursor::new(bytes.clone())).expect("fixture opens");
         let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn spec_f047_extract_rejects_reserved_names() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("out");
         let mut a = archive_of(&[("CON.txt", b"x")]);
         assert!(extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go).is_err());
