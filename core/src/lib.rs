@@ -4,6 +4,7 @@
 //! تطبيق Tauri وأداة CLI عميلان لها.
 
 pub mod demo;
+pub mod safety;
 
 /// اسم التطبيق كما يظهر للمستخدم.
 pub const APP_NAME: &str = "ModManager";
