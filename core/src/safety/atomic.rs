@@ -33,6 +33,22 @@ pub fn part_path(dest: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Sync + rename an already-written sibling `.part` (downloader commit path).
+///
+/// Unlike [`write_atomic`], this never creates or truncates: the caller owns
+/// the part file's whole lifecycle (streaming, resume). Fails if no `.part`.
+pub fn commit_part(part: &Path, dest: &Path) -> Result<(), AtomicError> {
+    // write:true: FlushFileBuffers fails on read-only handles (Windows).
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(part)
+        .map_err(|e| io_err("open", part, e))?;
+    f.sync_all().map_err(|e| io_err("sync", part, e))?;
+    drop(f);
+    rename_retry(part, dest)
+}
+
 /// Write `src` to `dest` atomically via a sibling `.part` file.
 ///
 /// A stale `.part` from a killed run is never trusted: it is removed first.
@@ -99,7 +115,7 @@ mod tests {
 
     #[test]
     fn spec_f021_write_atomic_replaces_target_and_leaves_no_part() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("a.jar");
         std::fs::write(&dest, b"old").expect("fixture");
         write_atomic(&dest, &mut Cursor::new(b"new bytes")).expect("writes");
@@ -115,7 +131,7 @@ mod tests {
                 Err(std::io::Error::other("boom"))
             }
         }
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("a.jar");
         std::fs::write(&dest, b"old").expect("fixture");
         assert!(write_atomic(&dest, &mut Failing).is_err());
@@ -125,7 +141,7 @@ mod tests {
 
     #[test]
     fn spec_f021_write_atomic_cleans_stale_part_first() {
-        let dir = tempfile::tempdir().expect("temp dir");
+        let dir = crate::test_tempdir();
         let dest = dir.path().join("a.jar");
         std::fs::write(part_path(&dest), b"stale").expect("fixture");
         write_atomic(&dest, &mut Cursor::new(b"fresh")).expect("writes");

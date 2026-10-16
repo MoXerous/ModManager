@@ -6,14 +6,16 @@ publish = false
 
 # لا تبعيات في M0 عمداً: تُضاف كل مكتبة مع أول وحدة تحتاجها.
 [dependencies]
+# fs2: only std-free way to probe free disk space (F-023 preflight).
+# Kept over hand-rolled FFI: 93M downloads, exact on Windows junctions.
+fs2 = "0.4.3"
 httpdate = "1.0.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream"] }
 sha1 = "0.11.0"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["rt", "macros", "sync", "time"] }
 unicode-normalization = "0.1.25"
-url = "2.5.8"
 zip = "9.0.4"
 
 [dev-dependencies]

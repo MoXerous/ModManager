@@ -64,14 +64,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spec_f039_no_retry_on_404() {
+    fn spec_f027_no_retry_on_404() {
         assert!(!should_retry(Some(404)));
         assert!(!should_retry(Some(400)));
         assert!(!should_retry(Some(301)));
     }
 
     #[test]
-    fn spec_f039_retries_429_5xx_and_transport() {
+    fn spec_f027_retries_429_5xx_and_transport() {
         assert!(should_retry(None));
         assert!(should_retry(Some(429)));
         assert!(should_retry(Some(500)));
@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_f039_retry_after_numeric_clamped() {
+    fn spec_f027_retry_after_numeric_clamped() {
         let mut h = HeaderMap::new();
         h.insert(RETRY_AFTER, "5".parse().expect("header"));
         let p = RetryPolicy::default();
@@ -90,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_f039_backoff_doubles_capped_at_max() {
+    fn spec_f027_backoff_doubles_capped_at_max() {
         let h = HeaderMap::new();
         let p = RetryPolicy::default();
         assert_eq!(retry_delay_secs(1, &h, &p), 1.0);
@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_f039_default_policy_matches_spec() {
+    fn spec_f027_default_policy_matches_spec() {
         let p = RetryPolicy::default();
         assert_eq!(p.max_attempts, 1);
         assert_eq!(p.base_secs, 1.0);
