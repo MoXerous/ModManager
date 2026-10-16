@@ -6,6 +6,8 @@
 pub mod db;
 pub mod demo;
 pub mod downloader;
+pub mod instances;
+pub mod jar_reader;
 pub mod logging;
 pub mod paths;
 pub mod providers;
