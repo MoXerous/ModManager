@@ -220,12 +220,28 @@ pub async fn resolve_project(
         r
     };
 
-    // Step 3: preferred pins over one unfiltered scan (id → sha1 → number).
+    // Step 3: preferred pins (id → sha1 → number). The id pin tries the
+    // single-version endpoint first (963 B vs ~1.2 MB list); any miss
+    // falls back to the list scan below.
     if params.pin.version_id.is_some()
         || params.pin.file_sha1.is_some()
         || params.pin.version_number.is_some()
     {
-        let full = versions_cached(provider, cache, &project.id, None, None).await;
+        if let Some(id) = params.pin.version_id.as_deref() {
+            if let Ok(v) = provider.get_version(id).await {
+                if v.project_id == project.id
+                    && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
+                    && compatibility_issue(Some(&v), &game, &candidates).is_none()
+                {
+                    return finish(cache, compatible(&project, &ptype, &v));
+                }
+            }
+        }
+        let full = if params.pin.version_id.is_some() || params.pin.version_number.is_some() {
+            versions_cached(provider, cache, &project.id, None, None).await
+        } else {
+            Vec::new()
+        };
         if let Some(id) = params.pin.version_id.as_deref() {
             if let Some(v) = full.iter().find(|v| {
                 v.id == id
@@ -409,8 +425,17 @@ pub async fn resolve_dependency(
         dep.dependency_type
     );
 
-    // Method 1: pinned version id; a project mismatch is swallowed.
+    // Method 1: pinned version id via the single-version endpoint; a
+    // miss, mismatch, or incompatibility falls back to the list scan.
     if let Some(vid) = dep.version_id.as_deref() {
+        if let Ok(v) = provider.get_version(vid).await {
+            if v.project_id == dep_id && compatibility_issue(Some(&v), &game, &candidates).is_none()
+            {
+                let mut r = compatible(&project, &ptype, &v);
+                r.reason = pinned_reason.clone();
+                return Some(r);
+            }
+        }
         let full = versions_cached(provider, cache, &dep_id, None, None).await;
         if let Some(v) = full.iter().find(|v| v.id == vid) {
             if v.project_id == dep_id && compatibility_issue(Some(v), &game, &candidates).is_none()

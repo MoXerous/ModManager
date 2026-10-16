@@ -119,6 +119,7 @@ pub trait Provider: Send + Sync {
     fn provider_id(&self) -> &'static str;
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, ProviderError>;
     async fn get_project(&self, id_or_slug: &str) -> Result<Project, ProviderError>;
+    async fn get_version(&self, id: &str) -> Result<Version, ProviderError>;
     async fn get_versions(
         &self,
         id_or_slug: &str,

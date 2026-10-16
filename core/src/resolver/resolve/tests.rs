@@ -89,6 +89,16 @@ impl Provider for FakeProvider {
             .ok_or(crate::providers::ProviderError::Api { status: 404 })
     }
 
+    async fn get_version(&self, id: &str) -> Result<Version, crate::providers::ProviderError> {
+        self.push("get_version", id.to_string());
+        self.versions
+            .values()
+            .flatten()
+            .find(|v| v.id == id)
+            .cloned()
+            .ok_or(crate::providers::ProviderError::Api { status: 404 })
+    }
+
     async fn get_versions(
         &self,
         id_or_slug: &str,
@@ -189,8 +199,22 @@ async fn spec_f056_preferred_id_skips_candidate_loop() {
     let r = resolve_project(&p, &mut c, &ps).await;
     assert_eq!(r.status, "compatible");
     assert_eq!(r.version.as_ref().expect("v").id, "v2");
-    // One unfiltered scan, no per-candidate refetch.
-    assert_eq!(p.calls("get_versions"), vec!["a||".to_string()]);
+    // Single-version endpoint, no list scan, no per-candidate refetch.
+    assert_eq!(p.calls("get_version"), vec!["v2".to_string()]);
+    assert!(p.calls("get_versions").is_empty());
+}
+
+#[tokio::test]
+async fn spec_f056_unknown_pin_falls_back_to_list_scan() {
+    let p = FakeProvider::new().with_project(full_project("a"), vec![version("v1", "a")]);
+    let mut c = cache();
+    let mut ps = params(full_project("a"), "mod");
+    ps.pin.version_id = Some("nope".to_string());
+    let r = resolve_project(&p, &mut c, &ps).await;
+    assert_eq!(r.status, "compatible");
+    assert_eq!(r.version.as_ref().expect("v").id, "v1");
+    assert_eq!(p.calls("get_version"), vec!["nope".to_string()]);
+    assert!(!p.calls("get_versions").is_empty());
 }
 
 #[tokio::test]

@@ -357,6 +357,21 @@ impl Provider for ModrinthClient {
         })
     }
 
+    async fn get_version(&self, id: &str) -> Result<Version, ProviderError> {
+        let r = self
+            .request(
+                reqwest::Method::GET,
+                &format!("/version/{id}"),
+                Vec::new(),
+                None,
+            )
+            .await?;
+        if r.status != 200 {
+            return Err(ProviderError::Api { status: r.status });
+        }
+        Self::parse::<VersionDto>(&r).map(map_version)
+    }
+
     async fn get_versions(
         &self,
         id_or_slug: &str,
@@ -599,6 +614,37 @@ mod tests {
         assert_eq!(p.id, "P7dR8mSH");
         assert_eq!(p.slug.as_deref(), Some("fabric-api"));
         assert_eq!(p.downloads, 100);
+    }
+
+    #[tokio::test]
+    async fn spec_f002_get_version_maps_single() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/version/oGwyXeEI"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "id": "oGwyXeEI", "project_id": "P7dR8mSH", "author_id": "a",
+                    "featured": false, "name": "1.0", "version_number": "1.0.0",
+                    "changelog": null, "date_published": "2024-01-01T00:00:00Z",
+                    "downloads": 5, "version_type": "release", "status": "listed",
+                    "game_versions": ["1.21"], "loaders": ["fabric"],
+                    "files": [{
+                        "hashes": {"sha512": "aa", "sha1": "bb"},
+                        "url": "https://cdn.modrinth.com/x.jar",
+                        "filename": "x.jar", "primary": true, "size": 6, "file_type": null
+                    }],
+                    "dependencies": []
+                }"#,
+            ))
+            .mount(&server)
+            .await;
+        let v = test_client(&server)
+            .get_version("oGwyXeEI")
+            .await
+            .expect("version");
+        assert_eq!(v.id, "oGwyXeEI");
+        assert_eq!(v.project_id, "P7dR8mSH");
+        assert_eq!(v.status, "listed");
     }
 
     #[tokio::test]
