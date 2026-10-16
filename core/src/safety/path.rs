@@ -53,7 +53,12 @@ pub fn safe_member_name(name: &str) -> Result<String, NameError> {
     {
         return Err(NameError::Absolute);
     }
-    let parts: Vec<&str> = normalized.split('/').collect();
+    // Directories end with '/': validate the path without it, keep it in output.
+    let check = normalized.strip_suffix('/').unwrap_or(&normalized);
+    if check.is_empty() {
+        return Err(NameError::UnsafePath);
+    }
+    let parts: Vec<&str> = check.split('/').collect();
     if parts
         .iter()
         .any(|p| p.is_empty() || *p == "." || *p == "..")
@@ -93,6 +98,8 @@ mod tests {
             safe_member_name("mods\\example.jar"),
             Ok("mods/example.jar".to_string())
         );
+        // Directory entries keep their trailing slash.
+        assert_eq!(safe_member_name("mods/"), Ok("mods/".to_string()));
     }
 
     #[test]

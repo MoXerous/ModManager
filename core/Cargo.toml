@@ -6,4 +6,6 @@ publish = false
 
 # لا تبعيات في M0 عمداً: تُضاف كل مكتبة مع أول وحدة تحتاجها.
 [dependencies]
+thiserror = "2.0.21"
 unicode-normalization = "0.1.25"
+zip = "9.0.4"
