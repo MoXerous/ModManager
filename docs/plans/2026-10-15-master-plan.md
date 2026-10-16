@@ -88,9 +88,11 @@ pnpm build                      # فحص أنواع الواجهة
 | ADR | `0001` `0002` `0003` |
 | Task 0 | ✅ مكتمل (مع ملاحظة SDK أدناه) |
 | Task 1 | ✅ مكتمل — 181 ميزة، 152 Keep / 16 Defer / 13 Drop |
-| Task 2 | 🚧 **متوقّف على بوابة خارجية** |
+| Task 2 | ✅ **مكتمل 2026-10-16** — البناء والاختبارات والقياسات والـcommit (`39b39bb`) |
 
-⛔ **الحاجز الحالي:** لا مكتبات Windows SDK على القرص ⇒ `LNK1181: cannot open input file 'kernel32.lib'` ⇒ لا `cargo build`/`test`/`clippy` لأي crate ذي تبعيات ⇒ لا `src/bindings` ⇒ `pnpm build` يفشل. **المطلوب من المالك:** تثبيت Windows SDK. **لا حلول بديلة** (لا GNU، لا `vcvars`).
+⛔ **الحاجز السابق (حُلّ 2026-10-16):** كانت مكتبات Windows SDK مفقودة ⇒ `LNK1181`. **الحل:**
+المالك حرّر `C:` (0.24 ← 5.74 GB)، وثُبّت SDK (`DesktopCPPx64` فقط، 1.7 GB) من الحزمة
+المُنزَّلة أصلاً — بلا تحميل شبكة. البناء يعمل بلا `vcvars`.
 
 **مُتحقَّق فعلاً:** `cargo fmt --all -- --check` exit 0 · `cargo check -p mm-core` exit 0 · `pnpm install` 32.9s / 83.2 MB / 669 ملفاً.
 **غير مُتحقَّق:** زمن أول بناء كامل · حجم `target/` النهائي · كل ما عدا `mm-core`.
