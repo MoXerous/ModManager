@@ -1056,6 +1056,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spec_f030_html_bytes_sniffed_deletes_part() {
+        // No HTML content-type: the byte sniff must still catch it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sniff.bin"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "application/octet-stream")
+                    .set_body_bytes(b"  \n<html><body>nope</body></html>"),
+            )
+            .mount(&server)
+            .await;
+        let dl = Downloader::new(2).expect("client");
+        let (_dir, r) = setup(&server, "sniff.bin");
+        let dest = r.dest.clone();
+        assert!(matches!(
+            dl.download(&r, &mut go, &still).await,
+            Err(DownloadError::HtmlRejected)
+        ));
+        assert!(!dest.exists());
+        assert!(!crate::safety::atomic::part_path(&dest).exists());
+    }
+
+    #[tokio::test]
+    async fn spec_f042_download_rejects_empty_archive() {
+        let server = MockServer::start().await;
+        let empty = {
+            let w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            w.finish().expect("fixture").into_inner()
+        };
+        Mock::given(method("GET"))
+            .and(path("/empty.jar"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(empty))
+            .mount(&server)
+            .await;
+        let dl = Downloader::new(2).expect("client");
+        let (_dir, r) = setup(&server, "empty.jar");
+        let dest = r.dest.clone();
+        assert!(matches!(
+            dl.download(&r, &mut go, &still).await,
+            Err(DownloadError::EmptyArchive)
+        ));
+        assert!(!dest.exists());
+        assert!(!crate::safety::atomic::part_path(&dest).exists());
+    }
+
+    #[tokio::test]
     async fn spec_f031_rejects_non_https() {
         let dl = Downloader::new(2).expect("client");
         let dir = crate::test_tempdir();
