@@ -9,6 +9,7 @@ pub mod downloader;
 pub mod logging;
 pub mod paths;
 pub mod providers;
+pub mod resolver;
 pub mod safety;
 
 /// اسم التطبيق كما يظهر للمستخدم.

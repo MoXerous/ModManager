@@ -6,7 +6,7 @@
 
 use super::{
     HashAlgo, LatestFilter, Project, ProjectFile, Provider, ProviderError, SearchPage, SearchQuery,
-    Version,
+    Version, VersionDependency,
 };
 use std::collections::HashMap;
 
@@ -95,6 +95,18 @@ struct FileDto {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct DependencyDto {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    version_id: Option<String>,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    dependency_type: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct VersionDto {
     id: String,
     project_id: String,
@@ -103,9 +115,17 @@ struct VersionDto {
     changelog: Option<String>,
     date_published: String,
     version_type: String,
+    #[serde(default = "listed_status")]
+    status: String,
     files: Vec<FileDto>,
     game_versions: Vec<String>,
     loaders: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<DependencyDto>,
+}
+
+fn listed_status() -> String {
+    "listed".to_string()
 }
 
 fn map_file(f: FileDto) -> ProjectFile {
@@ -129,9 +149,20 @@ fn map_version(v: VersionDto) -> Version {
         changelog: v.changelog,
         date_published: v.date_published,
         version_type: v.version_type,
+        status: v.status,
         files: v.files.into_iter().map(map_file).collect(),
         game_versions: v.game_versions,
         loaders: v.loaders,
+        dependencies: v
+            .dependencies
+            .into_iter()
+            .map(|d| VersionDependency {
+                project_id: d.project_id,
+                version_id: d.version_id,
+                file_name: d.file_name,
+                dependency_type: d.dependency_type,
+            })
+            .collect(),
     }
 }
 
@@ -577,6 +608,9 @@ mod tests {
         // F-017: empty-URL file is kept, never dropped.
         assert_eq!(vs[0].files[1].url, "");
         assert_eq!(vs[0].date_published, "2024-01-01T00:00:00Z");
+        // Resolver reads these raw (spec §3 step 3, §5 BFS).
+        assert_eq!(vs[0].status, "listed");
+        assert!(vs[0].dependencies.is_empty());
     }
 
     #[tokio::test]

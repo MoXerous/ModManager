@@ -34,6 +34,14 @@ pub struct Project {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionDependency {
+    pub project_id: Option<String>,
+    pub version_id: Option<String>,
+    pub file_name: Option<String>,
+    pub dependency_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     pub id: String,
     pub project_id: String,
@@ -43,9 +51,13 @@ pub struct Version {
     /// Raw string, never parsed (spec §2-7: no invented ISO parsing).
     pub date_published: String,
     pub version_type: String,
+    /// Modrinth `status` (`listed`, `archived`, …); step 3 of the
+    /// compatibility ladder (resolver §3) reads it raw.
+    pub status: String,
     pub files: Vec<ProjectFile>,
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
+    pub dependencies: Vec<VersionDependency>,
 }
 
 #[derive(Debug, Clone, Default)]
