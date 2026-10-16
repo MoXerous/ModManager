@@ -1,6 +1,7 @@
 # مجلد إخراج أنواع TypeScript التي يولّدها ts-rs عند تشغيل cargo test.
-# ts-rs يلحق القيمة بمجلد العمل الحالي، وهو جذر الحزمة المُختبرة
-# (src-tauri/) لا جذر المستودع — لذا نصعد بمستوى واحد إلى src/bindings.
+# ts-rs يلحق القيمة على مجلد العمل الحالي (CWD) وقت تنفيذ الاختبارات —
+# لذا شغّل cargo دائماً من جذر المستودع فيكون المخرج src/bindings حتماً.
+# لا تغيّر القيمة إلى ../ مهما حدث: ذلك يسرّب الملفات خارج المستودع.
 # الوجهة الوحيدة الملتزمة: src/bindings (تستورد منها الواجهة).
 [env]
-TS_RS_EXPORT_DIR = { value = "../src/bindings", relative = true }
+TS_RS_EXPORT_DIR = { value = "src/bindings", relative = true }
