@@ -93,6 +93,7 @@ fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
         entries: vec![LockEntry {
             provider: "modrinth".to_string(),
             project_id: "a".to_string(),
+            slug: "a-mod".to_string(),
             version_id: "v".to_string(),
             filename: "a.jar".to_string(),
             sha1: "00".to_string(),

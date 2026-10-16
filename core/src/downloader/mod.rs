@@ -5,3 +5,5 @@
 
 pub mod client;
 pub mod retry;
+
+pub use client::{DownloadOutcome, DownloadRequest, DownloadStatus, Downloader};

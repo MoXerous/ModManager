@@ -5,6 +5,8 @@
 
 pub mod modrinth;
 
+pub use modrinth::{ModrinthClient, MODRINTH_BASE};
+
 use std::collections::HashMap;
 use thiserror::Error;
 

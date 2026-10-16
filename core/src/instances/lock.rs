@@ -11,6 +11,8 @@ pub struct LockEntry {
     #[serde(default)]
     pub project_id: String,
     #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
     pub version_id: String,
     #[serde(default)]
     pub filename: String,

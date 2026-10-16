@@ -6,6 +6,8 @@
 pub mod lock;
 pub mod toggle;
 
+pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile};
+
 use crate::jar_reader::{classify_local_resource_type, ResourceType};
 use std::path::{Path, PathBuf};
 

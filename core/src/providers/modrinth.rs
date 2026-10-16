@@ -22,8 +22,9 @@ impl ModrinthClient {
         Self::with_base(MODRINTH_BASE)
     }
 
-    /// Custom base URL (tests point at wiremock; production uses MODRINTH_BASE).
-    pub(crate) fn with_base(base: &str) -> Result<Self, ProviderError> {
+    /// Custom base URL (tests and embedding point at wiremock; production
+    /// uses MODRINTH_BASE).
+    pub fn with_base(base: &str) -> Result<Self, ProviderError> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(crate::USER_AGENT)
