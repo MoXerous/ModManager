@@ -4,7 +4,6 @@
 //! تطبيق Tauri وأداة CLI عميلان لها.
 
 pub mod db;
-pub mod demo;
 pub mod downloader;
 pub mod instances;
 pub mod jar_reader;

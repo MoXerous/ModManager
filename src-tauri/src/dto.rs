@@ -28,34 +28,6 @@ impl From<mm_core::AppInfo> for AppInfo {
     }
 }
 
-/// أحداث التقدم المرسلة عبر Channel. تصل إلى الواجهة بالشكل
-/// `{ event: 'started', data: { total } }` و`{ event: 'finished' }`.
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase", tag = "event", content = "data")]
-#[ts(export)]
-pub enum DownloadEvent {
-    Started {
-        #[ts(type = "number")]
-        total: u64,
-    },
-    Advanced {
-        #[ts(type = "number")]
-        downloaded: u64,
-    },
-    Finished,
-}
-
-impl From<mm_core::demo::Progress> for DownloadEvent {
-    fn from(progress: mm_core::demo::Progress) -> Self {
-        use mm_core::demo::Progress;
-        match progress {
-            Progress::Started { total } => Self::Started { total },
-            Progress::Advanced { downloaded } => Self::Advanced { downloaded },
-            Progress::Finished => Self::Finished,
-        }
-    }
-}
-
 /// رمز الخطأ المرسل للواجهة؛ تترجمه الواجهة إلى نص حسب لغة المستخدم.
 /// `message` للتشخيص فقط (سجلّ) ولا يُعرض أبدًا.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -226,6 +198,10 @@ pub struct SearchPageDto {
 
 // --- plan ---------------------------------------------------------------
 
+/// `reason` / `message` are resolver-produced **data**, pinned by exact-string
+/// core tests — not UI copy (§5.9). Some interpolate dynamic args (game
+/// version, loader, counts), so a code alone cannot carry them; the UI shows
+/// them verbatim inside a localized frame until Task 5 adds i18n.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

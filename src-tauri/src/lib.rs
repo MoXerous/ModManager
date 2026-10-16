@@ -8,7 +8,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
-            commands::start_demo_download,
             commands::search_projects,
             commands::build_install_plan,
             commands::scan_instance,
