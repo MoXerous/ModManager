@@ -1,5 +1,8 @@
 //! أنواع تعبر حدّ IPC. كل نوع هنا يُولَّد له ملف TypeScript في src/bindings
 //! عند تشغيل `cargo test --workspace`.
+//!
+//! DTOs are the anti-corruption layer: core types never cross IPC, so
+//! core can change without breaking the committed bindings.
 
 use serde::Serialize;
 use ts_rs::TS;
@@ -54,27 +57,348 @@ impl From<mm_core::demo::Progress> for DownloadEvent {
 }
 
 /// رمز الخطأ المرسل للواجهة؛ تترجمه الواجهة إلى نص حسب لغة المستخدم.
-#[derive(Debug, Clone, Copy, Serialize, TS)]
+/// `message` للتشخيص فقط (سجلّ) ولا يُعرض أبدًا.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum ErrorCode {
     Internal,
+    InvalidInput,
+    NotFound,
+    /// 404 من المزوّد.
+    ProviderApi,
+    RateLimited,
+    /// `retry_after_seconds` يحمل الأوقات؛ الواجهة لا تحلّل نصًا.
+    Timeout,
+    Io,
+    /// مخطط القفل أحدث من المدعوم (§5.10) — لا تُعرض قائمة فارغة.
+    NewerSchema,
 }
 
-/// خطأ مُنمَّط يعبر حدّ IPC بدل سلسلة نصية خام.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct IpcError {
     pub code: ErrorCode,
     pub message: String,
+    /// Omitted unless the provider was rate-limited; ts-rs would emit
+    /// `bigint | null` and require the field, so the type is declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub retry_after_seconds: Option<u64>,
 }
 
 impl IpcError {
-    pub fn internal(message: impl ToString) -> Self {
+    pub fn new(code: ErrorCode, message: impl ToString) -> Self {
         Self {
-            code: ErrorCode::Internal,
+            code,
             message: message.to_string(),
+            retry_after_seconds: None,
+        }
+    }
+
+    pub fn invalid_input(message: impl ToString) -> Self {
+        Self::new(ErrorCode::InvalidInput, message)
+    }
+
+    pub fn io(message: impl ToString) -> Self {
+        Self::new(ErrorCode::Io, message)
+    }
+
+    pub fn internal(message: impl ToString) -> Self {
+        Self::new(ErrorCode::Internal, message)
+    }
+
+    /// F-019: response bodies never cross IPC — only the typed `Display`.
+    pub fn from_provider(e: &mm_core::providers::ProviderError) -> Self {
+        let code = match e {
+            mm_core::providers::ProviderError::Api { status } if *status == 404 => {
+                ErrorCode::NotFound
+            }
+            mm_core::providers::ProviderError::Api { .. } => ErrorCode::ProviderApi,
+            mm_core::providers::ProviderError::RateLimited { .. } => ErrorCode::RateLimited,
+            mm_core::providers::ProviderError::Timeout => ErrorCode::Timeout,
+            mm_core::providers::ProviderError::Transport
+            | mm_core::providers::ProviderError::InvalidJson => ErrorCode::Io,
+        };
+        let mut err = Self::new(code, e);
+        if let mm_core::providers::ProviderError::RateLimited { reset_seconds } = e {
+            err.retry_after_seconds = Some(*reset_seconds);
+        }
+        err
+    }
+
+    pub fn from_lock(e: &mm_core::instances::LockError) -> Self {
+        let code = match e {
+            mm_core::instances::LockError::NewerSchema { .. } => ErrorCode::NewerSchema,
+            mm_core::instances::LockError::Invalid => ErrorCode::InvalidInput,
+            mm_core::instances::LockError::Io(_) => ErrorCode::Io,
+        };
+        Self::new(code, e)
+    }
+}
+
+// --- search -------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchQueryDto {
+    pub query: String,
+    #[serde(default)]
+    pub game_version: Option<String>,
+    #[serde(default)]
+    pub loader: Option<String>,
+    #[serde(default = "default_project_type")]
+    pub project_type: String,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+}
+
+fn default_project_type() -> String {
+    "mod".to_string()
+}
+
+fn default_limit() -> u32 {
+    20
+}
+
+impl SearchQueryDto {
+    /// Core does not clamp; the bridge does (untrusted input).
+    pub fn to_core(&self) -> mm_core::providers::SearchQuery {
+        mm_core::providers::SearchQuery {
+            query: self.query.trim().to_string(),
+            game_version: self.game_version.clone(),
+            loader: self.loader.clone(),
+            project_type: if self.project_type.trim().is_empty() {
+                default_project_type()
+            } else {
+                self.project_type.trim().to_string()
+            },
+            limit: self.limit.clamp(1, 50),
+            offset: self.offset,
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProjectDto {
+    pub id: String,
+    pub slug: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub author: String,
+    pub project_type: String,
+    #[ts(type = "number")]
+    pub downloads: u64,
+    pub icon_url: Option<String>,
+    /// Provider identity from day one (only Modrinth today).
+    pub provider_id: String,
+}
+
+impl ProjectDto {
+    pub fn from_core(p: &mm_core::providers::Project, provider_id: &str) -> Self {
+        Self {
+            id: p.id.clone(),
+            slug: p.slug.clone(),
+            title: p.title.clone(),
+            description: p.description.clone(),
+            author: p.author.clone(),
+            project_type: p.project_type.clone(),
+            downloads: p.downloads,
+            icon_url: p.icon_url.clone(),
+            provider_id: provider_id.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchPageDto {
+    pub hits: Vec<ProjectDto>,
+    #[ts(type = "number")]
+    pub total: u64,
+}
+
+// --- plan ---------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlanEntryDto {
+    pub source: String,
+    pub project_id: String,
+    pub title: String,
+    pub project_type: String,
+    pub version_id: Option<String>,
+    pub version_number: Option<String>,
+    pub filename: Option<String>,
+    /// `downloadable` | `blocked`.
+    pub status: String,
+    pub reason: String,
+    pub dependency_type: String,
+}
+
+impl PlanEntryDto {
+    pub fn from_core(e: &mm_core::resolver::PlanEntry) -> Self {
+        Self {
+            source: e.source.clone(),
+            project_id: e.project_id.clone(),
+            title: e.title.clone(),
+            project_type: e.project_type.clone(),
+            version_id: e.version_id.clone(),
+            version_number: e.version_number.clone(),
+            filename: e.filename.clone(),
+            status: e.status.clone(),
+            reason: e.reason.clone(),
+            dependency_type: e.dependency_type.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlanSummaryDto {
+    #[ts(type = "number")]
+    pub selected_count: usize,
+    #[ts(type = "number")]
+    pub dependency_count: usize,
+    #[ts(type = "number")]
+    pub total_count: usize,
+    #[ts(type = "number")]
+    pub downloadable_count: usize,
+    #[ts(type = "number")]
+    pub blocked_count: usize,
+    pub game_version: String,
+    pub loader: String,
+    pub requires_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WarningDto {
+    /// `warning` | `info` — never blocks (F-066).
+    pub severity: String,
+    pub message: String,
+}
+
+impl WarningDto {
+    pub fn from_core(w: &mm_core::resolver::Warning) -> Self {
+        Self {
+            severity: w.severity.clone(),
+            message: w.message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallPlanDto {
+    pub entries: Vec<PlanEntryDto>,
+    pub summary: PlanSummaryDto,
+    pub warnings: Vec<WarningDto>,
+}
+
+// --- instance scan ------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LocalFactDto {
+    /// Filename only — absolute paths never cross IPC.
+    pub filename: String,
+    #[ts(type = "number")]
+    pub size: u64,
+    pub sha1: String,
+    /// `mod` | `shaderpack` | `datapack` | `resourcepack` | `unknown`.
+    pub resource_type: String,
+    pub disabled: bool,
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LockEntryDto {
+    pub provider: String,
+    pub project_id: String,
+    pub slug: String,
+    pub version_id: String,
+    pub filename: String,
+    pub sha1: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstanceSnapshotDto {
+    pub loaders: Vec<String>,
+    /// `launcher` | `jars` | `unknown` — F-092/F-093 guard provenance.
+    pub loader_source: String,
+    pub mods: Vec<LocalFactDto>,
+    pub locked: Vec<LockEntryDto>,
+}
+
+// --- toggle -------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ToggleActionDto {
+    Disable,
+    Enable,
+}
+
+impl From<ToggleActionDto> for mm_core::instances::toggle::ToggleAction {
+    fn from(a: ToggleActionDto) -> Self {
+        match a {
+            ToggleActionDto::Disable => Self::Disable,
+            ToggleActionDto::Enable => Self::Enable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewToggleDto {
+    pub mods_dir: String,
+    pub action: ToggleActionDto,
+    /// Filenames inside `mods_dir`, not absolute paths.
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PreviewEntryDto {
+    pub filename: String,
+    pub dest_filename: String,
+    pub allowed: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TogglePlanDto {
+    pub entries: Vec<PreviewEntryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToggleResultDto {
+    pub filename: String,
+    pub dest_filename: String,
+    /// `success` | `failed` | `skipped` | `rolledBack` | `rollbackFailed` | `rollbackSkipped`.
+    pub state: String,
+    pub reason: String,
+}
+
+use serde::Deserialize;

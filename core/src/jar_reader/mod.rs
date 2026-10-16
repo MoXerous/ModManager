@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod loader;
 
+pub use cache::ScanCache;
 pub use loader::{detect_loaders, scan_jars_for_loader, Loader};
 
 /// Cap for a single metadata entry (spec §1-1).
