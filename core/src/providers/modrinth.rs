@@ -50,6 +50,8 @@ const MAX_ATTEMPTS: u32 = 2;
 #[derive(Debug, serde::Deserialize)]
 struct SearchHit {
     project_id: String,
+    #[serde(default)]
+    project_type: String,
     slug: Option<String>,
     title: String,
     description: String,
@@ -71,6 +73,8 @@ struct ProjectDto {
     id: String,
     slug: Option<String>,
     title: String,
+    #[serde(default)]
+    project_type: String,
     description: String,
     downloads: u64,
     categories: Vec<String>,
@@ -341,6 +345,11 @@ impl Provider for ModrinthClient {
             // The project endpoint carries a team id, not a username;
             // usernames come from search hits. Team resolution is deferred.
             author: String::new(),
+            project_type: if p.project_type.is_empty() {
+                "mod".to_string()
+            } else {
+                p.project_type
+            },
             categories: p.categories,
             versions: p.versions,
             downloads: p.downloads,
@@ -465,6 +474,11 @@ impl ModrinthClient {
                     title: h.title,
                     description: h.description,
                     author: h.author,
+                    project_type: if h.project_type.is_empty() {
+                        "mod".to_string()
+                    } else {
+                        h.project_type
+                    },
                     categories: h.categories,
                     versions: h.versions,
                     downloads: h.downloads,

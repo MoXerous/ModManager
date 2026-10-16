@@ -27,6 +27,9 @@ pub struct Project {
     pub title: String,
     pub description: String,
     pub author: String,
+    /// Modrinth `project_type` (`mod`, `modpack`, `shader`, …); drives
+    /// loader fallbacks and overrides in `resolver`.
+    pub project_type: String,
     pub categories: Vec<String>,
     pub versions: Vec<String>,
     pub downloads: u64,
