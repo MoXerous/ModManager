@@ -3,6 +3,7 @@
 //! قاعدة ملزِمة: هذه المكتبة لا تعرف شيئاً عن Tauri أو الواجهة.
 //! تطبيق Tauri وأداة CLI عميلان لها.
 
+pub mod db;
 pub mod demo;
 pub mod downloader;
 pub mod safety;
