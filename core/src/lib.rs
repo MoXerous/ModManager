@@ -8,6 +8,7 @@ pub mod demo;
 pub mod downloader;
 pub mod logging;
 pub mod paths;
+pub mod providers;
 pub mod safety;
 
 /// اسم التطبيق كما يظهر للمستخدم.
