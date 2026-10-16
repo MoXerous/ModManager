@@ -88,6 +88,10 @@ pub enum DownloadError {
     HashMismatch,
     #[error("html rejected")]
     HtmlRejected,
+    #[error("not a valid archive")]
+    NotArchive,
+    #[error("archive is empty")]
+    EmptyArchive,
     #[error("not enough disk space")]
     NoSpace,
     #[error("transport: {0}")]
@@ -335,13 +339,7 @@ impl Downloader {
         });
         let content_type = header_str(response.headers(), reqwest::header::CONTENT_TYPE);
         // Stream: append (resume) or create, hashing while writing, one pass.
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(resumed > 0)
-            .write(true)
-            .truncate(resumed == 0)
-            .open(&part)
-            .map_err(|e| io_err("open", &part, e))?;
+        let mut file = open_part_guarded(&part, resumed > 0)?;
         let mut sha1 = sha1::Sha1::new();
         let mut sha512 = sha2::Sha512::new();
         if resumed > 0 {
@@ -457,6 +455,17 @@ impl Downloader {
                 return Err(remove_part_quiet(&part, DownloadError::HashMismatch));
             }
         }
+        // spec §9 steps 6-7: suffix-gated archive sanity before commit.
+        let gate = {
+            let part = part.clone();
+            let dest = req.dest.clone();
+            tokio::task::spawn_blocking(move || check_archive(&part, &dest))
+                .await
+                .map_err(|_| DownloadError::Internal("hash task"))?
+        };
+        if let Err(e) = gate {
+            return Err(remove_part_quiet(&part, e));
+        }
         if on_progress(DownloadProgress {
             phase: DownloadPhase::Committing,
             done,
@@ -525,6 +534,17 @@ impl Downloader {
             if sha512hex != want.to_lowercase() {
                 return Err(remove_part_quiet(&part, DownloadError::HashMismatch));
             }
+        }
+        // spec §9 steps 6-7: suffix-gated archive sanity before commit.
+        let gate = {
+            let part = part.clone();
+            let dest = req.dest.clone();
+            tokio::task::spawn_blocking(move || check_archive(&part, &dest))
+                .await
+                .map_err(|_| DownloadError::Internal("hash task"))?
+        };
+        if let Err(e) = gate {
+            return Err(remove_part_quiet(&part, e));
         }
         if on_progress(DownloadProgress {
             phase: DownloadPhase::Committing,
@@ -617,6 +637,9 @@ async fn check_file(path: &Path, req: &DownloadRequest) -> Result<(), DownloadEr
             return Err(DownloadError::HashMismatch);
         }
     }
+    // Full local verification for the skip path (spec §10.2): suffix-gated
+    // archive sanity too — a skipped file is trusted without download.
+    check_archive(path, &req.dest)?;
     Ok(())
 }
 
@@ -672,8 +695,59 @@ fn is_loopback(host: &str) -> bool {
     host == "localhost" || host.starts_with("127.") || host == "::1" || host == "[::1]"
 }
 
+/// Suffix-gated archive sanity (spec §9 steps 6-7, F-042): `.jar`, `.mrpack`
+/// and `.zip` payloads must parse and contain at least one non-dir member.
+fn check_archive(part: &Path, dest: &Path) -> Result<(), DownloadError> {
+    let archive_suffix = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .is_some_and(|e| e == "jar" || e == "mrpack" || e == "zip");
+    if !archive_suffix {
+        return Ok(());
+    }
+    let file = std::fs::File::open(part).map_err(|e| io_err("open", part, e))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|_| DownloadError::NotArchive)?;
+    let inv = crate::safety::inspect::inspect_zip(
+        &mut archive,
+        &crate::safety::inspect::ArchiveLimits::default(),
+    )
+    .map_err(|_| DownloadError::NotArchive)?;
+    if inv.iter().all(|m| m.is_dir) {
+        return Err(DownloadError::EmptyArchive);
+    }
+    Ok(())
+}
+
 fn transport(e: reqwest::Error) -> DownloadError {
     DownloadError::Transport(e.to_string())
+}
+
+/// Open the `.part` with a post-open symlink recheck (spec §8): a link
+/// swapped in between check and open is removed and the open retried once.
+fn open_part_guarded(part: &Path, append: bool) -> Result<std::fs::File, DownloadError> {
+    for _ in 0..2 {
+        if part
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            std::fs::remove_file(part).map_err(|e| io_err("remove", part, e))?;
+            continue;
+        }
+        return std::fs::OpenOptions::new()
+            .create(true)
+            .append(append)
+            .write(true)
+            .truncate(!append)
+            .open(part)
+            .map_err(|e| io_err("open", part, e));
+    }
+    Err(io_err(
+        "open",
+        part,
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "symlink race"),
+    ))
 }
 
 fn header_str(h: &reqwest::header::HeaderMap, k: reqwest::header::HeaderName) -> Option<String> {
@@ -770,12 +844,12 @@ mod tests {
         let server = MockServer::start().await;
         let body = b"hello-mods";
         Mock::given(method("GET"))
-            .and(path("/a.jar"))
+            .and(path("/a.bin"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(&body[..]))
             .mount(&server)
             .await;
         let dl = Downloader::new(2).expect("client");
-        let (_dir, mut r) = setup(&server, "a.jar");
+        let (_dir, mut r) = setup(&server, "a.bin");
         r.expected_size = Some(body.len() as u64);
         r.sha1_hex = Some(sha1hex(body));
         let out = dl.download(&r, &mut go, &still).await.expect("downloads");
@@ -861,13 +935,13 @@ mod tests {
         let server = MockServer::start().await;
         let full = b"0123456789";
         Mock::given(method("GET"))
-            .and(path("/d.jar"))
+            .and(path("/d.bin"))
             .and(header("Range", "bytes=5-"))
             .respond_with(ResponseTemplate::new(206).set_body_bytes(&full[5..]))
             .mount(&server)
             .await;
         let dl = Downloader::new(2).expect("client");
-        let (_dir, r) = setup(&server, "d.jar");
+        let (_dir, r) = setup(&server, "d.bin");
         std::fs::write(crate::safety::atomic::part_path(&r.dest), &full[..5])
             .expect("pre-seed part");
         let out = dl.download(&r, &mut go, &still).await.expect("resumes");
@@ -880,12 +954,12 @@ mod tests {
         let server = MockServer::start().await;
         let full = b"abcdef";
         Mock::given(method("GET"))
-            .and(path("/e.jar"))
+            .and(path("/e.bin"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(&full[..]))
             .mount(&server)
             .await;
         let dl = Downloader::new(2).expect("client");
-        let (_dir, r) = setup(&server, "e.jar");
+        let (_dir, r) = setup(&server, "e.bin");
         std::fs::write(crate::safety::atomic::part_path(&r.dest), b"STALE").expect("pre-seed part");
         let out = dl.download(&r, &mut go, &still).await.expect("restarts");
         assert_eq!(out.status, DownloadStatus::Success);
@@ -896,13 +970,13 @@ mod tests {
     async fn spec_f027_retry_after_honored() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/f.jar"))
+            .and(path("/f.bin"))
             .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
             .up_to_n_times(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/f.jar"))
+            .and(path("/f.bin"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok"))
             .mount(&server)
             .await;
@@ -911,7 +985,7 @@ mod tests {
             ..Default::default()
         };
         let dl = Downloader::with_policy(2, policy).expect("client");
-        let (_dir, r) = setup(&server, "f.jar");
+        let (_dir, r) = setup(&server, "f.bin");
         let t0 = std::time::Instant::now();
         let out = dl.download(&r, &mut go, &still).await.expect("retries");
         assert_eq!(out.status, DownloadStatus::Success);
@@ -1003,10 +1077,10 @@ mod tests {
         let body = b"already-here";
         let dl = Downloader::new(2).expect("client");
         let dir = crate::test_tempdir();
-        let dest = dir.path().join("s.jar");
+        let dest = dir.path().join("s.bin");
         std::fs::write(&dest, body).expect("pre-seed dest");
         let r = DownloadRequest {
-            url: format!("{}/s.jar", server.uri()),
+            url: format!("{}/s.bin", server.uri()),
             dest: dest.clone(),
             expected_size: Some(body.len() as u64),
             sha1_hex: Some(sha1hex(body)),
@@ -1024,16 +1098,16 @@ mod tests {
         let server = MockServer::start().await;
         let body = b"correct-bytes";
         Mock::given(method("GET"))
-            .and(path("/u.jar"))
+            .and(path("/u.bin"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(&body[..]))
             .mount(&server)
             .await;
         let dl = Downloader::new(2).expect("client");
         let dir = crate::test_tempdir();
-        let dest = dir.path().join("u.jar");
+        let dest = dir.path().join("u.bin");
         std::fs::write(&dest, b"stale-user-bytes").expect("pre-seed dest");
         let r = DownloadRequest {
-            url: format!("{}/u.jar", server.uri()),
+            url: format!("{}/u.bin", server.uri()),
             dest: dest.clone(),
             expected_size: Some(body.len() as u64),
             sha1_hex: Some(sha1hex(body)),
@@ -1045,7 +1119,7 @@ mod tests {
             .await
             .expect("downloads aside");
         assert_eq!(out.status, DownloadStatus::Success);
-        assert_eq!(out.path, dir.path().join("u-1.jar"));
+        assert_eq!(out.path, dir.path().join("u-1.bin"));
         assert_eq!(std::fs::read(&out.path).expect("read"), body);
         assert_eq!(
             std::fs::read(&dest).expect("read"),
@@ -1067,12 +1141,12 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/p.jar"))
+            .and(path("/p.bin"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"paused-ok"))
             .mount(&server)
             .await;
         let dl = Downloader::new(2).expect("client");
-        let (_dir, r) = setup(&server, "p.jar");
+        let (_dir, r) = setup(&server, "p.bin");
         static POLLS: AtomicUsize = AtomicUsize::new(0);
         let paused = || POLLS.fetch_add(1, Ordering::SeqCst) < 2;
         let out = dl
@@ -1081,5 +1155,51 @@ mod tests {
             .expect("proceeds after pause");
         assert_eq!(out.status, DownloadStatus::Success);
         assert!(POLLS.load(Ordering::SeqCst) >= 2);
+    }
+
+    fn zip_bytes(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("fixture");
+        use std::io::Write;
+        w.write_all(data).expect("fixture");
+        w.finish().expect("fixture").into_inner()
+    }
+
+    #[tokio::test]
+    async fn spec_f042_download_verifies_zip_archive() {
+        let server = MockServer::start().await;
+        let body = zip_bytes("mod.jar", b"real-zip-content");
+        Mock::given(method("GET"))
+            .and(path("/v.jar"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&server)
+            .await;
+        let dl = Downloader::new(2).expect("client");
+        let (_dir, r) = setup(&server, "v.jar");
+        let out = dl.download(&r, &mut go, &still).await.expect("valid zip");
+        assert_eq!(out.status, DownloadStatus::Success);
+        assert_eq!(std::fs::read(&out.path).expect("read"), body);
+    }
+
+    #[tokio::test]
+    async fn spec_f042_download_rejects_corrupt_archive() {
+        let server = MockServer::start().await;
+        let mut body = zip_bytes("mod.jar", b"real-zip-content");
+        body.truncate(body.len() / 2);
+        Mock::given(method("GET"))
+            .and(path("/z.jar"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+        let dl = Downloader::new(2).expect("client");
+        let (_dir, r) = setup(&server, "z.jar");
+        let dest = r.dest.clone();
+        assert!(matches!(
+            dl.download(&r, &mut go, &still).await,
+            Err(DownloadError::NotArchive)
+        ));
+        assert!(!dest.exists());
+        assert!(!crate::safety::atomic::part_path(&dest).exists());
     }
 }
