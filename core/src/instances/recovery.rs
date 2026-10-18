@@ -152,8 +152,23 @@ pub fn pending_creates(db: &crate::db::Db, journal: &Journal) -> Vec<CreateRecov
         .filter(|r| r.kind == OperationKind::InstanceCreate)
         .filter_map(|r| {
             let assessment = assess_create(db, r);
-            let _ = settle_create(journal, r, assessment.reason);
-            if assessment.action == RecoveryAction::Leave {
+            let settled = match settle_create(journal, r, assessment.reason) {
+                Ok(s) => s,
+                Err(e) => {
+                    // Logged because a record settled this way leaves no other
+                    // trace: no trace is how a bug becomes permanent.
+                    tracing::warn!(
+                        operation_id = %r.operation_id,
+                        error = %e,
+                        "recovery: could not settle a create that needed no decision"
+                    );
+                    false
+                }
+            };
+            // Only a record that both needed nothing and was actually settled
+            // may disappear. Failing to settle is not a reason to hide it:
+            // offered, it is still there next launch.
+            if assessment.action == RecoveryAction::Leave && settled {
                 None
             } else {
                 Some(assessment)
@@ -754,6 +769,61 @@ mod tests {
         // Nothing touched.
         assert!(root.join("mods").is_dir(), "mods was removed");
         assert!(root.join("config").is_file(), "a file was removed");
+    }
+
+    #[test]
+    fn spec_f146_a_create_that_cannot_be_settled_stays_offered() {
+        // The failure this pins: a record that needed no decision was dropped
+        // whether or not settling it worked, so a failed settle lost it from both
+        // ends - not terminal, and never shown again.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("AlreadyThere");
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        // The create finished on disk but its record never left `Planned`.
+        instances::insert(
+            &d,
+            &InstanceRow {
+                id: "i1".into(),
+                name: "AlreadyThere".into(),
+                path: std::fs::canonicalize(&root).expect("canon"),
+                minecraft_root: PathBuf::new(),
+                minecraft_version: None,
+                loader: None,
+                source: InstanceSource::Managed,
+                created_at: 1,
+                scanned_at: None,
+            },
+        )
+        .expect("insert");
+        let rec = j
+            .start(
+                OperationKind::InstanceCreate,
+                "i1",
+                &root.to_string_lossy(),
+                vec![],
+            )
+            .expect("start");
+        let record = j.read(&rec.operation_id).expect("read");
+
+        // `AlreadyRegistered` wants `Completed`, and `Planned` may not go
+        // straight there. This is the real shape of a failed settle.
+        assert_eq!(
+            assess_create(&d, &record).reason,
+            RecoveryReason::AlreadyRegistered
+        );
+        assert!(settle_create(&j, &record, RecoveryReason::AlreadyRegistered).is_err());
+
+        // Dropping it would lose it from both ends: not terminal, never shown.
+        let offered = pending_creates(&d, &j);
+        assert_eq!(
+            offered.len(),
+            1,
+            "a create that could not be settled was dropped from both ends"
+        );
+        assert_eq!(offered[0].operation_id, rec.operation_id);
     }
 
     #[test]

@@ -499,20 +499,31 @@ pub async fn open_instance_folder(
     state: tauri::State<'_, AppState>,
     root: String,
 ) -> Result<(), IpcError> {
-    let canonical = std::fs::canonicalize(&root).map_err(IpcError::io)?;
-    let owned = canonical.clone();
-    let registered = state
+    let requested = PathBuf::from(&root);
+    // The registry is consulted before the path is touched, so a registered
+    // instance whose folder was deleted says so instead of surfacing a raw
+    // NotFound from the operating system. `find_by_path` also queries one row:
+    // `list` would decode every row's `source`, letting one corrupt value
+    // anywhere in the table fail this command.
+    let canonical = state
         .with_db(move |db| {
-            mm_core::db::instances::list(db)
-                .map_err(|e| row_error(&e))
-                .map(|rows| rows.iter().any(|r| r.path == owned))
+            if mm_core::db::instances::find_by_path(db, &requested)
+                .map_err(|e| row_error(&e))?
+                .is_none()
+            {
+                return Err(IpcError::invalid_input(
+                    "that folder is not a registered instance",
+                ));
+            }
+            std::fs::canonicalize(&requested).map_err(|e| {
+                IpcError::new(
+                    ErrorCode::NotFound,
+                    format!("instance folder is missing: {e}"),
+                )
+            })
         })
         .await?;
-    if !registered {
-        return Err(IpcError::invalid_input(
-            "that folder is not a registered instance",
-        ));
-    }
+
     tauri::async_runtime::spawn_blocking(move || {
         app.opener()
             .open_path(canonical.to_string_lossy().into_owned(), None::<&str>)

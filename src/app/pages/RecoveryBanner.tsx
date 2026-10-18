@@ -33,21 +33,37 @@ export function RecoveryBanner({ onSettled }: Props) {
   const [error, setError] = useState<IpcError | null>(null);
 
   const load = useCallback(() => {
-    listPendingCreates()
+    // `void`: a useCallback whose body returns a promise hands that promise to
+    // useEffect as a cleanup function, which React rejects.
+    // And a failed load is not shown at all. This banner is advisory — if the
+    // list cannot be fetched, the user's instances are not broken, and an error
+    // panel here would say they were.
+    void listPendingCreates()
       .then(setItems)
-      .catch((e) => setError(toIpcError(e)));
+      .catch(() => setItems([]));
   }, []);
 
   useEffect(load, [load]);
 
   const act = (item: CreateRecoveryDto) => {
+    // Explicit, and total. The earlier form was `action === finish ? finish :
+    // abandon`, which means any action the UI does not recognise — including
+    // one a future core adds — silently falls through to the branch that
+    // deletes folders. Refusing beats guessing with a destructive command.
+    let action: Promise<unknown>;
+    switch (item.action) {
+      case 'recovery.instance.action.finish':
+        action = finishCreate(item.operationId);
+        break;
+      case 'recovery.instance.action.removeEmptyChildren':
+        action = abandonCreate(item.operationId);
+        break;
+      default:
+        return;
+    }
     setBusy(item.operationId);
     setError(null);
-    const done =
-      item.action === 'recovery.instance.action.finish'
-        ? finishCreate(item.operationId)
-        : abandonCreate(item.operationId);
-    done
+    action
       .then(() => {
         setItems((prev) => prev?.filter((i) => i.operationId !== item.operationId) ?? null);
         onSettled();
