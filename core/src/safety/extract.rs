@@ -177,6 +177,24 @@ pub fn extract_safely<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Creates a directory symlink with whichever API the platform has.
+    ///
+    /// Calling `std::os::windows` directly meant this file did not compile on
+    /// Linux at all — the whole `check` job on ubuntu-22.04 had been failing with
+    /// `cannot find 'windows' in 'os'` since 2026-10-17. The rule under test is not
+    /// Windows-specific, so the test now runs on both systems rather than being
+    /// gated away on one.
+    #[cfg(windows)]
+    fn make_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(src, dest)
+    }
+
+    #[cfg(unix)]
+    fn make_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(src, dest)
+    }
+
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
@@ -326,7 +344,7 @@ mod tests {
         let dest = dir.path().join("out");
         std::fs::create_dir_all(dest.join("sub")).expect("fixture");
         // Symlink creation needs privileges; skip honestly when unavailable.
-        if std::os::windows::fs::symlink_dir(dir.path(), dest.join("sub/link")).is_err() {
+        if make_symlink(dir.path(), &dest.join("sub/link")).is_err() {
             return;
         }
         let mut a = archive_of(&[("sub/link/evil.txt", b"x")]);
