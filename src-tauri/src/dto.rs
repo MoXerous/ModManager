@@ -450,4 +450,21 @@ pub struct CreateInstancePlanDto {
     pub relative_directories: Vec<String>,
 }
 
+/// One crashed instance create awaiting a decision (F-146).
+///
+/// `action` and `reason` are i18n keys, not display strings: core decides
+/// what is true, the UI decides how to say it (AGENTS.md §5.9).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateRecoveryDto {
+    pub operation_id: String,
+    pub root: String,
+    pub instance_id: String,
+    /// `RecoveryAction::key()`.
+    pub action: String,
+    /// `RecoveryReason::key()`.
+    pub reason: String,
+}
+
 use serde::Deserialize;

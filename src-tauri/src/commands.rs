@@ -5,10 +5,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::dto::{
-    AppInfo, CreateInstancePlanDto, CreateInstanceRequest, ErrorCode, InstallPlanDto,
-    InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
-    LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
-    SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, WarningDto,
+    AppInfo, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto, ErrorCode,
+    InstallPlanDto, InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest,
+    LocalFactDto, LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto,
+    ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, WarningDto,
 };
 use crate::state::AppState;
 
@@ -37,31 +37,50 @@ fn metadata_error(e: &mm_core::instances::metadata::MetadataError) -> IpcError {
     }
 }
 
-fn registry_error(e: &mm_core::instances::registry::RegistryError) -> IpcError {
+/// The instance-row errors in one place: `list` raises them directly and
+/// `registry_error` wraps them, so the two cannot drift apart.
+fn row_error(e: &mm_core::db::instances::InstanceRowError) -> IpcError {
     use mm_core::db::instances::InstanceRowError as R;
+    match e {
+        R::DuplicatePath(_) => IpcError::invalid_input(e),
+        // A folder that is not there any more is a different answer from one
+        // that was never valid, and the UI shows them differently.
+        R::UnresolvablePath { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+            IpcError::new(ErrorCode::NotFound, e)
+        }
+        R::UnresolvablePath { .. } => IpcError::invalid_input(e),
+        R::InvalidSource(_) => IpcError::internal(e),
+        R::Db(db) => db_error(db),
+    }
+}
+
+fn registry_error(e: &mm_core::instances::registry::RegistryError) -> IpcError {
     use mm_core::instances::registry::RegistryError as E;
     match e {
         // The request cannot be satisfied as stated.
-        E::RootNotEmpty(_)
-        | E::AlreadyAnInstance(_)
-        | E::RootIsFile(_)
-        | E::UnsafeName(_)
-        | E::Row(R::DuplicatePath(_)) => IpcError::invalid_input(e),
-        E::Io(_) => IpcError::io(e),
-        E::Row(R::UnresolvablePath { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
-            IpcError::new(ErrorCode::NotFound, e)
+        E::RootNotEmpty(_) | E::AlreadyAnInstance(_) | E::RootIsFile(_) | E::UnsafeName(_) => {
+            IpcError::invalid_input(e)
         }
-        E::Row(R::UnresolvablePath { .. }) => IpcError::invalid_input(e),
-        E::Row(R::InvalidSource(_)) => IpcError::internal(e),
-        E::Row(R::Db(db)) => db_error(db),
+        E::Io(_) => IpcError::io(e),
+        E::Row(r) => row_error(r),
         E::Metadata(m) => metadata_error(m),
-        // The journal could not be written, so nothing on disk was touched:
-        // this is our storage failing, not the user's request.
-        E::Journal(_) => IpcError::io(e),
+        E::Journal(j) => journal_error(j),
         // Rollback did not finish; the on-disk state is indeterminate.
         E::RolledBack(_, _) => IpcError::internal(e),
+    }
+}
+
+fn journal_error(e: &mm_core::journal::JournalError) -> IpcError {
+    use mm_core::journal::JournalError as J;
+    match e {
+        // The operation id was not one of ours, so the request was malformed.
+        J::NotCanonicalId | J::ItemMissing(_) | J::DuplicateItem(_) => IpcError::invalid_input(e),
+        // A state or counter that does not add up is our bookkeeping, not the
+        // user's request — retrying the same action will hit it again.
+        J::IllegalOperationTransition { .. }
+        | J::IllegalItemTransition { .. }
+        | J::CounterMismatch(_) => IpcError::internal(e),
+        J::Io(_) => IpcError::io(e),
     }
 }
 
@@ -334,11 +353,11 @@ pub async fn list_instances(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<InstanceSummaryDto>, IpcError> {
     let rows = state
-        .with_db(|db| mm_core::db::instances::list(db).map_err(|e| e.to_string()))
+        .with_db(|db| mm_core::db::instances::list(db).map_err(|e| row_error(&e)))
         .await
         // Never `unwrap` into an empty list: a failure the screen cannot see is
         // worse than an error (spec §5.10).
-        .map_err(IpcError::io)?;
+        ?;
     Ok(rows.iter().map(summary).collect())
 }
 
@@ -390,10 +409,9 @@ pub async fn execute_create_instance(
     let row = state
         .with_db_and_journal(move |db, journal| {
             mm_core::instances::registry::execute_create(db, journal, &plan)
-                .map_err(|e| e.to_string())
+                .map_err(|e| registry_error(&e))
         })
-        .await
-        .map_err(IpcError::io)?;
+        .await?;
     Ok(summary(&row))
 }
 
@@ -407,11 +425,61 @@ pub async fn link_instance(
     let row = state
         .with_db(move |db| {
             mm_core::instances::registry::link_instance(db, &root, &name, epoch_now())
-                .map_err(|e| e.to_string())
+                .map_err(|e| registry_error(&e))
+        })
+        .await?;
+    Ok(summary(&row))
+}
+
+#[tauri::command]
+pub async fn list_pending_creates(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CreateRecoveryDto>, IpcError> {
+    use mm_core::instances::recovery;
+    let rows = state
+        .with_db_and_journal(|db, journal| Ok(recovery::pending_creates(db, journal)))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|c| CreateRecoveryDto {
+            operation_id: c.operation_id,
+            root: c.root.to_string_lossy().into_owned(),
+            instance_id: c.instance_id,
+            action: c.action.key().to_string(),
+            reason: c.reason.key().to_string(),
+        })
+        .collect())
+}
+
+/// Finishes a crashed create. Takes an operation id only — the root comes from
+/// the record, so the webview never names a folder for core to act on.
+#[tauri::command]
+pub async fn finish_create(
+    state: tauri::State<'_, AppState>,
+    operation_id: String,
+) -> Result<InstanceSummaryDto, IpcError> {
+    use mm_core::instances::recovery;
+    let row = state
+        .with_db_and_journal(move |db, journal| {
+            recovery::finish(db, journal, &operation_id).map_err(|e| registry_error(&e))
+        })
+        .await?;
+    Ok(summary(&row))
+}
+
+/// Abandons a crashed create: removes the standard folders that are still
+/// empty, keeps the root, and closes the record. Returns how many went.
+#[tauri::command]
+pub async fn abandon_create(
+    state: tauri::State<'_, AppState>,
+    operation_id: String,
+) -> Result<usize, IpcError> {
+    use mm_core::instances::recovery;
+    state
+        .with_db_and_journal(move |_db, journal| {
+            recovery::abandon(journal, &operation_id).map_err(|e| registry_error(&e))
         })
         .await
-        .map_err(IpcError::io)?;
-    Ok(summary(&row))
 }
 
 #[cfg(test)]

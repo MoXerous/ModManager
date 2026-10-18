@@ -151,7 +151,7 @@ fn spec_f101_list_instances_runs_through_the_shared_db_handle() {
 
     let state = AppState::from_db(db);
     let rows = tauri::async_runtime::block_on(
-        state.with_db(|db| mm_core::db::instances::list(db).map_err(|e| e.to_string())),
+        state.with_db(|db| mm_core::db::instances::list(db).map_err(|e| row_error(&e))),
     )
     .expect("list");
 

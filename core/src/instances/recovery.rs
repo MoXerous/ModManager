@@ -27,6 +27,17 @@ pub enum RecoveryAction {
     RemoveEmptyChildren,
 }
 
+impl RecoveryAction {
+    /// Stable key for the UI to translate, as [`RecoveryReason::key`].
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Leave => "recovery.instance.action.leave",
+            Self::Finish => "recovery.instance.action.finish",
+            Self::RemoveEmptyChildren => "recovery.instance.action.removeEmptyChildren",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateRecovery {
     pub operation_id: String,
@@ -164,6 +175,42 @@ pub fn settle_create(
     };
     journal.transition_operation(&record.operation_id, to, None)?;
     Ok(true)
+}
+
+/// Finishes a crashed create and closes its record.
+///
+/// The caller passes an operation id, never a path: the root comes from the
+/// record, so the webview cannot name a folder to act on.
+///
+/// Closing the record is part of finishing. Without it the assessment stays
+/// `MirrorPresent` on every later launch and the finished instance is offered
+/// again, this time with a row that already exists.
+pub fn finish(
+    db: &crate::db::Db,
+    journal: &Journal,
+    operation_id: &str,
+) -> Result<InstanceRow, RegistryError> {
+    let record = journal.read(operation_id).map_err(RegistryError::Journal)?;
+    let row = finish_create(db, &record)?;
+    journal
+        .transition_operation(operation_id, OperationState::Completed, None)
+        .map_err(RegistryError::Journal)?;
+    Ok(row)
+}
+
+/// Abandons a crashed create: removes what is still empty, then closes the
+/// record so the residue is not offered on every launch.
+///
+/// `Failed` because that is what the user chose, not because anything broke.
+/// The root itself stays — nothing on disk proves we created it, and the user
+/// may have put it there.
+pub fn abandon(journal: &Journal, operation_id: &str) -> Result<usize, RegistryError> {
+    let record = journal.read(operation_id).map_err(RegistryError::Journal)?;
+    let removed = remove_empty_children(PathBuf::from(&record.target_path).as_path())?;
+    journal
+        .transition_operation(operation_id, OperationState::Failed, None)
+        .map_err(RegistryError::Journal)?;
+    Ok(removed)
 }
 
 /// Removes the standard subdirectories that are still empty. Never the root,
@@ -537,6 +584,104 @@ mod tests {
             "still pending"
         );
         assert_eq!(pending_creates(&d, &j).len(), 1, "still offered");
+    }
+
+    #[test]
+    fn spec_f146_finishing_registers_the_instance_and_stops_offering_it() {
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("Survival");
+
+        let row = InstanceRow {
+            id: "i1".into(),
+            name: "Survival".into(),
+            path: root.clone(),
+            minecraft_root: PathBuf::new(),
+            minecraft_version: Some("1.21.1".into()),
+            loader: Some("fabric".into()),
+            source: InstanceSource::Managed,
+            created_at: 5,
+            scanned_at: None,
+        };
+        std::fs::create_dir_all(&root).expect("mkdir");
+        for sd in registry::STANDARD_DIRS {
+            std::fs::create_dir(root.join(sd)).expect("mkdir child");
+        }
+        metadata::write_mirror(&root, &metadata::mirror_of(&row)).expect("mirror");
+        let rec = j
+            .start(
+                OperationKind::InstanceCreate,
+                "i1",
+                &root.to_string_lossy(),
+                vec![],
+            )
+            .expect("start");
+        j.transition_operation(&rec.operation_id, OperationState::Running, None)
+            .expect("running");
+
+        // The whole point: after finishing, the record is terminal. If it were
+        // left Running it would be offered again — and now with a row that
+        // already exists, which reads to the user as a second instance.
+        let finished = finish(&d, &j, &rec.operation_id).expect("finish");
+        assert_eq!(finished.id, "i1");
+        assert_eq!(instances::list(&d).expect("list").len(), 1);
+        assert_eq!(
+            j.read(&rec.operation_id).expect("read").state,
+            OperationState::Completed
+        );
+        assert!(
+            pending_creates(&d, &j).is_empty(),
+            "a finished create is still being offered"
+        );
+    }
+
+    #[test]
+    fn spec_f146_abandoning_removes_the_empty_children_and_closes_the_record() {
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("Survival");
+
+        let c = crash_after_dirs(&d, &j, &root, "i1");
+        assert_eq!(c.action, RecoveryAction::RemoveEmptyChildren);
+        // `mods` gained content, so only `config` may go.
+        std::fs::write(root.join("mods").join("Sodium.jar"), b"x").expect("write");
+
+        let removed = abandon(&j, &c.operation_id).expect("abandon");
+        assert_eq!(removed, 1, "only the empty directory");
+        assert!(!root.join("config").exists(), "the empty one is gone");
+        assert!(root.join("mods").is_dir(), "content survives");
+        assert!(root.is_dir(), "the root is never removed");
+
+        assert_eq!(
+            j.read(&c.operation_id).expect("read").state,
+            OperationState::Failed
+        );
+        assert!(
+            pending_creates(&d, &j).is_empty(),
+            "an abandoned create is still being offered"
+        );
+    }
+
+    #[test]
+    fn spec_f146_recovery_takes_an_operation_id_and_never_a_path() {
+        // The webview is untrusted input (commands.rs header). `finish` and
+        // `abandon` therefore derive the root from the record; if they ever
+        // accepted a path, a caller could name any folder on the machine.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+
+        // An id that names no record: refused by the journal, never a path.
+        assert!(matches!(
+            finish(&d, &j, "not-an-operation").unwrap_err(),
+            RegistryError::Journal(_)
+        ));
+        assert!(matches!(
+            abandon(&j, "not-an-operation").unwrap_err(),
+            RegistryError::Journal(_)
+        ));
     }
 
     #[test]

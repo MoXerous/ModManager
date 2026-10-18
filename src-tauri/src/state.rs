@@ -15,6 +15,8 @@ use mm_core::db::Db;
 use mm_core::journal::Journal;
 use mm_core::paths::Paths;
 
+use crate::dto::IpcError;
+
 /// `Mutex`, not `RwLock`: the point is to serialise access to a connection that
 /// is not `Sync`, not to allow concurrent reads.
 #[derive(Clone)]
@@ -53,41 +55,42 @@ impl AppState {
     }
 
     /// Runs `f` against the database on a blocking thread.
-    pub async fn with_db<T, F>(&self, f: F) -> Result<T, String>
+    ///
+    /// The error channel is `IpcError`, not `String`: it is what carries the
+    /// code the UI translates, and flattening it here would report every
+    /// failure as `io` — including "that folder is not empty", which is the
+    /// user's input, not a failing disk.
+    pub async fn with_db<T, F>(&self, f: F) -> Result<T, IpcError>
     where
         T: Send + 'static,
-        F: FnOnce(&Db) -> Result<T, String> + Send + 'static,
+        F: FnOnce(&Db) -> Result<T, IpcError> + Send + 'static,
     {
         let db = self.db.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let guard = db
-                .lock()
-                .map_err(|_| "database lock poisoned".to_string())?;
+            let guard = db.lock().map_err(|e| IpcError::internal(e.to_string()))?;
             f(&guard)
         })
         .await
-        .map_err(|e| format!("blocking task failed: {e}"))?
+        .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
     }
 
     /// For an operation that touches both the database and the journal. The two
     /// locks are always taken in this order, so they cannot deadlock.
-    pub async fn with_db_and_journal<T, F>(&self, f: F) -> Result<T, String>
+    pub async fn with_db_and_journal<T, F>(&self, f: F) -> Result<T, IpcError>
     where
         T: Send + 'static,
-        F: FnOnce(&Db, &Journal) -> Result<T, String> + Send + 'static,
+        F: FnOnce(&Db, &Journal) -> Result<T, IpcError> + Send + 'static,
     {
         let db = self.db.clone();
         let journal = self.journal.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let db_guard = db
-                .lock()
-                .map_err(|_| "database lock poisoned".to_string())?;
+            let db_guard = db.lock().map_err(|e| IpcError::internal(e.to_string()))?;
             let journal_guard = journal
                 .lock()
-                .map_err(|_| "journal lock poisoned".to_string())?;
+                .map_err(|e| IpcError::internal(e.to_string()))?;
             f(&db_guard, &journal_guard)
         })
         .await
-        .map_err(|e| format!("blocking task failed: {e}"))?
+        .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
     }
 }

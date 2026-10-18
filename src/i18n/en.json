@@ -82,5 +82,14 @@
   "settings.general": "General",
   "settings.language": "Language",
   "settings.theme": "Theme",
-  "settings.digits": "Digits"
+  "settings.digits": "Digits",
+  "recovery.instance.action.leave": "Leave it",
+  "recovery.instance.action.finish": "Finish creating",
+  "recovery.instance.action.removeEmptyChildren": "Remove empty folders",
+  "recovery.instance.notApplicable": "Not an instance create",
+  "recovery.instance.alreadyRegistered": "Already registered as an instance; the create finished",
+  "recovery.instance.nothingWritten": "No folder was created",
+  "recovery.instance.mirrorPresent": "A valid profile is present and can be finished",
+  "recovery.instance.mirrorUnreadable": "The profile is unreadable and cannot be trusted",
+  "recovery.instance.directoriesWithoutMirror": "Folders exist with no profile"
 }

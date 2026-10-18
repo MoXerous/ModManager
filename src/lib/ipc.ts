@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
+import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
 import type { CreateInstanceRequest } from '../bindings/CreateInstanceRequest';
 import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
@@ -107,6 +108,21 @@ export function executeCreateInstance(req: CreateInstanceRequest): Promise<Insta
 
 export function linkInstance(req: LinkInstanceRequest): Promise<InstanceSummaryDto> {
   return invoke<InstanceSummaryDto>('link_instance', { req });
+}
+
+/** Crashed instance creates awaiting a decision (F-146). */
+export function listPendingCreates(): Promise<CreateRecoveryDto[]> {
+  return invoke<CreateRecoveryDto[]>('list_pending_creates');
+}
+
+/** `operationId` only: core derives the folder from the record, never from the webview. */
+export function finishCreate(operationId: string): Promise<InstanceSummaryDto> {
+  return invoke<InstanceSummaryDto>('finish_create', { operationId });
+}
+
+/** Removes the standard folders that are still empty and closes the record. */
+export function abandonCreate(operationId: string): Promise<number> {
+  return invoke<number>('abandon_create', { operationId });
 }
 
 /** Turn any error `invoke` rejects with into an IpcError (Tauri rejects with the serialized value itself). */

@@ -30,6 +30,9 @@ pub fn run() {
             commands::plan_create_instance,
             commands::execute_create_instance,
             commands::link_instance,
+            commands::list_pending_creates,
+            commands::finish_create,
+            commands::abandon_create,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
