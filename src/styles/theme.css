@@ -1,0 +1,96 @@
+/* ModManager — Tailwind 4 entry point.
+ *
+ * Source of truth for colors, radii and font stacks is `tokens.css`, a verbatim
+ * copy of the design package's `tokens/design-tokens.css`. Nothing below
+ * repeats a hex value: the `@theme inline` block only points Tailwind
+ * utilities at the variables that file already defines.
+ *
+ * `:root` = light, `.dark` = dark (dark is the shipped default, board 17),
+ * so a theme switch is one class on <html> and utilities never change.
+ */
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* Class-based dark mode. Without this Tailwind follows prefers-color-scheme,
+ * which would fight the in-app theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  /* shadcn/ui variable names -> Tailwind color utilities */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Design-package extras. Declared in the --color-* namespace so
+   * bg-surface-sunken / text-status-issue work with no per-status component. */
+  --color-surface-sunken: var(--surface-sunken);
+  --color-status-update: var(--status-update);
+  --color-status-disabled: var(--status-disabled);
+  --color-status-issue: var(--status-issue);
+  --color-status-manual: var(--status-manual);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+
+  --radius-control: var(--radius-control);
+  --radius-segmented: var(--radius-segmented);
+  --radius-card: var(--radius-card);
+  --radius-dialog: var(--radius-dialog);
+  --radius-chip: var(--radius-chip);
+  --radius-badge: var(--radius-badge);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  /* Type scale from tokens/design-tokens.json -> metrics. */
+  --text-body: 13px;
+  --text-small: 12px;
+  --text-caption: 11.5px;
+  --text-page-title: 18px;
+  --text-first-run-title: 26px;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.4;
+    color-scheme: light;
+  }
+
+  /* Arabic needs more leading than Latin at the same size (tokens metrics). */
+  html[dir="rtl"] {
+    line-height: 1.65;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Version strings, hashes and the Ctrl K chip are Latin regardless of the
+   * UI language; `unicode-bidi: isolate` keeps them from reordering. */
+  .font-mono {
+    unicode-bidi: isolate;
+  }
+}

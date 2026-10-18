@@ -1,0 +1,60 @@
+/* ModManager: Ink & Brass tokens, shadcn/ui variable names.
+   :root = light, .dark = dark (the design is dark-first). Extra tokens: surface-sunken, status-*.
+   Source of truth for values: the boards (shared.css). Motion and loader colors are not defined. */
+:root {
+  --background: #F6F3EC;
+  --foreground: #1F1C16;
+  --card: #FFFFFF;
+  --card-foreground: #1F1C16;
+  --popover: #EAE4D6;
+  --popover-foreground: #1F1C16;
+  --primary: #7A560F;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EAE4D6;
+  --secondary-foreground: #1F1C16;
+  --muted: #EAE4D6;
+  --muted-foreground: #6B6457;
+  --accent: #EAE4D6;
+  --accent-foreground: #1F1C16;
+  --destructive: #B3342A;
+  --border: #DDD5C3;
+  --input: #DDD5C3;
+  --ring: #7A560F;
+  --surface-sunken: #EFEADF;
+  --status-update: #1F5FA8;
+  --status-disabled: #6B6457;
+  --status-issue: #B3342A;
+  --status-manual: #6A47B0;
+  --status-success: #2F7A44;
+  --status-warning: #A24E12;
+}
+.dark {
+  --background: #141311;
+  --foreground: #EDE8DF;
+  --card: #1C1A17;
+  --card-foreground: #EDE8DF;
+  --popover: #24211D;
+  --popover-foreground: #EDE8DF;
+  --primary: #D2B36B;
+  --primary-foreground: #1A1408;
+  --secondary: #24211D;
+  --secondary-foreground: #EDE8DF;
+  --muted: #24211D;
+  --muted-foreground: #A39C90;
+  --accent: #24211D;
+  --accent-foreground: #EDE8DF;
+  --destructive: #EE8077;
+  --border: #2E2A25;
+  --input: #2E2A25;
+  --ring: #D2B36B;
+  --surface-sunken: #0F0E0C;
+  --status-update: #7DB4E8;
+  --status-disabled: #948C80;
+  --status-issue: #EE8077;
+  --status-manual: #B9A2E6;
+  --status-success: #7CC48A;
+  --status-warning: #E7894A;
+}
+
+:root{--radius-control:6px;--radius-segmented:8px;--radius-card:10px;--radius-dialog:12px;
+  --font-sans:'IBM Plex Sans','IBM Plex Sans Arabic',sans-serif;--font-mono:'IBM Plex Mono',monospace}

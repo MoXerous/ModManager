@@ -1,29 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
-import type { AppInfo } from './bindings/AppInfo';
-import { getAppInfo, toIpcError } from './lib/ipc';
+import { Shell, type PageId } from './app/Shell';
+import { PlaceholderPage } from './app/pages/PlaceholderPage';
+import { SettingsPage } from './app/pages/SettingsPage';
 
-// شاشة تشخيص مؤقتة: تثبت أن IPC والأنواع المولَّدة تعمل. تُستبدل في M2.
-// لا نصوص ثابتة (§5.9): الشاشة تُزال مع أول شاشة حقيقية في Task 5.
+// shortcut: navigation is component state until the screens have real routes to
+// link to; Wouter comes in 5c, when deep links and the command palette exist.
 export default function App() {
-  const [info, setInfo] = useState<AppInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getAppInfo()
-      .then(setInfo)
-      .catch((e) => setError(toIpcError(e).message));
-  }, []);
+  const [page, setPage] = useState<PageId>('instances');
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 480 }}>
-      <h1>{info?.name ?? 'ModManager'}</h1>
-      {info && (
-        <p>
-          {info.version} · {info.os}/{info.arch}
-        </p>
+    <Shell page={page} onNavigate={setPage}>
+      {page === 'settings' ? (
+        <SettingsPage />
+      ) : (
+        <PlaceholderPage
+          titleKey={`nav.${page}`}
+          emptyTitleKey={`page.${page}.emptyTitle`}
+          emptyBodyKey={`page.${page}.emptyBody`}
+        />
       )}
-      {error && <p role="alert">{error}</p>}
-    </main>
+    </Shell>
   );
 }

@@ -1,0 +1,52 @@
+{
+  "app.primaryNav": "Primary navigation",
+
+  "nav.instances": "Instances",
+  "nav.browse": "Browse",
+  "nav.downloads": "Downloads",
+  "nav.settings": "Settings",
+
+  "palette.placeholder": "Search or run a command",
+  "palette.shortcut": "Ctrl K",
+
+  "provider.connected": "{{provider}} · connected",
+  "provider.offline": "{{provider}} · unreachable",
+
+  "theme.dark": "Dark",
+  "theme.light": "Light",
+  "theme.system": "System",
+
+  "digits.western": "Western 0-9",
+  "digits.arabic": "Arabic-Indic ٠-٩",
+
+  "language.english": "English",
+  "language.arabic": "العربية",
+
+  "state.loading": "Loading…",
+  "state.error.title": "Something went wrong",
+  "state.action.retry": "Try again",
+  "state.action.details": "Details",
+
+  "error.internal": "An unexpected internal error occurred.",
+  "error.invalidInput": "The input was rejected as invalid.",
+  "error.notFound": "The requested item was not found.",
+  "error.providerApi": "The mod provider rejected the request.",
+  "error.rateLimited": "Too many requests. Try again later.",
+  "error.timeout": "The request timed out.",
+  "error.io": "A file or network operation failed.",
+  "error.newerSchema": "This data was written by a newer version of the app.",
+
+  "page.instances.emptyTitle": "No instances yet",
+  "page.instances.emptyBody": "Create an instance or link an existing folder.",
+  "page.browse.emptyTitle": "No search yet",
+  "page.browse.emptyBody": "Search Modrinth for a mod or a modpack.",
+  "page.downloads.emptyTitle": "The queue is empty",
+  "page.downloads.emptyBody": "Downloads appear here while they run.",
+  "page.settings.emptyTitle": "No settings yet",
+  "page.settings.emptyBody": "Paths, language, theme and API keys live here.",
+
+  "settings.general": "General",
+  "settings.language": "Language",
+  "settings.theme": "Theme",
+  "settings.digits": "Digits"
+}

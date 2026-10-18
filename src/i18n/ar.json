@@ -1,0 +1,52 @@
+{
+  "app.primaryNav": "التنقل الرئيسي",
+
+  "nav.instances": "المثيلات",
+  "nav.browse": "التصفّح",
+  "nav.downloads": "التنزيلات",
+  "nav.settings": "الإعدادات",
+
+  "palette.placeholder": "ابحث أو نفّذ أمرًا",
+  "palette.shortcut": "Ctrl K",
+
+  "provider.connected": "{{provider}} · متصل",
+  "provider.offline": "{{provider}} · غير متاح",
+
+  "theme.dark": "داكن",
+  "theme.light": "فاتح",
+  "theme.system": "النظام",
+
+  "digits.western": "أرقام غربية 0-9",
+  "digits.arabic": "أرقام عربية ٠-٩",
+
+  "language.english": "English",
+  "language.arabic": "العربية",
+
+  "state.loading": "جارٍ التحميل…",
+  "state.error.title": "حدث خطأ",
+  "state.action.retry": "أعد المحاولة",
+  "state.action.details": "التفاصيل",
+
+  "error.internal": "حدث خطأ داخلي غير متوقّع.",
+  "error.invalidInput": "رُفضت المُدخلات على أنها غير صالحة.",
+  "error.notFound": "العنصر المطلوب غير موجود.",
+  "error.providerApi": "رفض مزوّد المودات الطلب.",
+  "error.rateLimited": "طلبات كثيرة جدًا. أعد المحاولة لاحقًا.",
+  "error.timeout": "انتهت مهلة الطلب.",
+  "error.io": "فشلت عملية ملف أو شبكة.",
+  "error.newerSchema": "كُتبت هذه البيانات بإصدار أحدث من التطبيق.",
+
+  "page.instances.emptyTitle": "لا توجد مثيلات بعد",
+  "page.instances.emptyBody": "أنشئ مثيلًا أو اربط مجلدًا قائمًا.",
+  "page.browse.emptyTitle": "لم تبحث بعد",
+  "page.browse.emptyBody": "ابحث في Modrinth عن مود أو مود باك.",
+  "page.downloads.emptyTitle": "الطابور فارغ",
+  "page.downloads.emptyBody": "تظهر التنزيلات هنا أثناء تشغيلها.",
+  "page.settings.emptyTitle": "لا توجد إعدادات بعد",
+  "page.settings.emptyBody": "المسارات واللغة والثيم ومفاتيح API هنا.",
+
+  "settings.general": "عام",
+  "settings.language": "اللغة",
+  "settings.theme": "المظهر",
+  "settings.digits": "الأرقام"
+}
