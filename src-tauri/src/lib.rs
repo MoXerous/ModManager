@@ -34,6 +34,7 @@ pub fn run() {
             commands::list_pending_creates,
             commands::finish_create,
             commands::abandon_create,
+            commands::open_instance_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

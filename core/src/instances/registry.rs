@@ -71,6 +71,21 @@ impl CreatePlan {
 
 /// F-106: refuse to write into a folder that already holds an instance, and
 /// offer linking instead.
+/// An instance name is a label, never a path.
+///
+/// [`safe_member_name`](crate::safety::path::safe_member_name) answers the
+/// archive question, where `a/b` is a directory and therefore legitimate. An
+/// instance has no such thing, so the same name must not smuggle a separator in
+/// — every consumer that later treats it as a folder name would be wrong.
+pub(crate) fn instance_name(name: &str) -> Result<String, RegistryError> {
+    let safe = crate::safety::path::safe_member_name(name)
+        .map_err(|_| RegistryError::UnsafeName(name.to_string()))?;
+    if safe.contains('/') || safe.contains('\\') {
+        return Err(RegistryError::UnsafeName(name.to_string()));
+    }
+    Ok(safe)
+}
+
 pub fn plan_create(
     root: &Path,
     name: &str,
@@ -86,8 +101,7 @@ pub fn plan_create(
         return Err(RegistryError::RelativeRoot(root.to_path_buf()));
     }
 
-    let safe = crate::safety::path::safe_member_name(name)
-        .map_err(|_| RegistryError::UnsafeName(name.to_string()))?;
+    let safe = instance_name(name)?;
 
     if root.exists() {
         if !root.is_dir() {
@@ -280,10 +294,19 @@ pub fn link_instance(
     name: &str,
     created_at: i64,
 ) -> Result<InstanceRow, RegistryError> {
+    // The same two guards `plan_create` applies. Linking skips the plan
+    // entirely, so without these the dialog's own "link" mode was a way
+    // around both: a relative root landed beside the app's launch directory,
+    // and the name was never checked at all.
+    if !root.is_absolute() {
+        return Err(RegistryError::RelativeRoot(root.to_path_buf()));
+    }
+    let safe = instance_name(name)?;
+
     let (instance_root, minecraft_root) = crate::instances::detect_instance_roots(root);
     let row = InstanceRow {
         id: Uuid::new_v4().to_string(),
-        name: name.to_string(),
+        name: safe,
         path: instance_root,
         minecraft_root,
         // Detection is F-092/093, deferred; an undetected instance stays
@@ -484,6 +507,37 @@ mod tests {
         );
         assert!(!root.join("mods").exists(), "no folders created either");
         assert_eq!(names(&root), before, "folder untouched");
+    }
+
+    #[test]
+    fn spec_f103_link_refuses_a_relative_root_and_an_unsafe_name() {
+        // Linking skips `plan_create`, so these two guards have to stand on
+        // their own here or the dialog's link mode is a way around both.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let abs = dir.path().join("Real");
+        std::fs::create_dir_all(&abs).expect("mkdir");
+
+        assert!(
+            matches!(
+                link_instance(&d, std::path::Path::new("relative"), "N", 1),
+                Err(RegistryError::RelativeRoot(_))
+            ),
+            "a relative root was linked"
+        );
+        for bad in ["a/b", "..", "CON", ""] {
+            assert!(
+                matches!(
+                    link_instance(&d, &abs, bad, 1),
+                    Err(RegistryError::UnsafeName(_))
+                ),
+                "{bad:?} was accepted as a name"
+            );
+        }
+        assert!(
+            link_instance(&d, &abs, "Fine", 1).is_ok(),
+            "a valid link must still work"
+        );
     }
 
     #[test]

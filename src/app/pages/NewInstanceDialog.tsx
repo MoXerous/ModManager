@@ -101,6 +101,19 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
   };
 
   /**
+   * Any edit invalidates the plan and the last error: both describe a root the
+   * user has just changed, and showing either now would be showing a truth
+   * about a folder that is no longer the one they mean.
+   */
+  const change =
+    (setter: (value: string) => void) =>
+    (value: string): void => {
+      setter(value);
+      setPlan(null);
+      setError(null);
+    };
+
+  /**
    * The native folder picker. A cancelled dialog resolves to `null`, which is
    * not an error and must leave the field exactly as it was — an error banner
    * for "the user changed their mind" is noise.
@@ -112,7 +125,7 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
       title: t('instance.dialog.fieldRoot'),
     });
     if (typeof picked === 'string' && picked.length > 0) {
-      setRoot(picked);
+      change(setRoot)(picked);
     }
   };
 
@@ -153,23 +166,23 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
         <Field label={t('instance.dialog.fieldName')}>
           <input
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => change(setName)(e.target.value)}
             aria-label={t('instance.dialog.fieldName')}
             className="h-8 w-full rounded-control border border-input bg-transparent px-3 text-body outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
         </Field>
 
-        <Field label={t('instance.dialog.fieldRoot')}>
+        <Field label={t('instance.dialog.fieldRoot')} htmlFor="instance-root">
           {/* The picker fills the field but does not replace it: a typed path is
               still the fastest route, and the field must stay readable and
               editable. The absolute-path rule stays in `plan_create` — the
               webview is untrusted input, so a friendly picker is not a guard. */}
           <div className="flex gap-2">
             <input
+              id="instance-root"
               value={root}
-              onChange={(e) => setRoot(e.target.value)}
+              onChange={(e) => change(setRoot)(e.target.value)}
               dir="ltr"
-              aria-label={t('instance.dialog.fieldRoot')}
               className="h-8 min-w-0 flex-1 rounded-control border border-input bg-transparent px-3 font-mono text-body outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
             <Button
@@ -188,7 +201,7 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
             <Field label={t('instance.dialog.fieldVersion')} className="flex-1">
               <input
                 value={minecraftVersion}
-                onChange={(e) => setMinecraftVersion(e.target.value)}
+                onChange={(e) => change(setMinecraftVersion)(e.target.value)}
                 dir="ltr"
                 aria-label={t('instance.dialog.fieldVersion')}
                 className="h-8 w-full rounded-control border border-input bg-transparent px-3 font-mono text-body outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -197,7 +210,7 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
             <Field label={t('instance.dialog.fieldLoader')} className="flex-1">
               <input
                 value={loader}
-                onChange={(e) => setLoader(e.target.value)}
+                onChange={(e) => change(setLoader)(e.target.value)}
                 dir="ltr"
                 aria-label={t('instance.dialog.fieldLoader')}
                 className="h-8 w-full rounded-control border border-input bg-transparent px-3 font-mono text-body outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -253,11 +266,26 @@ function Field({
   label,
   className,
   children,
+  htmlFor,
 }: {
   label: string;
   className?: string;
   children: React.ReactNode;
+  /** Required when the control is not a direct child. A `<label>` that wraps
+   *  its control also wraps everything beside it, so a Browse button in the
+   *  same row is activated by a click on the label. */
+  htmlFor?: string;
 }) {
+  if (htmlFor) {
+    return (
+      <div className={cn('flex flex-col gap-1', className)}>
+        <label htmlFor={htmlFor} className="text-small text-muted-foreground">
+          {label}
+        </label>
+        {children}
+      </div>
+    );
+  }
   return (
     <label className={cn('flex flex-col gap-1', className)}>
       <span className="text-small text-muted-foreground">{label}</span>

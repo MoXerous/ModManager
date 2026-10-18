@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { openPath } from '@tauri-apps/plugin-opener';
 import { useTranslation } from 'react-i18next';
 import { TriangleAlert, CircleDashed, Plus } from 'lucide-react';
 import { cn } from 'cn';
@@ -8,7 +7,7 @@ import type { IpcError } from '../../bindings/IpcError';
 import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
-import { listInstances, toIpcError } from '../../lib/ipc';
+import { listInstances, openInstanceFolder, toIpcError } from '../../lib/ipc';
 import { formatRelativeTime } from '../../lib/format';
 
 import { NewInstanceDialog } from './NewInstanceDialog';
@@ -53,7 +52,17 @@ function StatusChip({ row }: { row: InstanceSummaryDto }) {
   return null;
 }
 
-function Card({ row, locale, unknownLabel }: { row: InstanceSummaryDto; locale: string; unknownLabel: string }) {
+function Card({
+  row,
+  locale,
+  unknownLabel,
+  onError,
+}: {
+  row: InstanceSummaryDto;
+  locale: string;
+  unknownLabel: string;
+  onError: (e: IpcError) => void;
+}) {
   const { t } = useTranslation();
   const initial = row.name.trim().charAt(0).toUpperCase() || '?';
 
@@ -88,7 +97,7 @@ function Card({ row, locale, unknownLabel }: { row: InstanceSummaryDto; locale: 
         <button
           type="button"
           onClick={() => {
-            void openPath(row.path);
+            openInstanceFolder(row.path).catch((e) => onError(toIpcError(e)));
           }}
           disabled={row.pathMissing}
           className="inline-flex h-8 items-center gap-1.5 rounded-control border border-border bg-card px-3 font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -209,6 +218,7 @@ export function InstancesPage() {
                   row={row}
                   locale={i18n.language}
                   unknownLabel={t('page.instances.unknown')}
+                  onError={setError}
                 />
               ))}
             </div>

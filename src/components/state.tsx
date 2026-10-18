@@ -92,7 +92,9 @@ export function ErrorState({ error, onRetry, className }: ErrorStateProps) {
       )}
       <details className="text-small text-muted-foreground">
         <summary className="cursor-pointer">{t('state.action.details')}</summary>
-        <p className="mt-1 font-mono text-caption">{error.message}</p>
+        <p className="mt-1 font-mono text-caption" dir="auto">
+          {error.message}
+        </p>
       </details>
     </div>
   );

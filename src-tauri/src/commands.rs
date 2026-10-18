@@ -11,6 +11,7 @@ use crate::dto::{
     ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, WarningDto,
 };
 use crate::state::AppState;
+use tauri_plugin_opener::OpenerExt;
 
 /// Walks the core error enums variant by variant: collapsing them into
 /// `internal` would show the user a generic failure for something we can
@@ -482,6 +483,43 @@ pub async fn abandon_create(
             recovery::abandon(journal, &operation_id).map_err(|e| registry_error(&e))
         })
         .await
+}
+
+/// Opens an instance folder in the system file manager.
+///
+/// Deliberately not a plugin command. `opener`'s `open_path` is scope-gated,
+/// and the only scope that can cover an instance root is `**` — every path on
+/// the machine — which would be the opposite of the webview-is-untrusted rule
+/// AGENTS.md §5.2 exists to enforce. The plugin's own `Opener` methods do not
+/// consult the scope, so the check lives here: the folder must be one this app
+/// registered. A refused path is our refusal, not a silent no-op.
+#[tauri::command]
+pub async fn open_instance_folder(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    root: String,
+) -> Result<(), IpcError> {
+    let canonical = std::fs::canonicalize(&root).map_err(IpcError::io)?;
+    let owned = canonical.clone();
+    let registered = state
+        .with_db(move |db| {
+            mm_core::db::instances::list(db)
+                .map_err(|e| row_error(&e))
+                .map(|rows| rows.iter().any(|r| r.path == owned))
+        })
+        .await?;
+    if !registered {
+        return Err(IpcError::invalid_input(
+            "that folder is not a registered instance",
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.opener()
+            .open_path(canonical.to_string_lossy().into_owned(), None::<&str>)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+    .map_err(IpcError::io)
 }
 
 #[cfg(test)]

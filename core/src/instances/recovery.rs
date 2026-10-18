@@ -130,13 +130,35 @@ pub fn assess_create(db: &crate::db::Db, record: &OperationRecord) -> CreateReco
     out
 }
 
-/// Unfinished creates, assessed. Read-only.
+/// Crashed creates that still need a decision. Settles the rest.
+///
+/// This is the only production caller of [`settle_create`], and it has to be:
+/// a record whose instance is already registered, or whose folder was never
+/// created, needs nothing from the user — but without a transition it stays
+/// `Planned`/`Running` and `discover().unfinished()` hands it back on every
+/// launch, forever. Settling here is what makes recovery converge rather than
+/// merely report.
+///
+/// A failure to settle is deliberately ignored: the record stays pending and is
+/// offered again, which is the correct outcome for something we could not
+/// record. It is never turned into an error that hides the other items.
+///
+/// Whatever is left needs the user, so `Leave` is filtered out — every reason
+/// `assess_create` reaches it for is now settled above.
 pub fn pending_creates(db: &crate::db::Db, journal: &Journal) -> Vec<CreateRecovery> {
     journal
         .discover()
         .unfinished()
         .filter(|r| r.kind == OperationKind::InstanceCreate)
-        .map(|r| assess_create(db, r))
+        .filter_map(|r| {
+            let assessment = assess_create(db, r);
+            let _ = settle_create(journal, r, assessment.reason);
+            if assessment.action == RecoveryAction::Leave {
+                None
+            } else {
+                Some(assessment)
+            }
+        })
         .collect()
 }
 
@@ -191,6 +213,7 @@ pub fn finish(
     operation_id: &str,
 ) -> Result<InstanceRow, RegistryError> {
     let record = journal.read(operation_id).map_err(RegistryError::Journal)?;
+    require_create(&record)?;
     let row = finish_create(db, &record)?;
     journal
         .transition_operation(operation_id, OperationState::Completed, None)
@@ -198,14 +221,15 @@ pub fn finish(
     Ok(row)
 }
 
-/// Abandons a crashed create: removes what is still empty, then closes the
-/// record so the residue is not offered on every launch.
+/// `abandon`: removes the standard folders that are still empty, keeps the
+/// root, and closes the record so the residue is not offered on every launch.
 ///
 /// `Failed` because that is what the user chose, not because anything broke.
 /// The root itself stays — nothing on disk proves we created it, and the user
 /// may have put it there.
 pub fn abandon(journal: &Journal, operation_id: &str) -> Result<usize, RegistryError> {
     let record = journal.read(operation_id).map_err(RegistryError::Journal)?;
+    require_create(&record)?;
     let root = PathBuf::from(&record.target_path);
     let removed = remove_empty_children(root.as_path())?;
 
@@ -239,6 +263,23 @@ pub fn remove_empty_children(root: &std::path::Path) -> Result<usize, RegistryEr
     Ok(removed)
 }
 
+/// Both mutating entry points are reached from the webview by operation id
+/// alone, so each must confirm what kind of record it was handed. Without this,
+/// a download batch's id would make `abandon` remove `mods` and `config` under
+/// that operation's target path, and delete a `profile.json` whose id happened
+/// to match.
+fn require_create(record: &OperationRecord) -> Result<(), RegistryError> {
+    if record.kind != OperationKind::InstanceCreate {
+        return Err(RegistryError::Row(
+            instances::InstanceRowError::InvalidSource(format!(
+                "operation {:?} is not an instance create",
+                record.operation_id
+            )),
+        ));
+    }
+    Ok(())
+}
+
 /// Finishes a half-created instance: the mirror is already written and valid,
 /// so this re-inserts the row the same way `execute_create` would have.
 pub fn finish_create(
@@ -269,10 +310,10 @@ pub fn finish_create(
     // so only `id` and `instance_root` may come from it. `name` is checked
     // with the same rule `plan_create` applies — otherwise recovery is the one
     // path that registers a name the preview would have refused.
-    crate::safety::path::safe_member_name(&meta.name).map_err(|e| {
-        RegistryError::Row(instances::InstanceRowError::InvalidSource(format!(
-            "profile.json name is not a safe member name: {e:?}"
-        )))
+    crate::instances::registry::instance_name(&meta.name).map_err(|_| {
+        RegistryError::Row(instances::InstanceRowError::InvalidSource(
+            "profile.json name is not a safe instance name".to_string(),
+        ))
     })?;
 
     // `minecraft_root` is taken from that same file. `insert` will happily
@@ -681,6 +722,41 @@ mod tests {
     }
 
     #[test]
+    fn spec_f146_finish_and_abandon_refuse_a_record_that_is_not_a_create() {
+        // Both take an operation id from the webview. A download batch's id must
+        // not be able to make `abandon` delete folders under its target path.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("SomeDownloadsTarget");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        std::fs::write(root.join("config"), b"not a folder").expect("write");
+
+        let rec = j
+            .start(
+                OperationKind::DownloadBatch,
+                "p1",
+                &root.to_string_lossy(),
+                vec![],
+            )
+            .expect("start");
+        j.transition_operation(&rec.operation_id, OperationState::Running, None)
+            .expect("running");
+
+        assert!(
+            finish(&d, &j, &rec.operation_id).is_err(),
+            "finish accepted it"
+        );
+        assert!(
+            abandon(&j, &rec.operation_id).is_err(),
+            "abandon accepted it"
+        );
+        // Nothing touched.
+        assert!(root.join("mods").is_dir(), "mods was removed");
+        assert!(root.join("config").is_file(), "a file was removed");
+    }
+
+    #[test]
     fn spec_f146_recovery_converges_so_a_crash_is_not_offered_forever() {
         // The defect this pins: nothing ever terminated a create record, and
         // `discover().unfinished()` re-offers exactly those. So every crashed
@@ -736,25 +812,16 @@ mod tests {
         j.transition_operation(&lost, OperationState::Running, None)
             .expect("running");
 
-        // Launch one: both are assessed, and both are settled.
-        let first = pending_creates(&d, &j);
-        assert_eq!(first.len(), 2, "both crashes are found");
-        for c in &first {
-            assert_eq!(c.action, RecoveryAction::Leave, "nothing to choose");
-            assert!(
-                settle_create(&j, &j.read(&c.operation_id).expect("read"), c.reason)
-                    .expect("settle"),
-                "{:?} is settleable",
-                c.reason
-            );
-        }
-
-        // Launch two, and every launch after it: nothing is offered again.
-        // This is the whole claim — one pass is not convergence, the second
-        // empty pass is.
+        // One call. Both crashes need no decision, so `pending_creates`
+        // settles them and returns nothing. That is the whole claim, and unlike
+        // the version that settled by hand, it is what production does.
         assert!(
             pending_creates(&d, &j).is_empty(),
-            "settled records are still being offered"
+            "a create needing no decision was offered to the user"
+        );
+        assert!(
+            pending_creates(&d, &j).is_empty(),
+            "a settled record came back"
         );
         assert_eq!(
             j.read(&finished).expect("read").state,
@@ -915,6 +982,16 @@ mod tests {
             "{:?}",
             pending.issues().collect::<Vec<_>>()
         );
-        assert_eq!(pending_creates(&d, &j).len(), 1);
+        // A bare record with no folder is settled as `Failed` by
+        // `pending_creates` — it needs no decision — so the user is offered
+        // nothing, while the strict decoder still round-tripped it intact.
+        assert!(
+            pending_creates(&d, &j).is_empty(),
+            "a record with nothing written should not be offered"
+        );
+        assert_eq!(
+            j.read(&rec.operation_id).expect("read").state,
+            OperationState::Failed
+        );
     }
 }

@@ -87,7 +87,7 @@
   "recovery.instance.action.finish": "أكمل الإنشاء",
   "recovery.instance.action.removeEmptyChildren": "احذف المجلدات الفارغة",
   "recovery.instance.notApplicable": "ليست عملية إنشاء مثيل",
-  "recovery.instance.alreadyRegistered": "المجلد مسجّل بالفعل كمثال، فاكتمل الإنشاء",
+  "recovery.instance.alreadyRegistered": "المجلد مسجّل بالفعل كمثيل، فاكتمل الإنشاء",
   "recovery.instance.nothingWritten": "لم يُنشأ أي مجلد",
   "recovery.instance.mirrorPresent": "ملف تعريف صالح، ويمكن إكمال الإنشاء",
   "recovery.instance.mirrorUnreadable": "ملف تعريف تالف، لا يمكن الاعتماد عليه",

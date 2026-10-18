@@ -120,6 +120,12 @@ export function finishCreate(operationId: string): Promise<InstanceSummaryDto> {
   return invoke<InstanceSummaryDto>('finish_create', { operationId });
 }
 
+/** Opens a registered instance folder. The path is checked in Rust against the
+ * registry; the webview cannot name an arbitrary folder. */
+export function openInstanceFolder(root: string): Promise<void> {
+  return invoke<void>('open_instance_folder', { root });
+}
+
 /** Removes the standard folders that are still empty and closes the record. */
 export function abandonCreate(operationId: string): Promise<number> {
   return invoke<number>('abandon_create', { operationId });
