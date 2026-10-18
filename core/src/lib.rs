@@ -9,6 +9,7 @@ pub mod instances;
 pub mod jar_reader;
 pub mod journal;
 pub mod logging;
+pub mod modpack;
 pub mod paths;
 pub mod providers;
 pub mod resolver;
