@@ -6,7 +6,7 @@
 //! `C:\Users\a` and `c:\users\A` are two spellings of one NTFS folder and would
 //! otherwise register it twice.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -159,6 +159,35 @@ pub fn list(db: &Db) -> Result<Vec<InstanceRow>, InstanceRowError> {
 }
 
 pub fn get(db: &Db, id: &str) -> Result<Option<InstanceRow>, InstanceRowError> {
+    Ok(list(db)?.into_iter().find(|r| r.id == id))
+}
+
+/// The row registered for this exact stored path, if any.
+///
+/// A direct query rather than a scan of `list`, for two reasons: `list` decodes
+/// *every* row's `source`, so one hand-edited value would make it fail and
+/// take this with it; and this is called on the rollback path, where guessing
+/// wrong means deleting a folder another instance owns.
+pub fn find_by_path(db: &Db, path: &Path) -> Result<Option<InstanceRow>, InstanceRowError> {
+    let stored: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT path FROM instances WHERE path = ?1",
+            [path.to_string_lossy().as_ref()],
+            |r| r.get(0),
+        )
+        .ok();
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
+    let id: String = db
+        .conn()
+        .query_row(
+            "SELECT id FROM instances WHERE path = ?1",
+            [stored.as_str()],
+            |r| r.get(0),
+        )
+        .map_err(DbError::from)?;
     Ok(list(db)?.into_iter().find(|r| r.id == id))
 }
 

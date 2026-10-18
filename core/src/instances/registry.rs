@@ -137,6 +137,10 @@ pub fn execute_create(
     )?;
     let operation_id = record.operation_id.clone();
 
+    // `insert` stores the canonical path, so ownership must be compared against
+    // that spelling and not the raw one, or the check silently misses.
+    let canonical_root = std::fs::canonicalize(&plan.root).unwrap_or_else(|_| plan.root.clone());
+
     // Only directories this call actually created. A folder that already existed
     // is not ours to remove, and this is also what keeps the root safe:
     // `plan_create` permits a pre-existing empty root, and that root is absent
@@ -150,10 +154,18 @@ pub fn execute_create(
             None,
         )?;
 
-        // Only directories this call actually created. A folder that already existed
-        // is not ours to remove, and this is also what keeps the root safe:
-        // `plan_create` permits a pre-existing empty root, and that root is
-        // absent from `created` precisely because we did not make it.
+        // Another create may have registered this folder between our plan and
+        // here. Anything written now would land inside a folder that already
+        // belongs to a registered instance, and the insert below would only
+        // fail *after* that damage. Refuse first, while the disk is untouched.
+        if let Some(owner) = instances::find_by_path(db, &canonical_root)? {
+            if owner.id != plan.id {
+                return Err(RegistryError::Row(InstanceRowError::DuplicatePath(
+                    owner.path,
+                )));
+            }
+        }
+
         for dir in &plan.dirs {
             match std::fs::create_dir(dir) {
                 Ok(()) => created.push(dir.clone()),
@@ -196,21 +208,41 @@ pub fn execute_create(
     match build {
         Ok(row) => Ok(row),
         Err(err) => {
+            if created.is_empty() {
+                // Nothing was created, so nothing was rolled back. Wrapping
+                // this in `RolledBack` would report "an internal error" to the
+                // user for a request that was simply refused.
+                return Err(err);
+            }
+
+            // If a *different* instance owns this folder now, the directories
+            // are its, not ours: a concurrent create finished here while we
+            // ran. Removing them would delete a registered instance's folders
+            // and leave its `Completed` record pointing at nothing.
+            let owned_by_other = instances::find_by_path(db, &canonical_root)
+                .ok()
+                .flatten()
+                .is_some_and(|owner| owner.id != plan.id);
+
             // `remove_dir`, never `remove_dir_all`: a directory that gained
             // content we did not put there must survive. Only `created` is
             // walked, so a pre-existing folder — including a pre-existing
             // empty root — is never touched.
             let mut undone = 0usize;
-            for dir in created.iter().rev() {
-                if std::fs::remove_dir(dir).is_ok() {
-                    undone += 1;
+            if !owned_by_other {
+                for dir in created.iter().rev() {
+                    if std::fs::remove_dir(dir).is_ok() {
+                        undone += 1;
+                    }
                 }
             }
-            // Only a *clean* rollback may reach a terminal state. If a
-            // directory survived — it gained content, or the OS refused — the
-            // record stays Running on purpose: `unfinished()` is exactly what
-            // surfaces it, and a Failed record would hide the residue forever.
-            if undone == created.len() {
+
+            // Only a clean rollback may reach a terminal state. If a directory
+            // survived — it gained content, the OS refused, or another
+            // instance owns it — the record stays Running on purpose:
+            // `unfinished()` is exactly what surfaces it, and a Failed record
+            // would hide the residue forever.
+            if owned_by_other || undone == created.len() {
                 let _ = journal.transition_operation(
                     &operation_id,
                     crate::journal::OperationState::Failed,
@@ -370,6 +402,63 @@ mod tests {
         );
         assert!(wrapper.join("mods").is_dir(), "not emptied by rollback");
         assert!(!wrapper.join("config").exists());
+    }
+
+    #[test]
+    fn spec_f107_rollback_never_deletes_a_concurrent_instances_folders() {
+        // Two creates race for one root. The second one wins the insert; the
+        // loser must not delete the winner's directories on its way out.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _jh) = jrnl(dir.path());
+        let root = dir.path().join("Raced");
+        // Both plans are built while the root is still absent — that is the race.
+        let winner = plan(&root);
+        let loser = plan(&root);
+
+        execute_create(&d, &j, &winner).expect("winner completes");
+        let err = execute_create(&d, &j, &loser).expect_err("loser must be refused");
+        assert!(
+            matches!(err, RegistryError::Row(InstanceRowError::DuplicatePath(_))),
+            "got {err:?}"
+        );
+
+        // The winner's instance is intact: folders, mirror and row all survive.
+        assert!(root.join("mods").is_dir(), "mods deleted by the loser");
+        assert!(root.join("config").is_dir(), "config deleted by the loser");
+        assert!(metadata::mirror_path(&root).is_file(), "mirror deleted");
+        let rows = instances::list(&d).expect("list");
+        assert_eq!(rows.len(), 1, "exactly the winner is registered");
+        assert_eq!(rows[0].id, winner.id);
+        assert!(rows[0].path.is_dir(), "row points at a deleted folder");
+    }
+
+    #[test]
+    fn spec_f103_link_then_create_never_touches_the_users_folder() {
+        // F-103 allows linking an empty folder, so `plan_create` cannot tell
+        // from the mirror alone that it is already registered. The create must
+        // refuse before writing anything at all.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _jh) = jrnl(dir.path());
+        let root = dir.path().join("Linked");
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        link_instance(&d, &root, "Linked", 1).expect("link");
+        let before = names(&root);
+
+        let p = plan(&root);
+        let err = execute_create(&d, &j, &p).expect_err("must refuse");
+        assert!(
+            matches!(err, RegistryError::Row(InstanceRowError::DuplicatePath(_))),
+            "got {err:?}"
+        );
+        assert!(
+            !metadata::mirror_path(&root).exists(),
+            "no mirror written into the user's folder"
+        );
+        assert!(!root.join("mods").exists(), "no folders created either");
+        assert_eq!(names(&root), before, "folder untouched");
     }
 
     #[test]
