@@ -50,8 +50,10 @@
   --radius-segmented: var(--radius-segmented);
   --radius-card: var(--radius-card);
   --radius-dialog: var(--radius-dialog);
-  --radius-chip: var(--radius-chip);
-  --radius-badge: var(--radius-badge);
+  /* tokens.css omits these two, but design-tokens.json lists them and the
+   * boards use both (the version chip and the downloads badge). */
+  --radius-chip: 6px;
+  --radius-badge: 5px;
 
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
@@ -67,7 +69,6 @@
 @layer base {
   html {
     font-family: var(--font-sans);
-    font-size: 13px;
     line-height: 1.4;
     color-scheme: light;
   }
@@ -81,8 +82,15 @@
     color-scheme: dark;
   }
 
+  /*
+   * 13px belongs on `body`, never on `html`: Tailwind's spacing and radius
+   * utilities are rem-based, so a 13px root would render `h-8` at 26px and
+   * `rounded-md` at 4.9px. Base *text* is 13px per the design; the rem basis
+   * stays 16px so `h-11` is the topbar's 44px and `h-9` the nav item's 36px.
+   */
   body {
     margin: 0;
+    font-size: 13px;
     background-color: var(--background);
     color: var(--foreground);
     -webkit-font-smoothing: antialiased;
