@@ -36,9 +36,14 @@ export function DownloadsPage() {
 
   const onEvent = useCallback((e: InstallEventDto) => {
     setRows((prev) => {
-      const next = prev.filter((r) => r.itemId !== e.itemId);
-      next.push({ ...e });
-      return next;
+      const existing = prev.find((r) => r.itemId === e.itemId);
+      // A terminal row is the truth about that file. A later stray progress
+      // event must not reopen it — a queue that says "installing" about a jar
+      // that already landed is worse than a slightly stale row.
+      if (existing && terminal(existing.phase) && !terminal(e.phase)) {
+        return prev;
+      }
+      return [...prev.filter((r) => r.itemId !== e.itemId), { ...e }];
     });
   }, []);
 
@@ -68,8 +73,16 @@ export function DownloadsPage() {
       .finally(() => setBusy(false));
   }, [target, slugs, onEvent]);
 
-  const terminal = (phase: string) =>
-    phase.endsWith('landed') || phase.endsWith('skipped') || phase.endsWith('failed') || phase.endsWith('cancelled');
+  // Explicit membership, not a suffix test: `install.phase.unlanded` would match
+  // `endsWith('landed')`, and a renamed key would stop being terminal without
+  // anything failing.
+  const TERMINAL = new Set([
+    'install.phase.landed',
+    'install.phase.skipped',
+    'install.phase.failed',
+    'install.phase.cancelled',
+  ]);
+  const terminal = (phase: string) => TERMINAL.has(phase);
 
   const content = (
     <>

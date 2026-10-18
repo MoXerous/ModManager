@@ -41,10 +41,15 @@ export function BrowsePage({ onInstalled }: Props) {
   // yet. Upgrade path: share the New Instance dialog's folder picker once that
   // picker is worth extracting.
   useEffect(() => {
-    void listInstances().then((rows) => {
-      setInstances(rows);
-      setTarget(rows[0]?.id ?? '');
-    });
+    // Not `void`-and-forget: an IPC failure here is an unhandled rejection in the
+    // console and a select that silently stays empty, which reads as "you have
+    // no instances" rather than "we could not ask".
+    void listInstances()
+      .then((rows) => {
+        setInstances(rows);
+        setTarget(rows[0]?.id ?? '');
+      })
+      .catch((e) => setError(toIpcError(e)));
   }, []);
 
   const targetPath = instances.find((i) => i.id === target)?.path ?? '';
@@ -80,7 +85,10 @@ export function BrowsePage({ onInstalled }: Props) {
         .catch((e) => setError(toIpcError(e)))
         .finally(() => setInstalling(null));
     },
-    [onInstalled],
+    // `targetPath` is read inside, so it belongs in the deps. Without it this
+    // closure keeps the first render's empty string and sends an empty root,
+    // which is the exact failure this commit exists to remove.
+    [onInstalled, targetPath],
   );
 
   // A name, not a path: the list already shows where each instance is, and a
