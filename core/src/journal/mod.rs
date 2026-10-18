@@ -18,6 +18,16 @@ pub enum OperationKind {
     UpdateDownload,
     UpdateInstall,
     MrpackInstall,
+    /// F-102: creating an instance folder, its `profile.json` and its row.
+    ///
+    /// Recorded with **zero items**. `OperationItem` is per-mod and its strict
+    /// decoder rejects any shape change against every record already on disk,
+    /// so a create is expressed through the record's own fields: `profile_id`
+    /// is the instance id `plan_create` already minted, `target_path` is the
+    /// root, and `staging_path`/`backup_path` stay empty because nothing is
+    /// staged or backed up. All five derived counters read 0, which callers
+    /// must treat as "no items" rather than a ratio.
+    InstanceCreate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

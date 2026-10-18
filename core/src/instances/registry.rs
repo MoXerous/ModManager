@@ -36,6 +36,8 @@ pub enum RegistryError {
     #[error(transparent)]
     Metadata(#[from] MetadataError),
     #[error(transparent)]
+    Journal(#[from] crate::journal::JournalError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("rolled back {0} step(s) after a failure: {1}")]
     RolledBack(usize, String),
@@ -107,28 +109,58 @@ pub fn plan_create(
     })
 }
 
-/// Creates the folders and the mirror, then the row. On any failure the
-/// directories this call created are removed in reverse order.
+/// Creates the folders and the mirror, then the row — journalling first, so a
+/// crash leaves evidence instead of an orphan.
 ///
-/// shortcut: rollback covers errors, not a process crash. A crash between the
-/// last `create_dir` and the row insert leaves an empty folder with no row;
-/// the Instances screen lists registered instances only, so such a folder is
-/// invisible until the user links it. Journal the steps (OperationKind has no
-/// instance-create variant yet) when that window is worth closing.
-pub fn execute_create(db: &crate::db::Db, plan: &CreatePlan) -> Result<InstanceRow, RegistryError> {
+/// Order: `Planned` record → `Running` → directories → mirror → row →
+/// `Completed`. A crash therefore means one of:
+/// * after the record, before any mkdir — nothing written anywhere;
+/// * mid-directories — some empty folders;
+/// * after the mirror, before the row — a complete `profile.json`, no row.
+///
+/// `crate::instances::recovery` turns those into an offer, never an action.
+///
+/// `link_instance` is deliberately absent: one atomic row, nothing partial to
+/// reconcile, so a record would be noise in `discover()`.
+pub fn execute_create(
+    db: &crate::db::Db,
+    journal: &crate::journal::Journal,
+    plan: &CreatePlan,
+) -> Result<InstanceRow, RegistryError> {
+    // Journal first. If this fails the create must not start: an unjournaled
+    // create is exactly the orphan the record exists to describe.
+    let record = journal.start(
+        crate::journal::OperationKind::InstanceCreate,
+        &plan.id,
+        &plan.root.to_string_lossy(),
+        Vec::new(),
+    )?;
+    let operation_id = record.operation_id.clone();
+
+    // Only directories this call actually created. A folder that already existed
+    // is not ours to remove, and this is also what keeps the root safe:
+    // `plan_create` permits a pre-existing empty root, and that root is absent
+    // from `created` precisely because we did not make it.
     let mut created: Vec<PathBuf> = Vec::with_capacity(plan.dirs.len());
 
     let build = (|| -> Result<InstanceRow, RegistryError> {
+        journal.transition_operation(
+            &operation_id,
+            crate::journal::OperationState::Running,
+            None,
+        )?;
+
+        // Only directories this call actually created. A folder that already existed
+        // is not ours to remove, and this is also what keeps the root safe:
+        // `plan_create` permits a pre-existing empty root, and that root is
+        // absent from `created` precisely because we did not make it.
         for dir in &plan.dirs {
             match std::fs::create_dir(dir) {
                 Ok(()) => created.push(dir.clone()),
                 // Already there as a folder means an earlier plan ran, so it is
                 // not ours to remove on rollback. A *file* in the way is a real
                 // failure and must not be swallowed.
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::AlreadyExists
-                        && dir.is_dir()
-                        && !created.contains(dir) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => {}
                 Err(e) => return Err(e.into()),
             }
         }
@@ -146,24 +178,41 @@ pub fn execute_create(db: &crate::db::Db, plan: &CreatePlan) -> Result<InstanceR
         };
         metadata::write_mirror(&plan.root, &metadata::mirror_of(&row))?;
         instances::insert(db, &row)?;
-        instances::get(db, &row.id)
+        let stored = instances::get(db, &row.id)
             .map_err(RegistryError::Row)?
             .ok_or(RegistryError::Row(InstanceRowError::DuplicatePath(
                 row.path,
-            )))
+            )))?;
+        // Completed last, after the row exists: a record that says Completed
+        // must never point at an instance that is not there.
+        let _ = journal.transition_operation(
+            &operation_id,
+            crate::journal::OperationState::Completed,
+            None,
+        );
+        Ok(stored)
     })();
 
     match build {
         Ok(row) => Ok(row),
         Err(err) => {
             // `remove_dir`, never `remove_dir_all`: a directory that gained
-            // content we did not put there must survive.
+            // content we did not put there must survive. Only `created` is
+            // walked, so a pre-existing folder — including a pre-existing
+            // empty root — is never touched.
             let mut undone = 0usize;
             for dir in created.iter().rev() {
                 if std::fs::remove_dir(dir).is_ok() {
                     undone += 1;
                 }
             }
+            // Failed only after the folders are actually gone, so a crash
+            // during rollback leaves the record Running for recovery to see.
+            let _ = journal.transition_operation(
+                &operation_id,
+                crate::journal::OperationState::Failed,
+                None,
+            );
             Err(RegistryError::RolledBack(undone, err.to_string()))
         }
     }
@@ -219,6 +268,14 @@ mod tests {
         open(&dir.join("t.db")).expect("open")
     }
 
+    fn jrnl(_dir: &Path) -> (crate::journal::Journal, tempfile::TempDir) {
+        let holder = crate::test_tempdir();
+        (
+            crate::journal::Journal::new(holder.path().join("operations")),
+            holder,
+        )
+    }
+
     fn names(root: &Path) -> Vec<String> {
         let mut v: Vec<String> = std::fs::read_dir(root)
             .expect("read_dir")
@@ -234,7 +291,8 @@ mod tests {
         let root = dir.path().join("Survival");
         let p = plan(&root);
 
-        let row = execute_create(&db(dir.path()), &p).expect("create");
+        let (j, _jh) = jrnl(dir.path());
+        let row = execute_create(&db(dir.path()), &j, &p).expect("create");
 
         assert!(root.join("mods").is_dir());
         assert!(root.join("config").is_dir());
@@ -273,7 +331,8 @@ mod tests {
         let wrapper = dir.path().join("wrapper");
         let p = blocked_plan(&wrapper);
 
-        let err = execute_create(&db(dir.path()), &p).expect_err("mirror write must fail");
+        let (j, _jh) = jrnl(dir.path());
+        let err = execute_create(&db(dir.path()), &j, &p).expect_err("mirror write must fail");
         let undone = match &err {
             RegistryError::RolledBack(n, _) => *n,
             other => panic!("expected a rollback, got {other:?}"),
@@ -299,7 +358,8 @@ mod tests {
         std::fs::create_dir_all(wrapper.join("mods")).expect("pre-existing mods");
         let p = blocked_plan(&wrapper);
 
-        let err = execute_create(&db(dir.path()), &p).expect_err("must fail");
+        let (j, _jh) = jrnl(dir.path());
+        let err = execute_create(&db(dir.path()), &j, &p).expect_err("must fail");
         assert!(
             matches!(err, RegistryError::RolledBack(1, _)),
             "only config was ours to remove, got {err:?}"
@@ -319,7 +379,8 @@ mod tests {
         p.root = root.clone();
         p.dirs = vec![root.clone(), root.join("mods"), root.join("config")];
 
-        let err = execute_create(&db(dir.path()), &p).expect_err("must fail");
+        let (j, _jh) = jrnl(dir.path());
+        let err = execute_create(&db(dir.path()), &j, &p).expect_err("must fail");
         assert!(
             matches!(err, RegistryError::RolledBack(1, _)),
             "got {err:?}"
@@ -342,7 +403,8 @@ mod tests {
         let dir = crate::test_tempdir();
         let root = dir.path().join("Existing");
         let p = plan(&root);
-        execute_create(&db(dir.path()), &p).expect("first");
+        let (j, _jh) = jrnl(dir.path());
+        execute_create(&db(dir.path()), &j, &p).expect("first");
 
         let err = plan_create(&root, "Other", None, None, 1).expect_err("refuse");
         assert!(

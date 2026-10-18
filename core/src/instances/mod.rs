@@ -5,6 +5,7 @@
 
 pub mod lock;
 pub mod metadata;
+pub mod recovery;
 pub mod registry;
 pub mod toggle;
 

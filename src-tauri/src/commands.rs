@@ -57,6 +57,9 @@ fn registry_error(e: &mm_core::instances::registry::RegistryError) -> IpcError {
         E::Row(R::InvalidSource(_)) => IpcError::internal(e),
         E::Row(R::Db(db)) => db_error(db),
         E::Metadata(m) => metadata_error(m),
+        // The journal could not be written, so nothing on disk was touched:
+        // this is our storage failing, not the user's request.
+        E::Journal(_) => IpcError::io(e),
         // Rollback did not finish; the on-disk state is indeterminate.
         E::RolledBack(_, _) => IpcError::internal(e),
     }
@@ -385,8 +388,9 @@ pub async fn execute_create_instance(
     .map_err(|e| registry_error(&e))?;
 
     let row = state
-        .with_db(move |db| {
-            mm_core::instances::registry::execute_create(db, &plan).map_err(|e| e.to_string())
+        .with_db_and_journal(move |db, journal| {
+            mm_core::instances::registry::execute_create(db, journal, &plan)
+                .map_err(|e| e.to_string())
         })
         .await
         .map_err(IpcError::io)?;
