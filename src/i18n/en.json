@@ -93,5 +93,14 @@
   "recovery.instance.mirrorUnreadable": "The profile is unreadable and cannot be trusted",
   "recovery.instance.directoriesWithoutMirror": "Folders exist with no profile",
   "instance.dialog.actionBrowse": "Browse",
-  "recovery.instance.title": "Unfinished instance"
+  "recovery.instance.title": "Unfinished instance",
+  "install.phase.downloading": "Downloading",
+  "install.phase.verifying": "Verifying",
+  "install.phase.landed": "Installed",
+  "install.phase.skipped": "Already present",
+  "install.phase.failed": "Failed",
+  "install.phase.cancelled": "Cancelled",
+  "install.start": "Install",
+  "install.installed": "{{count}} installed",
+  "install.none": "Nothing to install"
 }

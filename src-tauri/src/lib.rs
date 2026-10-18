@@ -1,5 +1,6 @@
 mod commands;
 mod dto;
+mod progress;
 mod state;
 
 use state::AppState;
@@ -35,6 +36,7 @@ pub fn run() {
             commands::finish_create,
             commands::abandon_create,
             commands::open_instance_folder,
+            commands::execute_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

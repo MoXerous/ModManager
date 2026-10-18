@@ -6,11 +6,14 @@ use std::path::PathBuf;
 
 use crate::dto::{
     AppInfo, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto, ErrorCode,
-    InstallPlanDto, InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest,
-    LocalFactDto, LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto,
-    ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, WarningDto,
+    InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto, InstanceSummaryDto,
+    IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto, PlanSummaryDto,
+    PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto,
+    ToggleResultDto, WarningDto,
 };
 use crate::state::AppState;
+use mm_core::downloader::JournalOp;
+use mm_core::journal::{JournalError, OperationKind, OperationRecord};
 use tauri_plugin_opener::OpenerExt;
 
 /// Walks the core error enums variant by variant: collapsing them into
@@ -531,6 +534,145 @@ pub async fn open_instance_folder(
     .await
     .map_err(|e| IpcError::internal(e.to_string()))?
     .map_err(IpcError::io)
+}
+
+/// F-063: runs a resolved install plan, streaming progress on a channel.
+///
+/// The channel is the point. `download()` fires for every chunk; this is the
+/// layer AGENTS.md §5.7 makes responsible, and `ProgressThrottle` is the only
+/// place in the app that decides how often.
+///
+/// The plan is rebuilt here from the request, never read back from the
+/// webview — the same rule `execute_create_instance` follows.
+#[tauri::command]
+pub async fn execute_install(
+    state: tauri::State<'_, AppState>,
+    req: InstallRequest,
+    on_event: tauri::ipc::Channel<crate::dto::InstallEventDto>,
+) -> Result<InstallResultDto, IpcError> {
+    use mm_core::downloader::{BatchItem, Downloader, ItemProgress};
+    use mm_core::providers::ModrinthClient;
+    use mm_core::resolver::resolve_and_plan;
+
+    if req.slugs.is_empty() {
+        return Err(IpcError::invalid_input("no projects given"));
+    }
+    let root = PathBuf::from(&req.instance_root);
+    if !root.is_absolute() {
+        // Same rule as `plan_create`: a relative root resolves against the
+        // process working directory, not a folder the user chose.
+        return Err(IpcError::invalid_input(
+            "the instance root must be an absolute path",
+        ));
+    }
+
+    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+    let plan = resolve_and_plan(
+        &client,
+        &req.slugs,
+        &req.game_version,
+        &req.loader,
+        &existing_filenames(Some(req.instance_root.clone()))?,
+    )
+    .await
+    .map_err(|e| IpcError::new(ErrorCode::ProviderApi, e.to_string()))?;
+
+    // Entries carry the identity; `versions` carries the file. An entry with no
+    // downloadable file is skipped rather than guessed at.
+    let mut items: Vec<BatchItem> = Vec::new();
+    for entry in &plan.entries {
+        if entry.status != "downloadable" {
+            continue;
+        }
+        let Some(version_id) = entry.version_id.as_deref() else {
+            continue;
+        };
+        let Some(version) = plan.versions.get(version_id) else {
+            continue;
+        };
+        let Some(file) = version.files.iter().find(|f| f.primary) else {
+            continue;
+        };
+        items.push(BatchItem {
+            item_id: version_id.to_string(),
+            project_id: entry.project_id.clone(),
+            title: entry.title.clone(),
+            filename: file.filename.clone(),
+            url: file.url.clone(),
+            size: Some(file.size),
+            sha1_hex: file.sha1.clone(),
+            sha512_hex: file.sha512.clone(),
+            allow_insecure_loopback: false,
+        });
+    }
+    if items.is_empty() {
+        return Err(IpcError::invalid_input("nothing to install"));
+    }
+
+    let target = root.join("mods");
+    std::fs::create_dir_all(&target).map_err(IpcError::io)?;
+    let downloader = Downloader::new(3).map_err(|e| IpcError::internal(e.to_string()))?;
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let journal = state.journal_handle();
+    let mut throttle = crate::progress::ProgressThrottle::new();
+    let mut installed: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut operation_id = String::new();
+
+    {
+        // Lock, write, drop. Never held across the download, which is the whole
+        // reason `execute_batch` takes a callback and not a `&Journal`.
+        let mut write = |op: JournalOp| -> Result<OperationRecord, JournalError> {
+            let g = journal
+                .lock()
+                .map_err(|_| JournalError::ItemMissing("journal lock poisoned".into()))?;
+            match op {
+                JournalOp::Start { target: t, items } => {
+                    let r = g.start(OperationKind::DownloadBatch, "", &t, items)?;
+                    operation_id = r.operation_id.clone();
+                    Ok(r)
+                }
+                JournalOp::Operation(state) => g.transition_operation(&operation_id, state, None),
+                JournalOp::Item { item_id, state } => {
+                    g.transition_item(&operation_id, &item_id, state, None)
+                }
+            }
+        };
+        let mut emit = |item_id: &str, p: ItemProgress| {
+            let terminal = !matches!(p, ItemProgress::Started { .. } | ItemProgress::Verifying);
+            if !throttle.allows(terminal, std::time::Instant::now()) {
+                return;
+            }
+            match &p {
+                ItemProgress::Landed { path } => {
+                    installed.push(path.to_string_lossy().into_owned())
+                }
+                ItemProgress::Skipped { path } => skipped.push(path.to_string_lossy().into_owned()),
+                _ => {}
+            }
+            let dto = crate::progress::to_dto(item_id, &p);
+            // A closed channel means the window went away. The download keeps
+            // running and the journal keeps the record, so there is nothing the
+            // caller could do about it — not an error worth failing the install.
+            let _ = on_event.send(dto);
+        };
+        mm_core::downloader::execute_batch(
+            &downloader,
+            &mut write,
+            &target,
+            &items,
+            cancel,
+            &mut emit,
+        )
+        .await
+        .map_err(|e| IpcError::io(e.to_string()))?;
+    }
+
+    Ok(InstallResultDto {
+        operation_id,
+        installed,
+        skipped,
+    })
 }
 
 #[cfg(test)]

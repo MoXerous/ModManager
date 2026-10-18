@@ -54,6 +54,18 @@ impl AppState {
         }
     }
 
+    /// The journal handle, for an operation that must write to it repeatedly
+    /// over a long period.
+    ///
+    /// Not a `with_*` helper on purpose. Those lock for the length of the
+    /// closure, and a download takes minutes — holding that lock would stall
+    /// every other command that touches the journal, recovery reads included.
+    /// The caller locks per write instead, which is what
+    /// `execute_batch`'s callback is for.
+    pub fn journal_handle(&self) -> Arc<Mutex<Journal>> {
+        self.journal.clone()
+    }
+
     /// Runs `f` against the database on a blocking thread.
     ///
     /// The error channel is `IpcError`, not `String`: it is what carries the

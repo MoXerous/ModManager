@@ -3,6 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import type { AppInfo } from '../bindings/AppInfo';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
+import type { InstallEventDto } from '../bindings/InstallEventDto';
+import type { InstallRequest } from '../bindings/InstallRequest';
+import type { InstallResultDto } from '../bindings/InstallResultDto';
 import type { CreateInstanceRequest } from '../bindings/CreateInstanceRequest';
 import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
@@ -118,6 +121,22 @@ export function listPendingCreates(): Promise<CreateRecoveryDto[]> {
 /** `operationId` only: core derives the folder from the record, never from the webview. */
 export function finishCreate(operationId: string): Promise<InstanceSummaryDto> {
   return invoke<InstanceSummaryDto>('finish_create', { operationId });
+}
+
+/**
+ * F-063. Runs the install plan and streams progress.
+ *
+ * The channel is the progress; the returned promise resolves when every item has
+ * settled. onEvent must be registered before invoking.
+ */
+export function executeInstall(
+  req: InstallRequest,
+  onEvent: (e: InstallEventDto) => void,
+): Promise<InstallResultDto> {
+  return invoke<InstallResultDto>('execute_install', {
+    req,
+    onEvent,
+  });
 }
 
 /** Opens a registered instance folder. The path is checked in Rust against the

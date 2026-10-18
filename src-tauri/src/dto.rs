@@ -468,3 +468,46 @@ pub struct CreateRecoveryDto {
 }
 
 use serde::Deserialize;
+
+/// What the webview asks for, and what it learns (F-063).
+///
+/// Generated as a binding like every other request struct, so the webview
+/// cannot drift from the Rust shape (AGENTS.md §5.3).
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallRequest {
+    /// Absolute path of the instance the mods go into.
+    pub instance_root: String,
+    pub slugs: Vec<String>,
+    pub game_version: String,
+    pub loader: String,
+}
+
+/// One progress event on the install channel.
+///
+/// `phase` is an i18n key rather than a word, so core decides what is true and
+/// the UI decides how to say it. `Option` without `skip_serializing_if` is
+/// required-nullable in this house convention (ADR 0002).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallEventDto {
+    pub item_id: String,
+    pub phase: String,
+    pub done: Option<u64>,
+    pub total: Option<u64>,
+    pub path: Option<String>,
+    pub message: Option<String>,
+}
+
+/// What an install returned once every item had settled.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallResultDto {
+    /// The journal operation, so a restart can find this batch.
+    pub operation_id: String,
+    pub installed: Vec<String>,
+    pub skipped: Vec<String>,
+}

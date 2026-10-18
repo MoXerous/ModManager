@@ -99,11 +99,11 @@ pub enum JournalOp {
 /// resumes rather than restarting, and every item already landed stays landed.
 pub async fn execute_batch(
     downloader: &Downloader,
-    write: &mut dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError>,
+    write: &mut (dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError> + Send),
     target: &Path,
     items: &[BatchItem],
     cancel: Arc<AtomicBool>,
-    on_progress: &mut dyn FnMut(&str, ItemProgress),
+    on_progress: &mut (dyn FnMut(&str, ItemProgress) + Send),
 ) -> Result<Vec<PathBuf>, BatchError> {
     let journal_items: Vec<OperationItem> = items
         .iter()

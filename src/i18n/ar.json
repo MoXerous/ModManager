@@ -93,5 +93,14 @@
   "recovery.instance.mirrorUnreadable": "ملف تعريف تالف، لا يمكن الاعتماد عليه",
   "recovery.instance.directoriesWithoutMirror": "توجد مجلدات بلا ملف تعريف",
   "instance.dialog.actionBrowse": "استعراض",
-  "recovery.instance.title": "إنشاء مثيل غير مكتمل"
+  "recovery.instance.title": "إنشاء مثيل غير مكتمل",
+  "install.phase.downloading": "جارٍ التنزيل",
+  "install.phase.verifying": "جارٍ التحقق",
+  "install.phase.landed": "اكتمل",
+  "install.phase.skipped": "موجود مسبقًا",
+  "install.phase.failed": "فشل",
+  "install.phase.cancelled": "أُلغي",
+  "install.start": "تثبيت",
+  "install.installed": "مثبَّت {{count}}",
+  "install.none": "لا شيء للتثبيت"
 }

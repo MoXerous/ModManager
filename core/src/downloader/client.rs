@@ -170,8 +170,8 @@ impl Downloader {
     pub async fn download(
         &self,
         req: &DownloadRequest,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
-        is_paused: &dyn Fn() -> bool,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
+        is_paused: &(dyn Fn() -> bool + Sync),
     ) -> Result<DownloadOutcome, DownloadError> {
         validate_url(&req.url, req.allow_insecure_loopback)?;
         // F-032/F-033: an existing dest is never silently overwritten.
@@ -211,8 +211,8 @@ impl Downloader {
     async fn try_once(
         &self,
         req: &DownloadRequest,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
-        is_paused: &dyn Fn() -> bool,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
+        is_paused: &(dyn Fn() -> bool + Sync),
     ) -> Result<DownloadOutcome, DownloadError> {
         use reqwest::header::{CONTENT_LENGTH, LOCATION, RANGE};
         use reqwest::StatusCode;
@@ -407,7 +407,7 @@ impl Downloader {
         done: u64,
         sha1: sha1::Sha1,
         sha512: sha2::Sha512,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
     ) -> Result<DownloadOutcome, DownloadError> {
         use sha1::Digest as _;
         let part = atomic::part_path(&req.dest);
@@ -490,7 +490,7 @@ impl Downloader {
         &self,
         req: &DownloadRequest,
         content_type: Option<String>,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
     ) -> Result<DownloadOutcome, DownloadError> {
         let part = atomic::part_path(&req.dest);
         let (len, sha1hex, sha512hex, head) = tokio::task::spawn_blocking({
