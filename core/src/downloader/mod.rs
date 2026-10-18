@@ -3,7 +3,14 @@
 //! The network flow itself lives here too once written; this bite is the
 //! retry policy only (F-039), so the numbers are pinned before any socket.
 
+pub mod batch;
 pub mod client;
 pub mod retry;
 
-pub use client::{DownloadOutcome, DownloadRequest, DownloadStatus, Downloader};
+#[cfg(test)]
+mod batch_tests;
+
+pub use batch::{execute_batch, BatchError, BatchItem, ItemProgress};
+pub use client::{
+    DownloadOutcome, DownloadPhase, DownloadProgress, DownloadRequest, DownloadStatus, Downloader,
+};
