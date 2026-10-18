@@ -476,6 +476,48 @@ mod tests {
         assert!(pending_creates(&d, &j).is_empty(), "not listed as pending");
     }
 
+    /// Every key core can emit must exist in both locales.
+    ///
+    /// A missing one does not fail a build or a test anywhere else: the UI
+    /// falls back to the key itself and the user reads
+    /// `recovery.instance.mirrorUnreadable`. There is no frontend test runner,
+    /// so this is the only place the invariant can be checked.
+    #[test]
+    fn spec_f146_every_emitted_i18n_key_is_translated_in_both_locales() {
+        let emitted: Vec<&str> = [
+            RecoveryAction::Leave.key(),
+            RecoveryAction::Finish.key(),
+            RecoveryAction::RemoveEmptyChildren.key(),
+        ]
+        .into_iter()
+        .chain([
+            RecoveryReason::NotApplicable.key(),
+            RecoveryReason::AlreadyRegistered.key(),
+            RecoveryReason::NothingWritten.key(),
+            RecoveryReason::MirrorPresent.key(),
+            RecoveryReason::MirrorUnreadable.key(),
+            RecoveryReason::DirectoriesWithoutMirror.key(),
+        ])
+        .collect();
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("src")
+            .join("i18n");
+        for locale in ["ar.json", "en.json"] {
+            let text = std::fs::read_to_string(root.join(locale))
+                .unwrap_or_else(|e| panic!("cannot read {locale}: {e}"));
+            let parsed: serde_json::Value =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("{locale} is not JSON: {e}"));
+            let missing: Vec<&str> = emitted
+                .iter()
+                .copied()
+                .filter(|k| parsed.get(*k).is_none())
+                .collect();
+            assert!(missing.is_empty(), "{locale} is missing {missing:?}");
+        }
+    }
+
     #[test]
     fn spec_f146_recovery_converges_so_a_crash_is_not_offered_forever() {
         // The defect this pins: nothing ever terminated a create record, and
