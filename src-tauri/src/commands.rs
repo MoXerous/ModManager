@@ -58,9 +58,11 @@ fn registry_error(e: &mm_core::instances::registry::RegistryError) -> IpcError {
     use mm_core::instances::registry::RegistryError as E;
     match e {
         // The request cannot be satisfied as stated.
-        E::RootNotEmpty(_) | E::AlreadyAnInstance(_) | E::RootIsFile(_) | E::UnsafeName(_) => {
-            IpcError::invalid_input(e)
-        }
+        E::RootNotEmpty(_)
+        | E::AlreadyAnInstance(_)
+        | E::RootIsFile(_)
+        | E::RelativeRoot(_)
+        | E::UnsafeName(_) => IpcError::invalid_input(e),
         E::Io(_) => IpcError::io(e),
         E::Row(r) => row_error(r),
         E::Metadata(m) => metadata_error(m),

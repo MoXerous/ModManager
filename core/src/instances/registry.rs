@@ -29,6 +29,11 @@ pub enum RegistryError {
     AlreadyAnInstance(PathBuf),
     #[error("refusing to create in {0}: the path is a file")]
     RootIsFile(PathBuf),
+    /// A relative root resolves against the process working directory, which
+    /// is the app's launch directory for an installed build — not a place the
+    /// user chose and often not one they can write to.
+    #[error("refusing to create in {0}: the path must be absolute")]
+    RelativeRoot(PathBuf),
     #[error("unsafe instance name: {0}")]
     UnsafeName(String),
     #[error(transparent)]
@@ -73,6 +78,14 @@ pub fn plan_create(
     loader: Option<String>,
     created_at: i64,
 ) -> Result<CreatePlan, RegistryError> {
+    // First, before any filesystem work. A relative root is resolved against
+    // the process working directory, so `test` becomes `<launch dir>\test`:
+    // in an installed build that is wherever the user happened to start the
+    // app from, and the preview shows a path they never chose.
+    if !root.is_absolute() {
+        return Err(RegistryError::RelativeRoot(root.to_path_buf()));
+    }
+
     let safe = crate::safety::path::safe_member_name(name)
         .map_err(|_| RegistryError::UnsafeName(name.to_string()))?;
 
@@ -471,6 +484,28 @@ mod tests {
         );
         assert!(!root.join("mods").exists(), "no folders created either");
         assert_eq!(names(&root), before, "folder untouched");
+    }
+
+    #[test]
+    fn spec_f106_create_refuses_a_relative_root() {
+        // Found by creating an instance through the real dialog: typing `test`
+        // produced an instance at `<app launch dir>\test`. For an installed
+        // build the launch directory is whatever the user started the app from.
+        let dir = crate::test_tempdir();
+        for root in ["test", r".\test", r"..\sibling", r"C:drive-relative"] {
+            let err = plan_create(std::path::Path::new(root), "N", None, None, 1)
+                .expect_err("a relative root must be refused");
+            assert!(
+                matches!(err, RegistryError::RelativeRoot(_)),
+                "{root:?} -> {err:?}"
+            );
+        }
+        // Absolute roots are unaffected, including one that does not exist yet.
+        let abs = dir.path().join("Fresh");
+        assert!(
+            plan_create(&abs, "N", None, None, 1).is_ok(),
+            "an absolute root must still be planned"
+        );
     }
 
     #[test]
