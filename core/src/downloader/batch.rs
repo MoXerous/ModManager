@@ -17,9 +17,7 @@ use std::sync::Arc;
 use crate::downloader::{
     DownloadPhase, DownloadProgress, DownloadRequest, DownloadStatus, Downloader,
 };
-use crate::journal::{
-    ItemState, Journal, JournalError, OperationItem, OperationKind, OperationState,
-};
+use crate::journal::{ItemState, JournalError, OperationItem, OperationRecord, OperationState};
 
 /// What the caller learns about one item's progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,14 +68,38 @@ pub enum BatchError {
     Cancelled,
 }
 
+/// One journal write the batch needs.
+///
+/// A callback rather than a `&Journal`, and that is the whole point: a
+/// `&Journal` held across a multi-minute download means the mutex behind it is
+/// held for minutes too, and every other command that touches the journal —
+/// including the recovery reads on the Instances page — waits for the last
+/// byte. This type lets the caller open and close the lock per write.
+#[derive(Debug, Clone)]
+pub enum JournalOp {
+    Start {
+        target: String,
+        items: Vec<OperationItem>,
+    },
+    Operation(OperationState),
+    Item {
+        item_id: String,
+        state: ItemState,
+    },
+}
+
 /// Runs every item, journalling the batch as it goes.
+///
+/// `write` is called once per state change and must not be held open between
+/// calls; that is what keeps the journal available to the rest of the app
+/// while a download runs.
 ///
 /// `on_progress` is called for every item event. Returning `Err(Cancelled)`
 /// stops the batch cleanly: the item in flight keeps its `.part` so a retry
 /// resumes rather than restarting, and every item already landed stays landed.
 pub async fn execute_batch(
     downloader: &Downloader,
-    journal: &Journal,
+    write: &mut dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError>,
     target: &Path,
     items: &[BatchItem],
     cancel: Arc<AtomicBool>,
@@ -100,21 +122,17 @@ pub async fn execute_batch(
     // The journal is written before the first byte moves: a crash with no
     // record leaves files on disk that nothing claims, and that is the
     // recoverable direction (AGENTS.md §5.4).
-    let record = journal.start(
-        OperationKind::DownloadBatch,
-        "",
-        &target.to_string_lossy(),
-        journal_items,
-    )?;
-    let op_id = record.operation_id.clone();
-    journal.transition_operation(&op_id, OperationState::Running, None)?;
+    let record = write(JournalOp::Start {
+        target: target.to_string_lossy().into_owned(),
+        items: journal_items,
+    })?;
+    let _ = &record;
+    write(JournalOp::Operation(OperationState::Running))?;
 
     let mut landed: Vec<PathBuf> = Vec::with_capacity(items.len());
     for item in items {
         if cancel.load(Ordering::Relaxed) {
-            journal
-                .transition_operation(&op_id, OperationState::Cancelled, None)
-                .map_err(BatchError::Journal)?;
+            let _ = write(JournalOp::Operation(OperationState::Cancelled))?;
             return Err(BatchError::Cancelled);
         }
 
@@ -147,7 +165,10 @@ pub async fn execute_batch(
                 return ControlFlow::Continue(());
             }
             last_phase = Some(next);
-            if let Err(e) = journal.transition_item(&op_id, &item.item_id, next, None) {
+            if let Err(e) = write(JournalOp::Item {
+                item_id: item.item_id.clone(),
+                state: next,
+            }) {
                 journal_err = Some(BatchError::Journal(e));
                 return ControlFlow::Continue(());
             }
@@ -173,9 +194,10 @@ pub async fn execute_batch(
             Ok(outcome) => {
                 let item_state = match outcome.status {
                     DownloadStatus::Cancelled => {
-                        journal
-                            .transition_item(&op_id, &item.item_id, ItemState::Cancelled, None)
-                            .map_err(BatchError::Journal)?;
+                        let _ = write(JournalOp::Item {
+                            item_id: item.item_id.clone(),
+                            state: ItemState::Cancelled,
+                        })?;
                         on_progress(&item.item_id, ItemProgress::Cancelled);
                         return Err(BatchError::Cancelled);
                     }
@@ -183,9 +205,10 @@ pub async fn execute_batch(
                     DownloadStatus::Success => ItemState::Completed,
                 };
                 let landed_path = outcome.path;
-                journal
-                    .transition_item(&op_id, &item.item_id, item_state, None)
-                    .map_err(BatchError::Journal)?;
+                let _ = write(JournalOp::Item {
+                    item_id: item.item_id.clone(),
+                    state: item_state,
+                })?;
                 let reported = if item_state == ItemState::Skipped {
                     ItemProgress::Skipped {
                         path: landed_path.clone(),
@@ -203,9 +226,10 @@ pub async fn execute_batch(
             Err(e) => {
                 // One bad file fails its own item, not the whole batch: the
                 // files already landed stay landed and stay recorded.
-                journal
-                    .transition_item(&op_id, &item.item_id, ItemState::Failed, None)
-                    .map_err(BatchError::Journal)?;
+                let _ = write(JournalOp::Item {
+                    item_id: item.item_id.clone(),
+                    state: ItemState::Failed,
+                })?;
                 on_progress(
                     &item.item_id,
                     ItemProgress::Failed {
@@ -220,8 +244,6 @@ pub async fn execute_batch(
         }
     }
 
-    journal
-        .transition_operation(&op_id, OperationState::Completed, None)
-        .map_err(BatchError::Journal)?;
+    let _ = write(JournalOp::Operation(OperationState::Completed))?;
     Ok(landed)
 }

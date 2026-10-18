@@ -10,7 +10,7 @@ pub mod retry;
 #[cfg(test)]
 mod batch_tests;
 
-pub use batch::{execute_batch, BatchError, BatchItem, ItemProgress};
+pub use batch::{execute_batch, BatchError, BatchItem, ItemProgress, JournalOp};
 pub use client::{
     DownloadOutcome, DownloadPhase, DownloadProgress, DownloadRequest, DownloadStatus, Downloader,
 };
