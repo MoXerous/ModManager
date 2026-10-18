@@ -92,5 +92,6 @@
   "recovery.instance.mirrorPresent": "ملف تعريف صالح، ويمكن إكمال الإنشاء",
   "recovery.instance.mirrorUnreadable": "ملف تعريف تالف، لا يمكن الاعتماد عليه",
   "recovery.instance.directoriesWithoutMirror": "توجد مجلدات بلا ملف تعريف",
-  "instance.dialog.actionBrowse": "استعراض"
+  "instance.dialog.actionBrowse": "استعراض",
+  "recovery.instance.title": "إنشاء مثيل غير مكتمل"
 }

@@ -7,6 +7,7 @@ import type { IpcError } from '../../bindings/IpcError';
 import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
+import { RecoveryBanner } from './RecoveryBanner';
 import { listInstances, openInstanceFolder, toIpcError } from '../../lib/ipc';
 import { formatRelativeTime } from '../../lib/format';
 
@@ -174,6 +175,13 @@ export function InstancesPage() {
   ) : (
     <div className="flex flex-col">
       {header}
+
+      {/* A crashed create is shown even while the list is loading: it is the one
+          thing on this page that needs a decision, and hiding it behind a
+          spinner would delay the only choice that matters. */}
+      <div className="px-5 pt-4">
+        <RecoveryBanner onSettled={load} />
+      </div>
 
       {rows === null ? (
         <LoadingState className="px-5 pt-6" />

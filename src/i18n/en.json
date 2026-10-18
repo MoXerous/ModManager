@@ -92,5 +92,6 @@
   "recovery.instance.mirrorPresent": "A valid profile is present and can be finished",
   "recovery.instance.mirrorUnreadable": "The profile is unreadable and cannot be trusted",
   "recovery.instance.directoriesWithoutMirror": "Folders exist with no profile",
-  "instance.dialog.actionBrowse": "Browse"
+  "instance.dialog.actionBrowse": "Browse",
+  "recovery.instance.title": "Unfinished instance"
 }
