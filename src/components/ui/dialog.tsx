@@ -75,10 +75,15 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 end-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className="absolute top-4 end-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-[18px]"
           >
-            <XIcon />
-            <span className="sr-only">Close</span>
+            {/*
+              No visible label: the icon carries the affordance and any text
+              here would be a hardcoded English string crossing the IPC
+              boundary (AGENTS.md §5.9). Callers that need a name must pass one
+              in their own i18n.
+            */}
+            <XIcon aria-hidden />
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Content>

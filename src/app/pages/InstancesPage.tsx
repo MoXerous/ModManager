@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { useTranslation } from 'react-i18next';
-import { TriangleAlert, CircleDashed } from 'lucide-react';
+import { TriangleAlert, CircleDashed, Plus } from 'lucide-react';
 import { cn } from 'cn';
 
 import type { IpcError } from '../../bindings/IpcError';
 import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
+import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
 import { listInstances, toIpcError } from '../../lib/ipc';
 import { formatRelativeTime } from '../../lib/format';
+
+import { NewInstanceDialog } from './NewInstanceDialog';
 
 // Board 05. Only what the four IPC commands actually return is rendered: the
 // board's "N mods", "N updates" and "Review issues" chips need a scan result
@@ -103,6 +106,7 @@ export function InstancesPage() {
   const [error, setError] = useState<IpcError | null>(null);
   const [query, setQuery] = useState('');
   const [onlyAttention, setOnlyAttention] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
@@ -140,21 +144,25 @@ export function InstancesPage() {
           {t('page.instances.count', { count: rows.length })}
         </span>
       )}
+      <Button
+        className="ms-auto"
+        onClick={() => setDialogOpen(true)}
+        aria-label={t('instance.dialog.title')}
+      >
+        <Plus aria-hidden />
+        {t('instance.dialog.actionCreateShort')}
+      </Button>
     </div>
   );
 
-  if (error) {
-    return (
-      <div className="flex flex-col">
-        {header}
-        <div className="px-5 pt-4">
-          <ErrorState error={error} onRetry={load} />
-        </div>
+  const page = error ? (
+    <div className="flex flex-col">
+      {header}
+      <div className="px-5 pt-4">
+        <ErrorState error={error} onRetry={load} />
       </div>
-    );
-  }
-
-  return (
+    </div>
+  ) : (
     <div className="flex flex-col">
       {header}
 
@@ -208,6 +216,13 @@ export function InstancesPage() {
         </>
       )}
     </div>
+  );
+
+  return (
+    <>
+      {page}
+      <NewInstanceDialog open={dialogOpen} onOpenChange={setDialogOpen} onDone={load} />
+    </>
   );
 }
 
