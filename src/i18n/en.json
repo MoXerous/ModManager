@@ -104,5 +104,6 @@
   "install.installed": "{{count}} installed",
   "install.none": "Nothing to install",
   "install.target": "Instance folder",
-  "install.slugs": "Mod names (e.g. sodium)"
+  "install.slugs": "Mod names (e.g. sodium)",
+  "install.count": "{{count}} in the queue"
 }

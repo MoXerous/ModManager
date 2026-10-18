@@ -3,12 +3,14 @@ import { useTranslation } from 'react-i18next';
 
 import type { InstallEventDto } from '../../bindings/InstallEventDto';
 import type { InstallRequest } from '../../bindings/InstallRequest';
-import type { InstallResultDto } from '../../bindings/InstallResultDto';
 import type { IpcError } from '../../bindings/IpcError';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState } from '../../components/state';
 import { executeInstall, toIpcError } from '../../lib/ipc';
 import { formatBytes } from '../../lib/format';
+
+const GAME_VERSION = '1.21.1';
+const LOADER = 'fabric';
 
 interface Row extends InstallEventDto {
   /** The last thing that happened, so a re-sent download event does not
@@ -25,11 +27,10 @@ interface Row extends InstallEventDto {
  * a restart but disagrees with the journal is worse than one that resets.
  */
 export function DownloadsPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState(false);
-  const [lastResult, setLastResult] = useState<InstallResultDto | null>(null);
   const [target, setTarget] = useState('');
   const [slugs, setSlugs] = useState('');
 
@@ -48,8 +49,13 @@ export function DownloadsPage() {
         .split(/[\s,]+/)
         .map((s) => s.trim())
         .filter(Boolean),
-      gameVersion: '1.21.1',
-      loader: 'fabric',
+      // shortcut: the game version and loader are pinned because the queue has no
+    // filter bar yet. Ceiling: this installs Fabric 1.21.1 mods and nothing
+    // else. Upgrade path: move both to Browse, where the filters and the
+    // resolved versions already live, and pass the plan in rather than
+    // re-resolving it here.
+    gameVersion: GAME_VERSION,
+    loader: LOADER,
     };
     if (req.slugs.length === 0 || req.instanceRoot.length === 0) {
       return;
@@ -58,7 +64,6 @@ export function DownloadsPage() {
     setError(null);
     setRows([]);
     executeInstall(req, onEvent)
-      .then(setLastResult)
       .catch((e) => setError(toIpcError(e)))
       .finally(() => setBusy(false));
   }, [target, slugs, onEvent]);
@@ -93,12 +98,6 @@ export function DownloadsPage() {
           </Button>
         </div>
       </div>
-
-      {lastResult && (
-        <p className="px-5 pt-3 text-small text-muted-foreground">
-          {t('install.installed', { count: lastResult.installed.length })}
-        </p>
-      )}
 
       <div className="grid grid-cols-1 gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-3">
         {rows.map((r) => {
@@ -181,10 +180,11 @@ export function DownloadsPage() {
     <div className="flex flex-col">
       <div className="flex items-center gap-2.5 px-5 pt-4">
         <h1 className="text-page-title font-semibold">{t('nav.downloads')}</h1>
-        <span className="ms-1 text-small text-muted-foreground">
-          {i18n.language === 'ar' ? '' : ''}
-          {rows.length > 0 ? t('install.installed', { count: rows.length }) : ''}
-        </span>
+        {rows.length > 0 && (
+          <span className="ms-1 text-small text-muted-foreground">
+            {t('install.count', { count: rows.length })}
+          </span>
+        )}
       </div>
       {rows.length === 0 ? (
         <>

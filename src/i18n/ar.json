@@ -104,5 +104,6 @@
   "install.installed": "مثبَّت {{count}}",
   "install.none": "لا شيء للتثبيت",
   "install.target": "مسار المجلد",
-  "install.slugs": "أسماء المودات (مثل sodium)"
+  "install.slugs": "أسماء المودات (مثل sodium)",
+  "install.count": "{{count}} في الطابور"
 }
