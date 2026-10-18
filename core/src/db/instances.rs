@@ -122,44 +122,78 @@ pub fn list(db: &Db) -> Result<Vec<InstanceRow>, InstanceRowError> {
              ORDER BY name COLLATE NOCASE, id",
         )
         .map_err(DbError::from)?;
-    let rows = stmt
-        .query_map([], |r| {
-            let source: String = r.get(6)?;
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, String>(5)?,
-                source,
-                r.get::<_, i64>(7)?,
-                r.get::<_, Option<i64>>(8)?,
-            ))
-        })
-        .map_err(DbError::from)?;
+    let rows = stmt.query_map([], row_to_tuple).map_err(DbError::from)?;
 
     let mut out = Vec::new();
     for row in rows {
-        let (id, name, path, minecraft_root, mc, loader, source, created_at, scanned_at) =
-            row.map_err(DbError::from)?;
-        out.push(InstanceRow {
-            id,
-            name,
-            path: PathBuf::from(path),
-            minecraft_root: PathBuf::from(minecraft_root),
-            minecraft_version: decode(mc),
-            loader: decode(loader),
-            source: InstanceSource::parse(&source)?,
-            created_at,
-            scanned_at,
-        });
+        out.push(assemble(row.map_err(DbError::from)?)?);
     }
     Ok(out)
 }
 
+/// The row with this id, if any.
+///
+/// Queried by id directly, not by filtering [`list`]: `list` decodes *every*
+/// row's `source`, so one hand-edited or corrupt value anywhere in the table
+/// would make this fail. `execute_create` calls it on the rollback path, where
+/// a failure means removing folders and leaving the row behind.
 pub fn get(db: &Db, id: &str) -> Result<Option<InstanceRow>, InstanceRowError> {
-    Ok(list(db)?.into_iter().find(|r| r.id == id))
+    let conn = db.conn();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, path, minecraft_root, minecraft_version, loader, source,
+                    created_at, scanned_at
+             FROM instances
+             WHERE id = ?1",
+        )
+        .map_err(DbError::from)?;
+    let mut rows = stmt.query_map([id], row_to_tuple).map_err(DbError::from)?;
+    match rows.next() {
+        None => Ok(None),
+        Some(row) => Ok(Some(assemble(row.map_err(DbError::from)?)?)),
+    }
+}
+
+/// `list` and `get` must agree on the shape, so both go through these two.
+type RowTuple = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<i64>,
+);
+
+fn row_to_tuple(r: &rusqlite::Row<'_>) -> rusqlite::Result<RowTuple> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+    ))
+}
+
+fn assemble(t: RowTuple) -> Result<InstanceRow, InstanceRowError> {
+    let (id, name, path, minecraft_root, mc, loader, source, created_at, scanned_at) = t;
+    Ok(InstanceRow {
+        id,
+        name,
+        path: PathBuf::from(path),
+        minecraft_root: PathBuf::from(minecraft_root),
+        minecraft_version: decode(mc),
+        loader: decode(loader),
+        source: InstanceSource::parse(&source)?,
+        created_at,
+        scanned_at,
+    })
 }
 
 /// The row registered for this exact stored path, if any.
@@ -435,6 +469,33 @@ mod tests {
             )
             .expect("raw");
         assert_eq!(raw, (UNKNOWN.to_string(), UNKNOWN.to_string()));
+    }
+
+    #[test]
+    fn spec_f102_get_survives_a_corrupt_row_elsewhere_in_the_table() {
+        // A `source` value the CHECK constraint cannot normally admit only gets
+        // in by disabling enforcement. It must still not break `get`, which the
+        // rollback path calls: failing there would remove folders and leave
+        // the row behind.
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        for (id, name) in [("good", "Good"), ("bad", "Bad")] {
+            let p = folder(dir.path(), name);
+            let mut r = row(id, &p, InstanceSource::Managed);
+            r.name = name.to_string();
+            insert(&db, &r).expect("insert");
+        }
+        db.conn()
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE instances SET source = 'linked_modpack' WHERE id = 'bad';",
+            )
+            .expect("corrupt one row");
+
+        assert!(list(&db).is_err(), "list reports the bad value");
+        let got = get(&db, "good").expect("get must not fail").expect("row");
+        assert_eq!(got.id, "good");
+        assert_eq!(got.name, "Good");
     }
 
     #[test]
