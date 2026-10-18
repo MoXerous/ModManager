@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { Shell, type PageId } from './app/Shell';
+import { DownloadsPage } from './app/pages/DownloadsPage';
 import { InstancesPage } from './app/pages/InstancesPage';
 import { PlaceholderPage } from './app/pages/PlaceholderPage';
 import { SettingsPage } from './app/pages/SettingsPage';
@@ -14,6 +15,8 @@ export default function App() {
     <Shell page={page} onNavigate={setPage}>
       {page === 'instances' ? (
         <InstancesPage />
+      ) : page === 'downloads' ? (
+        <DownloadsPage />
       ) : page === 'settings' ? (
         <SettingsPage />
       ) : (

@@ -102,5 +102,7 @@
   "install.phase.cancelled": "Cancelled",
   "install.start": "Install",
   "install.installed": "{{count}} installed",
-  "install.none": "Nothing to install"
+  "install.none": "Nothing to install",
+  "install.target": "Instance folder",
+  "install.slugs": "Mod names (e.g. sodium)"
 }

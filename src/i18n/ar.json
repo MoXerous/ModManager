@@ -102,5 +102,7 @@
   "install.phase.cancelled": "أُلغي",
   "install.start": "تثبيت",
   "install.installed": "مثبَّت {{count}}",
-  "install.none": "لا شيء للتثبيت"
+  "install.none": "لا شيء للتثبيت",
+  "install.target": "مسار المجلد",
+  "install.slugs": "أسماء المودات (مثل sodium)"
 }
