@@ -137,10 +137,6 @@ pub fn execute_create(
     )?;
     let operation_id = record.operation_id.clone();
 
-    // `insert` stores the canonical path, so ownership must be compared against
-    // that spelling and not the raw one, or the check silently misses.
-    let canonical_root = std::fs::canonicalize(&plan.root).unwrap_or_else(|_| plan.root.clone());
-
     // Only directories this call actually created. A folder that already existed
     // is not ours to remove, and this is also what keeps the root safe:
     // `plan_create` permits a pre-existing empty root, and that root is absent
@@ -158,7 +154,7 @@ pub fn execute_create(
         // here. Anything written now would land inside a folder that already
         // belongs to a registered instance, and the insert below would only
         // fail *after* that damage. Refuse first, while the disk is untouched.
-        if let Some(owner) = instances::find_by_path(db, &canonical_root)? {
+        if let Some(owner) = instances::find_by_path(db, &plan.root)? {
             if owner.id != plan.id {
                 return Err(RegistryError::Row(InstanceRowError::DuplicatePath(
                     owner.path,
@@ -219,10 +215,19 @@ pub fn execute_create(
             // are its, not ours: a concurrent create finished here while we
             // ran. Removing them would delete a registered instance's folders
             // and leave its `Completed` record pointing at nothing.
-            let owned_by_other = instances::find_by_path(db, &canonical_root)
-                .ok()
-                .flatten()
-                .is_some_and(|owner| owner.id != plan.id);
+            //
+            // Resolved again here, not reused from above: the folder was absent
+            // when that value was taken, so it could only hold the raw
+            // spelling, which `insert` never stores. By now the folder exists —
+            // we just created it — so this is the first moment the comparison
+            // can actually match.
+            let owned_by_other = instances::find_by_path(db, &plan.root)
+                .map(|owner| owner.is_some_and(|owner| owner.id != plan.id))
+                // Failing closed. This arm deletes directories, so "the query
+                // failed" must never read as "nobody owns this": a locked or
+                // unreadable database would otherwise be enough to remove a
+                // registered instance's folders.
+                .unwrap_or(true);
 
             // `remove_dir`, never `remove_dir_all`: a directory that gained
             // content we did not put there must survive. Only `created` is
@@ -405,9 +410,16 @@ mod tests {
     }
 
     #[test]
-    fn spec_f107_rollback_never_deletes_a_concurrent_instances_folders() {
-        // Two creates race for one root. The second one wins the insert; the
-        // loser must not delete the winner's directories on its way out.
+    fn spec_f107_a_losing_create_never_deletes_the_winners_folders() {
+        // Two creates race for one root; the second one wins the insert.
+        //
+        // Which guard protects the winner depends on timing, and this test does
+        // not claim the one inside the rollback. The winner has already created
+        // the root, so the loser's pre-flight check fires first and the
+        // rollback block is never entered. The `owned_by_other` guard below it
+        // is reachable only across processes, where the loser passes pre-flight
+        // before the winner registers — a window no single-threaded test opens.
+        // What this pins is the invariant that holds either way.
         let dir = crate::test_tempdir();
         let d = db(dir.path());
         let (j, _jh) = jrnl(dir.path());

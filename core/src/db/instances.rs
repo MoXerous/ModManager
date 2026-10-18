@@ -196,33 +196,35 @@ fn assemble(t: RowTuple) -> Result<InstanceRow, InstanceRowError> {
     })
 }
 
-/// The row registered for this exact stored path, if any.
+/// The row registered for this exact folder, if any.
 ///
 /// A direct query rather than a scan of `list`, for two reasons: `list` decodes
 /// *every* row's `source`, so one hand-edited value would make it fail and
 /// take this with it; and this is called on the rollback path, where guessing
 /// wrong means deleting a folder another instance owns.
+///
+/// The argument is normalised the same way [`insert`] stores it. Comparing the
+/// caller's own spelling instead would answer "nobody owns this folder" for a
+/// folder that is registered — on Windows `canonicalize` adds the `\\?\`
+/// verbatim prefix, so the two spellings differ in the common case.
+///
+/// A path that cannot be normalised is queried as given. That is sound rather
+/// than merely a best effort: `insert` refuses a path that does not exist, so
+/// no row can point at one.
 pub fn find_by_path(db: &Db, path: &Path) -> Result<Option<InstanceRow>, InstanceRowError> {
-    let stored: Option<String> = db
-        .conn()
-        .query_row(
-            "SELECT path FROM instances WHERE path = ?1",
-            [path.to_string_lossy().as_ref()],
-            |r| r.get(0),
-        )
-        .ok();
-    let Some(stored) = stored else {
-        return Ok(None);
-    };
-    let id: String = db
+    let stored_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let id: Option<String> = db
         .conn()
         .query_row(
             "SELECT id FROM instances WHERE path = ?1",
-            [stored.as_str()],
+            [stored_path.to_string_lossy().as_ref()],
             |r| r.get(0),
         )
-        .map_err(DbError::from)?;
-    Ok(list(db)?.into_iter().find(|r| r.id == id))
+        .ok();
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    get(db, &id)
 }
 
 /// Inserts a row, resolving `path` first so that two spellings of one folder
@@ -496,6 +498,29 @@ mod tests {
         let got = get(&db, "good").expect("get must not fail").expect("row");
         assert_eq!(got.id, "good");
         assert_eq!(got.name, "Good");
+    }
+
+    #[test]
+    fn spec_f102_find_by_path_matches_the_spelling_insert_stores() {
+        // `insert` stores `std::fs::canonicalize(..)`, which on Windows carries
+        // the `\\?\` verbatim prefix. `execute_create` asks about a path that
+        // does not exist yet — `plan_create` permits an absent root — so it can
+        // only offer the spelling it was handed. If the query does not
+        // normalise its own argument, the two never meet and the caller is told
+        // nobody owns the folder when somebody does.
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        let p = folder(dir.path(), "Plain");
+        insert(&db, &row("i1", &p, InstanceSource::Managed)).expect("insert");
+
+        let raw = dir.path().join("Plain");
+        assert!(
+            !raw.to_string_lossy().starts_with("\\\\?\\"),
+            "premise: the caller holds no verbatim prefix, got {:?}",
+            raw.to_string_lossy()
+        );
+        let found = find_by_path(&db, &raw).expect("query");
+        assert!(found.is_some(), "the caller's own spelling missed the row");
     }
 
     #[test]

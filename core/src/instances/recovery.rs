@@ -206,7 +206,21 @@ pub fn finish(
 /// may have put it there.
 pub fn abandon(journal: &Journal, operation_id: &str) -> Result<usize, RegistryError> {
     let record = journal.read(operation_id).map_err(RegistryError::Journal)?;
-    let removed = remove_empty_children(PathBuf::from(&record.target_path).as_path())?;
+    let root = PathBuf::from(&record.target_path);
+    let removed = remove_empty_children(root.as_path())?;
+
+    // The mirror goes too, and only when it is *ours*. Leaving it behind is
+    // not untidy: `plan_create` refuses any folder holding a profile.json, so
+    // the user could never create an instance there again and nothing would
+    // ever say why. The id check means a profile.json that is not this
+    // operation's — the user's own, or another instance's — is left alone.
+    let mirror = metadata::mirror_path(&root);
+    if metadata::read_mirror(&mirror).is_ok_and(|m| m.id == record.profile_id) {
+        // A mirror we wrote is stale the moment we abandon the create; leaving
+        // it would claim an instance that does not exist.
+        std::fs::remove_file(&mirror).map_err(RegistryError::Io)?;
+    }
+
     journal
         .transition_operation(operation_id, OperationState::Failed, None)
         .map_err(RegistryError::Journal)?;
@@ -251,15 +265,39 @@ pub fn finish_create(
             ),
         ));
     }
+    // The mirror is a file the user can edit between the crash and this call,
+    // so only `id` and `instance_root` may come from it. `name` is checked
+    // with the same rule `plan_create` applies — otherwise recovery is the one
+    // path that registers a name the preview would have refused.
+    crate::safety::path::safe_member_name(&meta.name).map_err(|e| {
+        RegistryError::Row(instances::InstanceRowError::InvalidSource(format!(
+            "profile.json name is not a safe member name: {e:?}"
+        )))
+    })?;
+
+    // `minecraft_root` is taken from that same file. `insert` will happily
+    // canonicalize any folder on the machine, so without this the row can
+    // claim `C:\Windows` as this instance's Minecraft directory.
+    let declared = PathBuf::from(&meta.minecraft_root);
+    if !declared.starts_with(&root) {
+        return Err(RegistryError::Row(
+            instances::InstanceRowError::InvalidSource(
+                "profile.json minecraft_root is outside the instance".to_string(),
+            ),
+        ));
+    }
+
     let row = InstanceRow {
         id: record.profile_id.clone(),
         name: meta.name.clone(),
         path: root,
-        minecraft_root: PathBuf::from(&meta.minecraft_root),
+        minecraft_root: declared,
         minecraft_version: meta.minecraft_version.clone(),
         loader: meta.loader.clone(),
         source: instances::InstanceSource::Managed,
-        created_at: meta.created_at,
+        // From the journal, not from the file. The file is editable; the
+        // record is ours.
+        created_at: record.created_at,
         scanned_at: None,
     };
     instances::insert(db, &row)?;
@@ -516,6 +554,130 @@ mod tests {
                 .collect();
             assert!(missing.is_empty(), "{locale} is missing {missing:?}");
         }
+    }
+
+    #[test]
+    fn spec_f146_finish_refuses_a_mirror_whose_fields_the_user_edited() {
+        // The mirror is a file on disk between the crash and the recovery, so
+        // anything in it may have been edited. Only `id` and `instance_root`
+        // may come from it.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+
+        for (what, tamper) in [
+            (
+                "a name the preview would have refused",
+                Box::new(|m: &mut metadata::ProfileMetadata| m.name = "CON".into())
+                    as Box<dyn Fn(&mut metadata::ProfileMetadata)>,
+            ),
+            (
+                "a minecraft_root outside the instance",
+                Box::new(|m: &mut metadata::ProfileMetadata| {
+                    m.minecraft_root = dir.path().to_string_lossy().into_owned()
+                }),
+            ),
+        ] {
+            let root = dir.path().join(format!("T{}", what.len()));
+            std::fs::create_dir_all(&root).expect("mkdir");
+            let row = InstanceRow {
+                id: "i1".into(),
+                name: "Survival".into(),
+                path: root.clone(),
+                minecraft_root: root.clone(),
+                minecraft_version: None,
+                loader: None,
+                source: InstanceSource::Managed,
+                created_at: 5,
+                scanned_at: None,
+            };
+            let mut meta = metadata::mirror_of(&row);
+            tamper(&mut meta);
+            metadata::write_mirror(&root, &meta).expect("mirror");
+            let rec = j
+                .start(
+                    OperationKind::InstanceCreate,
+                    "i1",
+                    &root.to_string_lossy(),
+                    vec![],
+                )
+                .expect("start");
+
+            assert!(
+                finish_create(&d, &j.read(&rec.operation_id).expect("read")).is_err(),
+                "{what} was accepted"
+            );
+            assert!(
+                instances::list(&d).expect("list").is_empty(),
+                "{what} registered a row"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_f146_abandoning_removes_our_own_mirror_so_the_folder_stays_usable() {
+        // Leaving the mirror behind is not untidy: `plan_create` refuses any
+        // folder holding a profile.json, so the user could never create an
+        // instance there again and nothing would ever say why.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("Survival");
+
+        let c = crash_after_dirs(&d, &j, &root, "i1");
+        let row = InstanceRow {
+            id: "i1".into(),
+            name: "Survival".into(),
+            path: root.clone(),
+            minecraft_root: PathBuf::new(),
+            minecraft_version: None,
+            loader: None,
+            source: InstanceSource::Managed,
+            created_at: 5,
+            scanned_at: None,
+        };
+        metadata::write_mirror(&root, &metadata::mirror_of(&row)).expect("mirror");
+
+        abandon(&j, &c.operation_id).expect("abandon");
+        assert!(
+            !metadata::mirror_path(&root).exists(),
+            "our mirror survives and bricks the folder"
+        );
+        // And the folder is genuinely reusable again, which is the whole point.
+        assert!(
+            registry::plan_create(&root, "Again", None, None, 9).is_ok(),
+            "the folder is still refused after an abandon"
+        );
+    }
+
+    #[test]
+    fn spec_f146_abandoning_leaves_a_mirror_that_is_not_ours_alone() {
+        // The id check is what makes deleting the mirror safe: a profile.json
+        // belonging to something else is the user's file, not our residue.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("SomeoneElses");
+
+        let c = crash_after_dirs(&d, &j, &root, "i1");
+        let other = InstanceRow {
+            id: "not-our-operation".into(),
+            name: "SomeoneElses".into(),
+            path: root.clone(),
+            minecraft_root: PathBuf::new(),
+            minecraft_version: None,
+            loader: None,
+            source: InstanceSource::Managed,
+            created_at: 5,
+            scanned_at: None,
+        };
+        metadata::write_mirror(&root, &metadata::mirror_of(&other)).expect("mirror");
+
+        abandon(&j, &c.operation_id).expect("abandon");
+        assert!(
+            metadata::mirror_path(&root).is_file(),
+            "deleted a mirror that is not ours"
+        );
     }
 
     #[test]
