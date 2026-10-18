@@ -165,6 +165,7 @@ pub async fn update(
             version_id: r.version_id.clone(),
             filename: landed,
             sha1: r.sha1.clone().unwrap_or_default(),
+            sha512: r.sha512.clone().unwrap_or_default(),
         });
     }
     let path = lock_path(ctx)?;

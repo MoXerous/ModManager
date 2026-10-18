@@ -96,6 +96,7 @@ pub async fn install(
             version_id: version.id.clone(),
             filename: landed,
             sha1: file.sha1.clone().unwrap_or_default(),
+            sha512: file.sha512.clone().unwrap_or_default(),
         });
     }
     // Lock last: crash before this leaves jars without claims, never the

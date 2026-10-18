@@ -18,6 +18,15 @@ pub struct LockEntry {
     pub filename: String,
     #[serde(default)]
     pub sha1: String,
+    /// Recorded alongside `sha1` because that is the only durable record of
+    /// what was installed: the download verified both, but a later audit or a
+    /// re-verify can only use what is written down. SHA-1 is collision-broken,
+    /// which is exactly the property a mod channel must not rely on.
+    ///
+    /// `default` keeps locks written before this field readable — an absent
+    /// value reads as empty, which every consumer already handles for `sha1`.
+    #[serde(default)]
+    pub sha512: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
