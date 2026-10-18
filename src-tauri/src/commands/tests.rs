@@ -277,3 +277,26 @@ fn dto_camel_case_shape_is_stable() {
     assert!(json.get("dependencyType").is_some());
     assert!(json.get("project_id").is_none());
 }
+
+#[test]
+fn spec_f065_a_folder_that_is_not_there_holds_no_installed_mods() {
+    // It is an answer, not a failure. `existing_filenames` used canonicalize
+    // and returned io error, which made installing into an instance whose
+    // folder is not created yet impossible, and made a preview of a fresh
+    // folder refuse to look at all.
+    let dir = std::env::temp_dir().join(format!("mm-existing-{}", std::process::id()));
+    let missing = dir.join("not-created-yet");
+    assert!(!missing.exists(), "premise: the folder does not exist");
+
+    let got = super::existing_filenames(Some(missing.to_string_lossy().into_owned()))
+        .expect("a missing folder is not an error");
+    assert!(got.is_empty(), "nothing installed yet means an empty set");
+
+    // And a real folder still reports what is in it.
+    let real = dir.join("real");
+    std::fs::create_dir_all(real.join("mods")).expect("mkdir");
+    std::fs::write(real.join("mods").join("a.jar"), b"x").expect("write");
+    let got = super::existing_filenames(Some(real.to_string_lossy().into_owned())).expect("real");
+    assert!(got.contains("a.jar"), "the file must be reported");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -340,11 +340,18 @@ fn file_name(p: &std::path::Path) -> String {
 /// Filenames already present in the instance mods dir (F-065 info warning).
 fn existing_filenames(instance_root: Option<String>) -> Result<HashSet<String>, IpcError> {
     let root = match instance_root {
-        Some(r) => resolve_dir(&r)?,
+        Some(r) => r.trim().to_string(),
         None => return Ok(HashSet::new()),
     };
+    // A folder that is not there holds no installed mods. That is an answer,
+    // not a failure: `execute_install` decides separately whether the instance
+    // itself must exist, and a preview of a fresh folder should say "nothing
+    // installed yet" rather than refuse to look.
+    let Ok(canon) = std::fs::canonicalize(&root) else {
+        return Ok(HashSet::new());
+    };
     let mut out = HashSet::new();
-    if let Ok(rd) = std::fs::read_dir(root.join("mods")) {
+    if let Ok(rd) = std::fs::read_dir(canon.join("mods")) {
         for e in rd.flatten() {
             if let Some(n) = e.file_name().to_str() {
                 out.insert(n.to_string());
@@ -610,6 +617,15 @@ pub async fn execute_install(
     }
 
     let target = root.join("mods");
+    // An install targets an instance that already exists. `create_dir_all`
+    // below would happily create the root as a side effect, leaving a folder
+    // no row claims and no recovery knows about — the same unregistered
+    // directory `execute_create_instance` exists to prevent.
+    if !root.is_dir() {
+        return Err(IpcError::invalid_input(
+            "the instance folder does not exist",
+        ));
+    }
     std::fs::create_dir_all(&target).map_err(IpcError::io)?;
     let downloader = Downloader::new(3).map_err(|e| IpcError::internal(e.to_string()))?;
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
