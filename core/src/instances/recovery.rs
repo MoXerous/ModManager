@@ -129,6 +129,43 @@ pub fn pending_creates(db: &crate::db::Db, journal: &Journal) -> Vec<CreateRecov
         .collect()
 }
 
+/// Moves a record that needs no user choice into the terminal state its
+/// assessment already implies. Returns whether anything was settled.
+///
+/// `Leave` means "do nothing", and for two of its three reasons nothing does
+/// need doing — yet the record stays `Planned`/`Running`, and
+/// `discover().unfinished()` is exactly what re-offers it. So without this,
+/// every crashed create is presented again on every launch, forever.
+///
+/// `AlreadyRegistered` settles as `Completed` and `NothingWritten` as
+/// `Failed`. Both are only reachable from `Running`, which is the sole state
+/// the insert path can be in, so the state machine accepts the move; if that
+/// ever stops holding, `transition_operation` rejects it rather than silently
+/// settling a record wrongly.
+///
+/// shortcut: this trusts the on-disk and database inspection rather than
+/// holding an exclusive lock on the journal, so a second running instance
+/// could in principle settle a record that its own process is mid-create.
+/// Guard with a journal lock when concurrent app instances are possible.
+pub fn settle_create(
+    journal: &Journal,
+    record: &OperationRecord,
+    reason: RecoveryReason,
+) -> Result<bool, crate::journal::JournalError> {
+    let to = match reason {
+        // The instance is registered: the create did finish, and only the
+        // record lagged behind. Failed would be a lie the user would read.
+        RecoveryReason::AlreadyRegistered => OperationState::Completed,
+        // The folder was never created, so there is nothing to finish, to
+        // clean up, or to choose between.
+        RecoveryReason::NothingWritten => OperationState::Failed,
+        // Already terminal, not a create, or a genuine choice for the user.
+        _ => return Ok(false),
+    };
+    journal.transition_operation(&record.operation_id, to, None)?;
+    Ok(true)
+}
+
 /// Removes the standard subdirectories that are still empty. Never the root,
 /// never `remove_dir_all`.
 pub fn remove_empty_children(root: &std::path::Path) -> Result<usize, RegistryError> {
@@ -390,6 +427,116 @@ mod tests {
         let assessment = assess_create(&d, &record);
         assert_eq!(assessment.reason, RecoveryReason::NotApplicable);
         assert!(pending_creates(&d, &j).is_empty(), "not listed as pending");
+    }
+
+    #[test]
+    fn spec_f146_recovery_converges_so_a_crash_is_not_offered_forever() {
+        // The defect this pins: nothing ever terminated a create record, and
+        // `discover().unfinished()` re-offers exactly those. So every crashed
+        // create came back on every launch, for as long as the record lived.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+
+        // Two crashes that need no choice: one whose instance is already
+        // registered, one that died before creating anything.
+        let done_root = dir.path().join("Done");
+        let lost_root = dir.path().join("Lost");
+
+        let finished = j
+            .start(
+                OperationKind::InstanceCreate,
+                "done",
+                &done_root.to_string_lossy(),
+                vec![],
+            )
+            .expect("start")
+            .operation_id;
+        j.transition_operation(&finished, OperationState::Running, None)
+            .expect("running");
+        std::fs::create_dir_all(&done_root).expect("mkdir");
+        instances::insert(
+            &d,
+            &InstanceRow {
+                id: "done".into(),
+                name: "Done".into(),
+                path: std::fs::canonicalize(dir.path())
+                    .expect("canon")
+                    .join("Done"),
+                minecraft_root: PathBuf::new(),
+                minecraft_version: None,
+                loader: None,
+                source: InstanceSource::Managed,
+                created_at: 1,
+                scanned_at: None,
+            },
+        )
+        .expect("insert");
+
+        let lost = j
+            .start(
+                OperationKind::InstanceCreate,
+                "lost",
+                &lost_root.to_string_lossy(),
+                vec![],
+            )
+            .expect("start")
+            .operation_id;
+        j.transition_operation(&lost, OperationState::Running, None)
+            .expect("running");
+
+        // Launch one: both are assessed, and both are settled.
+        let first = pending_creates(&d, &j);
+        assert_eq!(first.len(), 2, "both crashes are found");
+        for c in &first {
+            assert_eq!(c.action, RecoveryAction::Leave, "nothing to choose");
+            assert!(
+                settle_create(&j, &j.read(&c.operation_id).expect("read"), c.reason)
+                    .expect("settle"),
+                "{:?} is settleable",
+                c.reason
+            );
+        }
+
+        // Launch two, and every launch after it: nothing is offered again.
+        // This is the whole claim — one pass is not convergence, the second
+        // empty pass is.
+        assert!(
+            pending_creates(&d, &j).is_empty(),
+            "settled records are still being offered"
+        );
+        assert_eq!(
+            j.read(&finished).expect("read").state,
+            OperationState::Completed,
+            "a registered instance is not a failure"
+        );
+        assert_eq!(
+            j.read(&lost).expect("read").state,
+            OperationState::Failed,
+            "nothing was created, so nothing succeeded"
+        );
+    }
+
+    #[test]
+    fn spec_f146_settling_never_touches_a_record_that_needs_a_choice() {
+        // The mirror is valid, so the user must be offered Finish. Settling
+        // must leave it pending, or recovery would swallow a real decision.
+        let dir = crate::test_tempdir();
+        let d = db(dir.path());
+        let (j, _holder) = journal_in(dir.path());
+        let root = dir.path().join("Survival");
+
+        let assessment = crash_after_dirs(&d, &j, &root, "i1");
+        assert_eq!(assessment.action, RecoveryAction::RemoveEmptyChildren);
+
+        let record = j.read(&assessment.operation_id).expect("read");
+        assert!(!settle_create(&j, &record, assessment.reason).expect("settle"));
+        assert_eq!(
+            j.read(&assessment.operation_id).expect("read").state,
+            OperationState::Running,
+            "still pending"
+        );
+        assert_eq!(pending_creates(&d, &j).len(), 1, "still offered");
     }
 
     #[test]
