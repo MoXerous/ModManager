@@ -149,8 +149,26 @@ pub fn finish_create(
 ) -> Result<InstanceRow, RegistryError> {
     let root = PathBuf::from(&record.target_path);
     let meta = metadata::read_mirror(&metadata::mirror_path(&root))?;
+    // The mirror is a file on disk that the user can edit between the crash
+    // and this call. Refuse to finish under an identity the record never
+    // asked for, rather than registering a row the user did not confirm.
+    if meta.id != record.profile_id {
+        return Err(RegistryError::Row(
+            instances::InstanceRowError::InvalidSource(format!(
+                "profile.json id {:?} does not match the operation {:?}",
+                meta.id, record.profile_id
+            )),
+        ));
+    }
+    if std::path::Path::new(&meta.instance_root) != root.as_path() {
+        return Err(RegistryError::Row(
+            instances::InstanceRowError::InvalidSource(
+                "profile.json instance_root does not match the operation target".to_string(),
+            ),
+        ));
+    }
     let row = InstanceRow {
-        id: meta.id.clone(),
+        id: record.profile_id.clone(),
         name: meta.name.clone(),
         path: root,
         minecraft_root: PathBuf::from(&meta.minecraft_root),

@@ -206,13 +206,17 @@ pub fn execute_create(
                     undone += 1;
                 }
             }
-            // Failed only after the folders are actually gone, so a crash
-            // during rollback leaves the record Running for recovery to see.
-            let _ = journal.transition_operation(
-                &operation_id,
-                crate::journal::OperationState::Failed,
-                None,
-            );
+            // Only a *clean* rollback may reach a terminal state. If a
+            // directory survived — it gained content, or the OS refused — the
+            // record stays Running on purpose: `unfinished()` is exactly what
+            // surfaces it, and a Failed record would hide the residue forever.
+            if undone == created.len() {
+                let _ = journal.transition_operation(
+                    &operation_id,
+                    crate::journal::OperationState::Failed,
+                    None,
+                );
+            }
             Err(RegistryError::RolledBack(undone, err.to_string()))
         }
     }
