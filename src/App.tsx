@@ -1,17 +1,20 @@
 import { useState } from 'react';
 
 import { Shell, type PageId } from './app/Shell';
+import { InstancesPage } from './app/pages/InstancesPage';
 import { PlaceholderPage } from './app/pages/PlaceholderPage';
 import { SettingsPage } from './app/pages/SettingsPage';
 
 // shortcut: navigation is component state until the screens have real routes to
-// link to; Wouter comes in 5c, when deep links and the command palette exist.
+// link to; Wouter comes with the screens that carry state in the URL.
 export default function App() {
   const [page, setPage] = useState<PageId>('instances');
 
   return (
     <Shell page={page} onNavigate={setPage}>
-      {page === 'settings' ? (
+      {page === 'instances' ? (
+        <InstancesPage />
+      ) : page === 'settings' ? (
         <SettingsPage />
       ) : (
         <PlaceholderPage
