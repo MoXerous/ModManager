@@ -109,5 +109,6 @@
   "browse.searchPlaceholder": "Search Modrinth",
   "browse.actionSearch": "Search",
   "browse.results": "{{count}} results",
-  "browse.downloads": "{{count}} downloads"
+  "browse.downloads": "{{count}} downloads",
+  "browse.target": "Install into"
 }

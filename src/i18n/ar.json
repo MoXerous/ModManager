@@ -109,5 +109,6 @@
   "browse.searchPlaceholder": "ابحث في Modrinth",
   "browse.actionSearch": "بحث",
   "browse.results": "{{count}} نتيجة",
-  "browse.downloads": "{{count}} تنزيل"
+  "browse.downloads": "{{count}} تنزيل",
+  "browse.target": "التثبيت في"
 }
