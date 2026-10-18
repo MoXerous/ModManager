@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { Shell, type PageId } from './app/Shell';
+import { BrowsePage } from './app/pages/BrowsePage';
 import { DownloadsPage } from './app/pages/DownloadsPage';
 import { InstancesPage } from './app/pages/InstancesPage';
 import { PlaceholderPage } from './app/pages/PlaceholderPage';
@@ -15,6 +16,8 @@ export default function App() {
     <Shell page={page} onNavigate={setPage}>
       {page === 'instances' ? (
         <InstancesPage />
+      ) : page === 'browse' ? (
+        <BrowsePage onInstalled={() => setPage('downloads')} />
       ) : page === 'downloads' ? (
         <DownloadsPage />
       ) : page === 'settings' ? (

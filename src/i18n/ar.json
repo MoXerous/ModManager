@@ -105,5 +105,9 @@
   "install.none": "لا شيء للتثبيت",
   "install.target": "مسار المجلد",
   "install.slugs": "أسماء المودات (مثل sodium)",
-  "install.count": "{{count}} في الطابور"
+  "install.count": "{{count}} في الطابور",
+  "browse.searchPlaceholder": "ابحث في Modrinth",
+  "browse.actionSearch": "بحث",
+  "browse.results": "{{count}} نتيجة",
+  "browse.downloads": "{{count}} تنزيل"
 }

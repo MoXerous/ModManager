@@ -105,5 +105,9 @@
   "install.none": "Nothing to install",
   "install.target": "Instance folder",
   "install.slugs": "Mod names (e.g. sodium)",
-  "install.count": "{{count}} in the queue"
+  "install.count": "{{count}} in the queue",
+  "browse.searchPlaceholder": "Search Modrinth",
+  "browse.actionSearch": "Search",
+  "browse.results": "{{count}} results",
+  "browse.downloads": "{{count}} downloads"
 }
