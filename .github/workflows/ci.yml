@@ -95,7 +95,12 @@ jobs:
             $url = "https://api.modrinth.com/v2/project/$slug/version?game_versions=%5B%221.21.1%22%5D&loaders=%5B%22fabric%22%5D"
             $entry = $lock.entries | Where-Object { $_.slug -eq $slug }
             $remote = (Invoke-RestMethod $url) | Where-Object { $_.id -eq $entry.version_id }
+            # Guarded rather than assumed: an empty or renamed response must
+            # fail here, not leave `$published` null for a comparison that would
+            # then grade nothing.
+            if ($null -eq $remote) { throw "$slug: version $($entry.version_id) not returned by Modrinth" }
             $published = $remote.files | Where-Object { $_.filename -eq $entry.filename }
+            if ($null -eq $published) { throw "$slug: file $($entry.filename) not in that version" }
             $jar = Join-Path $dir "mods/$($entry.filename)"
             if (-not (Test-Path $jar)) { throw "$slug was locked but never written" }
 

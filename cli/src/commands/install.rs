@@ -7,7 +7,7 @@ use super::{
     allow_insecure, client, confirm, instance_dir, io_err, lock_path, mods_dir, print_plan,
     resolve_slugs, CliError, Ctx,
 };
-use mm_core::downloader::{DownloadRequest, Downloader};
+use mm_core::downloader::{DownloadRequest, DownloadStatus, Downloader};
 use mm_core::instances::{read_lock, write_lock, LockEntry, LockFile};
 use mm_core::resolver::primary_file;
 use std::collections::HashSet;
@@ -75,7 +75,17 @@ pub async fn install(
             .and_then(|n| n.to_str())
             .unwrap_or(&file.filename)
             .to_string();
-        println!("downloaded {landed}");
+        // The status is the downloader's, not an assumption. `download` skips a
+        // file already on disk whose hash matches, and printing "downloaded"
+        // for a file nothing touched told the user a transfer happened that did
+        // not — the CLI form of an error the caller cannot see.
+        println!(
+            "{} {landed}",
+            match outcome.status {
+                DownloadStatus::Skipped => "already present:",
+                _ => "downloaded",
+            }
+        );
         let slug = data
             .selected
             .iter()
