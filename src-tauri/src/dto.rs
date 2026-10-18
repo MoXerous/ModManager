@@ -343,9 +343,12 @@ impl From<ToggleActionDto> for mm_core::instances::toggle::ToggleAction {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewToggleDto {
-    pub mods_dir: String,
+    /// The instance folder. The `mods` subfolder is derived here, not in the
+    /// webview: the UI never assembles a filesystem path (`AGENTS.md` §5.2),
+    /// and a separator guess would be wrong on one of the two platforms.
+    pub instance_root: String,
     pub action: ToggleActionDto,
-    /// Filenames inside `mods_dir`, not absolute paths.
+    /// Filenames inside `<instance_root>/mods`, not absolute paths.
     pub files: Vec<String>,
 }
 

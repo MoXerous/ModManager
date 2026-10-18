@@ -2,7 +2,7 @@
 //! مسارات الملفات من الـwebview إدخال غير موثوق: تُحلَّل وتُتحقَّق قبل أي I/O.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::dto::{
     AppInfo, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto, ErrorCode,
@@ -245,8 +245,8 @@ pub async fn scan_instance(instance_root: String) -> Result<InstanceSnapshotDto,
 
 #[tauri::command]
 pub async fn preview_toggle(req: PreviewToggleDto) -> Result<TogglePlanDto, IpcError> {
-    let mods_dir = resolve_dir(&req.mods_dir)?;
-    let files = filenames(&req.files);
+    let mods_dir = resolve_dir(&req.instance_root)?.join("mods");
+    let files = filenames(&mods_dir, &req.files);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::toggle::preview_toggle;
         let plan = preview_toggle(&mods_dir, req.action.into(), &files);
@@ -271,8 +271,8 @@ pub async fn preview_toggle(req: PreviewToggleDto) -> Result<TogglePlanDto, IpcE
 /// same inputs — a plan body from the webview is never trusted.
 #[tauri::command]
 pub async fn execute_toggle(req: PreviewToggleDto) -> Result<Vec<ToggleResultDto>, IpcError> {
-    let mods_dir = resolve_dir(&req.mods_dir)?;
-    let files = filenames(&req.files);
+    let mods_dir = resolve_dir(&req.instance_root)?.join("mods");
+    let files = filenames(&mods_dir, &req.files);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::toggle::{execute_toggle, preview_toggle};
         let action = req.action.into();
@@ -310,10 +310,17 @@ fn resolve_dir(raw: &str) -> Result<PathBuf, IpcError> {
     Ok(canon)
 }
 
-/// Filenames only: a traversing, nested, or blank name is dropped here, and
-/// core re-checks containment under `mods_dir` anyway. The check is on the
-/// **raw** string: `file_name()` alone would hide `../escape.jar`.
-fn filenames(raw: &[String]) -> Vec<PathBuf> {
+/// Resolves the webview's bare filenames under `mods_dir`.
+///
+/// The DTO documents these as names inside the folder, and that is the only
+/// shape that can work: `preview_one` needs a real existing file that
+/// canonicalizes inside `mods_dir`, and it rejected the absolute paths this
+/// helper used to emit just as surely. The name checks stay — a blank name, a
+/// separator, a drive letter or `..` is dropped — and they are on the **raw**
+/// string, because `file_name()` alone would hide `../escape.jar`. Core
+/// re-checks containment afterwards, so this is the first of two gates, not
+/// the only one.
+fn filenames(mods_dir: &Path, raw: &[String]) -> Vec<PathBuf> {
     raw.iter()
         .filter_map(|s| {
             let trimmed = s.trim();
@@ -325,7 +332,7 @@ fn filenames(raw: &[String]) -> Vec<PathBuf> {
             {
                 return None;
             }
-            Some(PathBuf::from(trimmed))
+            Some(mods_dir.join(trimmed))
         })
         .collect()
 }

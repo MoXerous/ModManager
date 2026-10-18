@@ -215,9 +215,13 @@ fn untrusted_paths_are_filtered_before_core() {
         "..".to_string(),
         "  ".to_string(),
     ];
-    let kept = filenames(&raw);
+    let mods = Path::new("M").join("mods");
+    let kept = filenames(&mods, &raw);
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].file_name().expect("n").to_string_lossy(), "ok.jar");
+    // Filtered, and still *inside* the folder rather than resolved against
+    // the process cwd — the join is what makes a surviving name addressable.
+    assert_eq!(kept[0], mods.join("ok.jar"));
 }
 
 #[test]
@@ -299,4 +303,48 @@ fn spec_f065_a_folder_that_is_not_there_holds_no_installed_mods() {
     let got = super::existing_filenames(Some(real.to_string_lossy().into_owned())).expect("real");
     assert!(got.contains("a.jar"), "the file must be reported");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The toggle buttons are the first thing in this app whose whole value is
+/// that they change files. The webview can only send bare names — the scan
+/// reports filenames only, and absolute paths are refused at the door — so
+/// those names must resolve under `<root>/mods`. When they did not, the plan
+/// came back empty and `execute_toggle` renamed nothing, silently, behind a
+/// button that looked like it worked.
+#[test]
+fn spec_f065_bare_filenames_resolve_to_real_files_in_the_mods_folder() {
+    use mm_core::instances::toggle::{preview_toggle, ToggleAction};
+
+    let root = std::env::temp_dir().join(format!("mm-toggle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mods = root.join("mods");
+    std::fs::create_dir_all(&mods).expect("mkdir");
+    std::fs::write(mods.join("a.jar"), b"x").expect("write");
+
+    let names = vec![
+        "a.jar".to_string(),
+        "../escape.jar".to_string(),
+        "..\\escape.jar".to_string(),
+        "C:\\abs.jar".to_string(),
+        "   ".to_string(),
+    ];
+    let files = super::filenames(&mods, &names);
+
+    assert_eq!(files.len(), 1, "only the plain name survives: {files:?}");
+    assert!(
+        files[0].is_file(),
+        "the survivor must be an existing file, not a bare name resolved \
+         against the process cwd: {:?}",
+        files[0]
+    );
+
+    let plan = preview_toggle(&mods, ToggleAction::Disable, &files);
+    assert_eq!(plan.entries.len(), 1);
+    assert!(
+        plan.entries[0].allowed,
+        "core must agree it may touch it, said: {}",
+        plan.entries[0].reason
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }

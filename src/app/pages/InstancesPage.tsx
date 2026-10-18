@@ -8,6 +8,7 @@ import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
 import { RecoveryBanner } from './RecoveryBanner';
+import { InstanceDetails } from './InstanceDetails';
 import { listInstances, openInstanceFolder, toIpcError } from '../../lib/ipc';
 import { formatRelativeTime } from '../../lib/format';
 
@@ -58,13 +59,16 @@ function Card({
   locale,
   unknownLabel,
   onError,
+  onChanged,
 }: {
   row: InstanceSummaryDto;
   locale: string;
   unknownLabel: string;
   onError: (e: IpcError) => void;
+  onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
   const initial = row.name.trim().charAt(0).toUpperCase() || '?';
 
   return (
@@ -105,7 +109,21 @@ function Card({
         >
           {t('page.instances.action.openFolder')}
         </button>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          disabled={row.pathMissing}
+          aria-expanded={open}
+          className="inline-flex h-8 items-center gap-1.5 rounded-control border border-border bg-card px-3 font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {open ? t('details.actionHide') : t('details.actionShow')}
+        </button>
       </div>
+
+      {/* Expansion, not a page: the content belongs to the card it came from,
+          and a fourth nav entry for one folder's jar list would be a lie about
+          what the app is. The scan only happens once the user asks for it. */}
+      {open && <InstanceDetails root={row.path} onChanged={onChanged} />}
     </article>
   );
 }
@@ -227,6 +245,7 @@ export function InstancesPage() {
                   locale={i18n.language}
                   unknownLabel={t('page.instances.unknown')}
                   onError={setError}
+                  onChanged={load}
                 />
               ))}
             </div>

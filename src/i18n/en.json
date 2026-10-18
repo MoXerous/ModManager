@@ -110,5 +110,14 @@
   "browse.actionSearch": "Search",
   "browse.results": "{{count}} results",
   "browse.downloads": "{{count}} downloads",
-  "browse.target": "Install into"
+  "browse.target": "Install into",
+  "details.installedContent": "Installed content",
+  "details.count": "{{count}} files",
+  "details.empty": "No files in this folder.",
+  "details.actionEnable": "Enable all",
+  "details.actionDisable": "Disable all",
+  "details.actionApply": "Apply",
+  "details.plan": "{{shown}} will change, {{hidden}} will be left alone.",
+  "details.actionHide": "Hide",
+  "details.actionShow": "Content"
 }

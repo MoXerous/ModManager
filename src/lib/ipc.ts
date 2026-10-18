@@ -28,10 +28,10 @@ export interface SearchQuery {
 }
 
 export interface PreviewToggleRequest {
-  /** مجلد mods. */
-  modsDir: string;
+  /** جذر النسخة، لا مجلد mods مباشرة. */
+  instanceRoot: string;
   action: 'disable' | 'enable';
-  /** أسماء ملفات داخل modsDir (لا مسارات مطلقة). */
+  /** أسماء ملفات داخل mods، يُحلّها Rust تحت <instanceRoot>/mods. المسارات المطلقة تُرفض هنا. */
   files: string[];
 }
 
@@ -74,7 +74,7 @@ export function scanInstance(instanceRoot: string): Promise<InstanceSnapshotDto>
 export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto> {
   return invoke<TogglePlanDto>('preview_toggle', {
     req: {
-      modsDir: req.modsDir,
+      instanceRoot: req.instanceRoot,
       action: req.action,
       files: req.files,
     },
@@ -85,7 +85,7 @@ export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto>
 export function executeToggle(req: PreviewToggleRequest): Promise<ToggleResultDto[]> {
   return invoke<ToggleResultDto[]>('execute_toggle', {
     req: {
-      modsDir: req.modsDir,
+      instanceRoot: req.instanceRoot,
       action: req.action,
       files: req.files,
     },
