@@ -9,6 +9,7 @@
  * so a theme switch is one class on <html> and utilities never change.
  */
 @import "tailwindcss";
+@import "tw-animate-css";
 @import "./tokens.css";
 
 /* Class-based dark mode. Without this Tailwind follows prefers-color-scheme,
@@ -58,7 +59,11 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 
-  /* Type scale from tokens/design-tokens.json -> metrics. */
+  /* Type scale from tokens/design-tokens.json -> metrics. shadcn's components
+   * ask for text-sm / text-xs, whose Tailwind defaults (14px / 12px) would be
+   * off-spec against the 13px body, so they are pinned here. */
+  --text-sm: 13px;
+  --text-xs: 12px;
   --text-body: 13px;
   --text-small: 12px;
   --text-caption: 11.5px;
@@ -94,6 +99,16 @@
     background-color: var(--background);
     color: var(--foreground);
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tailwind 4's preflight leaves bare `border` at currentColor and outlines
+   * unpainted; shadcn's components rely on these two defaults. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--border);
   }
 
   /* Version strings, hashes and the Ctrl K chip are Latin regardless of the

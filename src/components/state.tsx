@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react';
+﻿import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Inbox, LoaderCircle, TriangleAlert } from 'lucide-react';
 
 import type { ErrorCode } from '../bindings/ErrorCode';
 import type { IpcError } from '../bindings/IpcError';
-import { cn } from '../lib/cn';
+import { cn } from 'cn';
 
 // State patterns shared by every screen. The design package leaves loading,
 // empty and error boards undesigned; these follow its vocabulary (card

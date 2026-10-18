@@ -8,6 +8,13 @@
 
   "palette.placeholder": "ابحث أو نفّذ أمرًا",
   "palette.shortcut": "Ctrl K",
+  "palette.title": "لوحة الأوامر",
+  "palette.description": "ابحث عن صفحة أو أمر لتنفيذه.",
+  "palette.escape": "Esc",
+  "palette.empty": "لا شيء يطابق هذا البحث.",
+  "palette.group.goTo": "اذهب إلى",
+  "palette.hint.navigate": "تنقّل",
+  "palette.hint.run": "نفّذ",
 
   "provider.connected": "{{provider}} · متصل",
   "provider.offline": "{{provider}} · غير متاح",

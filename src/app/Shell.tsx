@@ -1,9 +1,12 @@
-import type { ComponentType, ReactNode } from 'react';
-import { useEffect } from 'react';
+﻿import type { ComponentType, ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, Layers, Search, SlidersHorizontal, type LucideProps } from 'lucide-react';
+import { cn } from 'cn';
 
-import { cn } from '../lib/cn';
+import { Kbd } from '@/components/Kbd';
+
+import { CommandPalette } from './CommandPalette';
 import { watchSystemTheme } from './preferences';
 
 export const PAGE_IDS = ['instances', 'browse', 'downloads', 'settings'] as const;
@@ -15,7 +18,7 @@ interface NavItem {
   labelKey: string;
 }
 
-const NAV: readonly NavItem[] = [
+export const NAV: readonly NavItem[] = [
   { id: 'instances', icon: Layers, labelKey: 'nav.instances' },
   { id: 'browse', icon: Search, labelKey: 'nav.browse' },
   { id: 'downloads', icon: Download, labelKey: 'nav.downloads' },
@@ -30,8 +33,20 @@ export interface ShellProps {
 
 export function Shell({ page, onNavigate, children }: ShellProps) {
   const { t } = useTranslation();
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => watchSystemTheme(), []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'k' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
     <div className="grid h-screen grid-cols-[56px_1fr] overflow-hidden">
@@ -63,20 +78,24 @@ export function Shell({ page, onNavigate, children }: ShellProps) {
       <div className="flex min-w-0 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border px-5 text-muted-foreground">
           <span className="text-foreground">{t(`nav.${page}`)}</span>
-          {/*
-            shortcut: the palette hint is static until cmdk lands in 5b; rendered
-            as a div so it does not present a dead button.
-          */}
-          <div className="ms-auto flex h-7 items-center gap-2 rounded-control border border-border bg-surface-sunken px-2.5">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="ms-auto flex h-7 items-center gap-2 rounded-control border border-border bg-surface-sunken px-2.5 text-muted-foreground hover:text-foreground"
+          >
             <Search aria-hidden className="size-[18px]" strokeWidth={1.75} />
             <span className="text-small">{t('palette.placeholder')}</span>
-            <kbd className="rounded-[4px] border border-border px-1 font-mono text-[11px]" dir="ltr">
-              {t('palette.shortcut')}
-            </kbd>
-          </div>
+            <Kbd>{t('palette.shortcut')}</Kbd>
+          </button>
         </header>
         <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onNavigate={onNavigate}
+      />
     </div>
   );
 }

@@ -8,6 +8,13 @@
 
   "palette.placeholder": "Search or run a command",
   "palette.shortcut": "Ctrl K",
+  "palette.title": "Command palette",
+  "palette.description": "Search for a page or an action to run.",
+  "palette.escape": "Esc",
+  "palette.empty": "Nothing matches that search.",
+  "palette.group.goTo": "Go to",
+  "palette.hint.navigate": "navigate",
+  "palette.hint.run": "run",
 
   "provider.connected": "{{provider}} · connected",
   "provider.offline": "{{provider}} · unreachable",

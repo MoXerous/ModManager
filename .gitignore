@@ -23,6 +23,9 @@ dist-ssr
 # Owner snapshot of docs/ (his own backup, not project source)
 docs.zip
 
+# shadcn CLI scratch
+.shadcn
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
