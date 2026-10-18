@@ -375,7 +375,10 @@ mod tests {
         let root = folder(dir.path(), "CaseFolder");
         insert(&db, &row("i1", &root, InstanceSource::Manual)).expect("first");
 
-        // A differently-cased spelling of the same NTFS folder.
+        // A differently-cased spelling of the same path. Whether that names the
+        // *same* folder depends on the filesystem, and the test must not
+        // assume Windows: this crate is built on Linux in CI, where the flipped
+        // path is a different folder that has to exist in its own right.
         let flipped: String = root
             .to_string_lossy()
             .chars()
@@ -387,17 +390,31 @@ mod tests {
                 }
             })
             .collect();
-        let spelled = PathBuf::from(flipped);
+        let spelled = PathBuf::from(&flipped);
         if spelled == root {
             // The path had no cased letters; the assertion is vacuous.
             return;
         }
-        let err = insert(&db, &row("i2", &spelled, InstanceSource::Manual)).expect_err("duplicate");
-        assert!(
-            matches!(err, InstanceRowError::DuplicatePath(_)),
-            "got {err:?}"
-        );
-        assert_eq!(list(&db).expect("list").len(), 1, "one folder, one row");
+        std::fs::create_dir_all(&spelled).expect("mkdir the flipped spelling");
+
+        // Both sides canonicalised: `insert` compares canonical forms, so a raw path
+        // against a canonical one would never match and the test would take the
+        // wrong branch on every platform.
+        let canon = |p: &std::path::Path| std::fs::canonicalize(p).expect("canon");
+        let same_folder = canon(&spelled) == canon(&root);
+        let outcome = insert(&db, &row("i2", &spelled, InstanceSource::Manual));
+        if same_folder {
+            assert!(
+                matches!(outcome, Err(InstanceRowError::DuplicatePath(_))),
+                "one folder must not become two rows: {outcome:?}"
+            );
+            assert_eq!(list(&db).expect("list").len(), 1, "one folder, one row");
+        } else {
+            // Case-sensitive: these really are two folders, and collapsing them
+            // would register an instance at a path the user never named.
+            outcome.expect("a different folder is a different instance");
+            assert_eq!(list(&db).expect("list").len(), 2, "two folders, two rows");
+        }
     }
 
     #[test]

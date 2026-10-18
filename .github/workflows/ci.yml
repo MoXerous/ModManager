@@ -98,18 +98,18 @@ jobs:
             # Guarded rather than assumed: an empty or renamed response must
             # fail here, not leave `$published` null for a comparison that would
             # then grade nothing.
-            if ($null -eq $remote) { throw "$slug: version $($entry.version_id) not returned by Modrinth" }
+            if ($null -eq $remote) { throw "${slug} - version $($entry.version_id) not returned by Modrinth" }
             $published = $remote.files | Where-Object { $_.filename -eq $entry.filename }
-            if ($null -eq $published) { throw "$slug: file $($entry.filename) not in that version" }
+            if ($null -eq $published) { throw "${slug} - file $($entry.filename) not in that version" }
             $jar = Join-Path $dir "mods/$($entry.filename)"
-            if (-not (Test-Path $jar)) { throw "$slug was locked but never written" }
+            if (-not (Test-Path $jar)) { throw "${slug} was locked but never written" }
 
             $actual = (Get-FileHash $jar -Algorithm SHA512).Hash.ToLower()
-            if ($actual -ne $published.hashes.sha512) { throw "$slug SHA-512 does not match Modrinth" }
+            if ($actual -ne $published.hashes.sha512) { throw "${slug} SHA-512 does not match Modrinth" }
             # The lock must carry the hash that was verified, not only the
             # collision-broken one.
-            if ($entry.sha512 -ne $published.hashes.sha512) { throw "$slug lock did not record sha512" }
-            Write-Host "$slug ok: $($entry.filename)"
+            if ($entry.sha512 -ne $published.hashes.sha512) { throw "${slug} lock did not record sha512" }
+            Write-Host "${slug} ok: $($entry.filename)"
           }
 
       - name: No partial file survived the commit
