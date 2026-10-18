@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+// Aliased: the component has an `open: boolean` prop, from the shadcn Dialog
+// convention, and it shadows the plugin's `open` inside this function.
+import { open as openFolderPicker } from '@tauri-apps/plugin-dialog';
 import { cn } from 'cn';
 
 import type { CreateInstancePlanDto } from '../../bindings/CreateInstancePlanDto';
@@ -97,6 +100,22 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
       .finally(() => setBusy(false));
   };
 
+  /**
+   * The native folder picker. A cancelled dialog resolves to `null`, which is
+   * not an error and must leave the field exactly as it was — an error banner
+   * for "the user changed their mind" is noise.
+   */
+  const pickRoot = async () => {
+    const picked = await openFolderPicker({
+      directory: true,
+      multiple: false,
+      title: t('instance.dialog.fieldRoot'),
+    });
+    if (typeof picked === 'string' && picked.length > 0) {
+      setRoot(picked);
+    }
+  };
+
   const ready = name.trim().length > 0 && root.trim().length > 0;
 
   return (
@@ -141,13 +160,27 @@ export function NewInstanceDialog({ open, onOpenChange, onDone }: Props) {
         </Field>
 
         <Field label={t('instance.dialog.fieldRoot')}>
-          <input
-            value={root}
-            onChange={(e) => setRoot(e.target.value)}
-            dir="ltr"
-            aria-label={t('instance.dialog.fieldRoot')}
-            className="h-8 w-full rounded-control border border-input bg-transparent px-3 font-mono text-body outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          />
+          {/* The picker fills the field but does not replace it: a typed path is
+              still the fastest route, and the field must stay readable and
+              editable. The absolute-path rule stays in `plan_create` — the
+              webview is untrusted input, so a friendly picker is not a guard. */}
+          <div className="flex gap-2">
+            <input
+              value={root}
+              onChange={(e) => setRoot(e.target.value)}
+              dir="ltr"
+              aria-label={t('instance.dialog.fieldRoot')}
+              className="h-8 min-w-0 flex-1 rounded-control border border-input bg-transparent px-3 font-mono text-body outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={pickRoot}
+              aria-label={t('instance.dialog.actionBrowse')}
+            >
+              {t('instance.dialog.actionBrowse')}
+            </Button>
+          </div>
         </Field>
 
         {mode === 'create' && (

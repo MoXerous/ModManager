@@ -91,5 +91,6 @@
   "recovery.instance.nothingWritten": "No folder was created",
   "recovery.instance.mirrorPresent": "A valid profile is present and can be finished",
   "recovery.instance.mirrorUnreadable": "The profile is unreadable and cannot be trusted",
-  "recovery.instance.directoriesWithoutMirror": "Folders exist with no profile"
+  "recovery.instance.directoriesWithoutMirror": "Folders exist with no profile",
+  "instance.dialog.actionBrowse": "Browse"
 }
