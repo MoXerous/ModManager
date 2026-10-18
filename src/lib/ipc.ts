@@ -1,9 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
+import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
+import type { CreateInstanceRequest } from '../bindings/CreateInstanceRequest';
 import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
+import type { InstanceSummaryDto } from '../bindings/InstanceSummaryDto';
 import type { InstallPlanDto } from '../bindings/InstallPlanDto';
+import type { LinkInstanceRequest } from '../bindings/LinkInstanceRequest';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
@@ -84,7 +88,28 @@ export function executeToggle(req: PreviewToggleRequest): Promise<ToggleResultDt
   });
 }
 
-/** يحوّل أي خطأ يرفضه invoke إلى IpcError (Tauri يرفض بالقيمة المُسلسَلة نفسها). */
+// --- Instances (F-101..F-104) -------------------------------------------
+//
+// Both create commands take the same intent. Rust rebuilds the plan, so a
+// folder taken between preview and confirm fails there rather than here.
+
+export function listInstances(): Promise<InstanceSummaryDto[]> {
+  return invoke<InstanceSummaryDto[]>('list_instances');
+}
+
+export function planCreateInstance(req: CreateInstanceRequest): Promise<CreateInstancePlanDto> {
+  return invoke<CreateInstancePlanDto>('plan_create_instance', { req });
+}
+
+export function executeCreateInstance(req: CreateInstanceRequest): Promise<InstanceSummaryDto> {
+  return invoke<InstanceSummaryDto>('execute_create_instance', { req });
+}
+
+export function linkInstance(req: LinkInstanceRequest): Promise<InstanceSummaryDto> {
+  return invoke<InstanceSummaryDto>('link_instance', { req });
+}
+
+/** Turn any error `invoke` rejects with into an IpcError (Tauri rejects with the serialized value itself). */
 export function toIpcError(e: unknown): IpcError {
   if (typeof e === 'object' && e !== null && 'code' in e && 'message' in e) {
     return e as IpcError;

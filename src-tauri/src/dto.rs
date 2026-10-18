@@ -377,4 +377,77 @@ pub struct ToggleResultDto {
     pub reason: String,
 }
 
+// --- Instances (F-101..F-104) -------------------------------------------
+//
+// The UI sends intent, never a plan: `execute_create_instance` rebuilds the
+// plan in Rust, so a folder taken between preview and confirm is refused by
+// `plan_create` rather than trusted from the webview.
+
+/// F-104 source as a real union, so the UI branches on a type instead of on
+/// string equality. `mm_core::db::instances::InstanceSource` cannot derive TS:
+/// core must not depend on ts-rs, so the DTO mirrors it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum InstanceSourceDto {
+    Managed,
+    Manual,
+    Adopted,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstanceSummaryDto {
+    pub id: String,
+    pub name: String,
+    /// Canonical instance root, as stored.
+    pub path: String,
+    pub minecraft_root: String,
+    /// Options here are required-but-nullable, matching `ProjectDto.slug`:
+    //  `#[ts(optional)]` is only for fields with `skip_serializing_if`.
+    pub minecraft_version: Option<String>,
+    pub loader: Option<String>,
+    pub source: InstanceSourceDto,
+    /// The registered folder is gone. The row is still listed: it is the
+    /// user's registration, and only the user may delete it.
+    pub path_missing: bool,
+    /// `number | null`, not `number`: ts-rs emits `bigint` for i64, and a bare
+    /// `type = "number"` would also drop the nullability — declaring a required
+    /// number while Rust sends null for a never-scanned instance.
+    #[ts(type = "number | null")]
+    pub scanned_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateInstanceRequest {
+    pub name: String,
+    pub root: String,
+    pub minecraft_version: Option<String>,
+    pub loader: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LinkInstanceRequest {
+    pub name: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateInstancePlanDto {
+    /// The folder that will hold the instance.
+    pub root: String,
+    pub name: String,
+    /// Absolute directories that will be created, root first.
+    pub directories: Vec<String>,
+    /// Relative folder names below the root, for display.
+    pub relative_directories: Vec<String>,
+}
+
 use serde::Deserialize;

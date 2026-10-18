@@ -5,10 +5,92 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::dto::{
-    AppInfo, ErrorCode, InstallPlanDto, InstanceSnapshotDto, IpcError, LocalFactDto, LockEntryDto,
-    PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto,
-    SearchQueryDto, TogglePlanDto, ToggleResultDto, WarningDto,
+    AppInfo, CreateInstancePlanDto, CreateInstanceRequest, ErrorCode, InstallPlanDto,
+    InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
+    LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
+    SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, WarningDto,
 };
+use crate::state::AppState;
+
+/// Walks the core error enums variant by variant: collapsing them into
+/// `internal` would show the user a generic failure for something we can
+/// explain precisely.
+fn db_error(e: &mm_core::db::DbError) -> IpcError {
+    use mm_core::db::DbError as D;
+    match e {
+        // The user must update or downgrade; retrying changes nothing.
+        D::NewerSchema { .. } => IpcError::new(ErrorCode::NewerSchema, e),
+        D::Io(_) => IpcError::io(e),
+        // Migration and WAL failures are our setup, not the user's action.
+        D::Wal(_) | D::Migration(_) | D::Sql(_) => IpcError::internal(e),
+    }
+}
+
+fn metadata_error(e: &mm_core::instances::metadata::MetadataError) -> IpcError {
+    use mm_core::instances::metadata::MetadataError as M;
+    match e {
+        M::NewerSchema { .. } => IpcError::new(ErrorCode::NewerSchema, e),
+        M::Atomic(_) | M::Io(_) => IpcError::io(e),
+        // A corrupt or truncated file is bad input for the reader, not a bug.
+        M::NulByte | M::TooLarge { .. } => IpcError::invalid_input(e),
+        M::Parse(_) | M::MissingField(_) => IpcError::internal(e),
+    }
+}
+
+fn registry_error(e: &mm_core::instances::registry::RegistryError) -> IpcError {
+    use mm_core::db::instances::InstanceRowError as R;
+    use mm_core::instances::registry::RegistryError as E;
+    match e {
+        // The request cannot be satisfied as stated.
+        E::RootNotEmpty(_)
+        | E::AlreadyAnInstance(_)
+        | E::RootIsFile(_)
+        | E::UnsafeName(_)
+        | E::Row(R::DuplicatePath(_)) => IpcError::invalid_input(e),
+        E::Io(_) => IpcError::io(e),
+        E::Row(R::UnresolvablePath { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            IpcError::new(ErrorCode::NotFound, e)
+        }
+        E::Row(R::UnresolvablePath { .. }) => IpcError::invalid_input(e),
+        E::Row(R::InvalidSource(_)) => IpcError::internal(e),
+        E::Row(R::Db(db)) => db_error(db),
+        E::Metadata(m) => metadata_error(m),
+        // Rollback did not finish; the on-disk state is indeterminate.
+        E::RolledBack(_, _) => IpcError::internal(e),
+    }
+}
+
+fn summary(row: &mm_core::db::instances::InstanceRow) -> InstanceSummaryDto {
+    use crate::dto::InstanceSourceDto;
+    InstanceSummaryDto {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        path: row.path.to_string_lossy().into_owned(),
+        minecraft_root: row.minecraft_root.to_string_lossy().into_owned(),
+        minecraft_version: row.minecraft_version.clone(),
+        loader: row.loader.clone(),
+        source: match row.source {
+            mm_core::db::instances::InstanceSource::Managed => InstanceSourceDto::Managed,
+            mm_core::db::instances::InstanceSource::Manual => InstanceSourceDto::Manual,
+            mm_core::db::instances::InstanceSource::Adopted => InstanceSourceDto::Adopted,
+        },
+        // One cheap stat per row, inside spawn_blocking. The row is listed
+        // either way; this only tells the screen to show it as needing
+        // attention.
+        path_missing: !row.path.is_dir(),
+        scanned_at: row.scanned_at,
+    }
+}
+
+/// `now()` in one place so a create and its plan cannot disagree.
+fn epoch_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 #[tauri::command]
 pub fn app_info() -> AppInfo {
@@ -242,6 +324,90 @@ fn existing_filenames(instance_root: Option<String>) -> Result<HashSet<String>, 
         }
     }
     Ok(out)
+}
+
+#[tauri::command]
+pub async fn list_instances(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<InstanceSummaryDto>, IpcError> {
+    let rows = state
+        .with_db(|db| mm_core::db::instances::list(db).map_err(|e| e.to_string()))
+        .await
+        // Never `unwrap` into an empty list: a failure the screen cannot see is
+        // worse than an error (spec §5.10).
+        .map_err(IpcError::io)?;
+    Ok(rows.iter().map(summary).collect())
+}
+
+#[tauri::command]
+pub async fn plan_create_instance(
+    req: CreateInstanceRequest,
+) -> Result<CreateInstancePlanDto, IpcError> {
+    let plan = mm_core::instances::registry::plan_create(
+        &PathBuf::from(req.root),
+        &req.name,
+        req.minecraft_version,
+        req.loader,
+        epoch_now(),
+    )
+    .map_err(|e| registry_error(&e))?;
+    Ok(CreateInstancePlanDto {
+        root: plan.root.to_string_lossy().into_owned(),
+        name: plan.name.clone(),
+        directories: plan
+            .dirs
+            .iter()
+            .map(|d| d.to_string_lossy().into_owned())
+            .collect(),
+        relative_directories: plan
+            .relative_dirs()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
+#[tauri::command]
+pub async fn execute_create_instance(
+    state: tauri::State<'_, AppState>,
+    req: CreateInstanceRequest,
+) -> Result<InstanceSummaryDto, IpcError> {
+    // The plan is rebuilt here, never read back from the webview: a folder
+    // taken between preview and confirm makes `plan_create` refuse, and that
+    // refusal is the drift detection.
+    let plan = mm_core::instances::registry::plan_create(
+        &PathBuf::from(req.root),
+        &req.name,
+        req.minecraft_version,
+        req.loader,
+        epoch_now(),
+    )
+    .map_err(|e| registry_error(&e))?;
+
+    let row = state
+        .with_db(move |db| {
+            mm_core::instances::registry::execute_create(db, &plan).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(IpcError::io)?;
+    Ok(summary(&row))
+}
+
+#[tauri::command]
+pub async fn link_instance(
+    state: tauri::State<'_, AppState>,
+    req: LinkInstanceRequest,
+) -> Result<InstanceSummaryDto, IpcError> {
+    let root = PathBuf::from(req.root);
+    let name = req.name;
+    let row = state
+        .with_db(move |db| {
+            mm_core::instances::registry::link_instance(db, &root, &name, epoch_now())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(IpcError::io)?;
+    Ok(summary(&row))
 }
 
 #[cfg(test)]
