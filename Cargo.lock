@@ -2627,12 +2627,16 @@ dependencies = [
  "mm-core",
  "serde",
  "serde_json",
+ "sha1",
+ "sha2 0.11.1",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tempfile",
  "ts-rs",
+ "wiremock",
+ "zip",
 ]
 
 [[package]]
