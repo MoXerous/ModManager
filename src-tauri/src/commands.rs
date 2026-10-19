@@ -564,8 +564,30 @@ pub async fn execute_install(
     req: InstallRequest,
     on_event: tauri::ipc::Channel<crate::dto::InstallEventDto>,
 ) -> Result<InstallResultDto, IpcError> {
-    use mm_core::downloader::{BatchItem, Downloader, ItemProgress};
     use mm_core::providers::ModrinthClient;
+    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+    // Production is https-only. The flag is a parameter only so a test can
+    // serve wiremock on loopback, which is what the downloader's own tests
+    // do; nothing in the app ever sets it true.
+    execute_install_with(state.inner(), &client, req, on_event, false).await
+}
+
+/// The body of `execute_install`, with the provider and the state as parameters.
+///
+/// The seam exists so the whole command - resolve, journal, download, hash,
+/// atomic rename, and every `Channel` event - can run against a wiremock
+/// server in a test. Without it the command could only be exercised against
+/// the real Modrinth API, which is what `verify-real-download` in CI does and
+/// is not a test. Production behaviour is unchanged: the command above still
+/// builds exactly one `ModrinthClient::new()`.
+pub async fn execute_install_with(
+    state: &AppState,
+    provider: &dyn mm_core::providers::Provider,
+    req: InstallRequest,
+    on_event: tauri::ipc::Channel<crate::dto::InstallEventDto>,
+    allow_insecure_loopback: bool,
+) -> Result<InstallResultDto, IpcError> {
+    use mm_core::downloader::{BatchItem, Downloader, ItemProgress};
     use mm_core::resolver::resolve_and_plan;
 
     if req.slugs.is_empty() {
@@ -580,9 +602,8 @@ pub async fn execute_install(
         ));
     }
 
-    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
     let plan = resolve_and_plan(
-        &client,
+        provider,
         &req.slugs,
         &req.game_version,
         &req.loader,
@@ -616,7 +637,7 @@ pub async fn execute_install(
             size: Some(file.size),
             sha1_hex: file.sha1.clone(),
             sha512_hex: file.sha512.clone(),
-            allow_insecure_loopback: false,
+            allow_insecure_loopback,
         });
     }
     if items.is_empty() {
@@ -698,5 +719,7 @@ pub async fn execute_install(
     })
 }
 
+#[cfg(test)]
+pub(crate) mod channel_tests;
 #[cfg(test)]
 pub(crate) mod tests;

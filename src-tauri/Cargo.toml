@@ -24,3 +24,16 @@ tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# `test` is an empty feature: it adds no dependency and downloads nothing. It
+# brings `tauri::test::mock_builder`, which is how `execute_install` gets
+# driven through a real `tauri::ipc::Channel` without a window and without a
+# person clicking anything. The Channel path was otherwise covered only by
+# reasoning.
+wiremock = "0.6.5"
+# Both already in the workspace through mm-core, so neither downloads anything.
+# The fixture has to be a real zip (the verifier checks ZIP magic on a .jar)
+# and its sha512 has to be computed, not guessed, or the download correctly
+# fails verification and the test proves nothing.
+zip = "9.0.4"
+sha2 = "0.11.1"
+sha1 = "0.11.0"
