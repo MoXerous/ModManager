@@ -43,3 +43,6 @@ docs.zip
 
 # A WSL cargo run once wrote its HOME here. Build junk, never data.
 C*UsersLOQ/
+
+# Agent session data, not part of the project.
+.opencode/
