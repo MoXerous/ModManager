@@ -4,6 +4,7 @@ import { Shell, type PageId } from './app/Shell';
 import { BrowsePage } from './app/pages/BrowsePage';
 import { DownloadsPage } from './app/pages/DownloadsPage';
 import { InstancesPage } from './app/pages/InstancesPage';
+import { ModpackPage } from './app/pages/ModpackPage';
 import { PlaceholderPage } from './app/pages/PlaceholderPage';
 import { SettingsPage } from './app/pages/SettingsPage';
 
@@ -18,6 +19,8 @@ export default function App() {
         <InstancesPage />
       ) : page === 'browse' ? (
         <BrowsePage onInstalled={() => setPage('downloads')} />
+      ) : page === 'modpack' ? (
+        <ModpackPage />
       ) : page === 'downloads' ? (
         <DownloadsPage />
       ) : page === 'settings' ? (

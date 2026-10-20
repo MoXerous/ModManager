@@ -1,7 +1,7 @@
 ﻿import type { ComponentType, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Layers, Search, SlidersHorizontal, type LucideProps } from 'lucide-react';
+import { Download, Layers, Package, Search, SlidersHorizontal, type LucideProps } from 'lucide-react';
 import { cn } from 'cn';
 
 import { Kbd } from '@/components/Kbd';
@@ -9,7 +9,7 @@ import { Kbd } from '@/components/Kbd';
 import { CommandPalette } from './CommandPalette';
 import { watchSystemTheme } from './preferences';
 
-export const PAGE_IDS = ['instances', 'browse', 'downloads', 'settings'] as const;
+export const PAGE_IDS = ['instances', 'browse', 'modpack', 'downloads', 'settings'] as const;
 export type PageId = (typeof PAGE_IDS)[number];
 
 interface NavItem {
@@ -21,6 +21,7 @@ interface NavItem {
 export const NAV: readonly NavItem[] = [
   { id: 'instances', icon: Layers, labelKey: 'nav.instances' },
   { id: 'browse', icon: Search, labelKey: 'nav.browse' },
+  { id: 'modpack', icon: Package, labelKey: 'nav.modpack' },
   { id: 'downloads', icon: Download, labelKey: 'nav.downloads' },
   { id: 'settings', icon: SlidersHorizontal, labelKey: 'nav.settings' },
 ];

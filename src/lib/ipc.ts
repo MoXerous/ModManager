@@ -12,6 +12,10 @@ import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
 import type { InstanceSummaryDto } from '../bindings/InstanceSummaryDto';
 import type { InstallPlanDto } from '../bindings/InstallPlanDto';
 import type { LinkInstanceRequest } from '../bindings/LinkInstanceRequest';
+import type { ModpackApplyResultDto } from '../bindings/ModpackApplyResultDto';
+import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
+import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
+import type { PackEventDto } from '../bindings/PackEventDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
@@ -134,6 +138,34 @@ export function executeInstall(
   onEvent: (e: InstallEventDto) => void,
 ): Promise<InstallResultDto> {
   return invoke<InstallResultDto>('execute_install', {
+    req,
+    onEvent,
+  });
+}
+
+// --- Modpacks (.mrpack) -------------------------------------------------
+//
+// Plan then apply, the same shape `preview_toggle` and `execute_toggle` use.
+// Both take the same two paths: the apply re-reads the archive and rebuilds
+// the plan in Rust, so a plan shown on screen is never sent back as truth.
+
+/** What a `.mrpack` would write into an instance. Writes nothing. */
+export function planModpackInstall(req: ModpackInstallRequest): Promise<ModpackPlanDto> {
+  return invoke<ModpackPlanDto>('plan_modpack_install', { req });
+}
+
+/**
+ * Applies the pack and streams one `PackEventDto` per phase change.
+ *
+ * `phase` is an i18n key (`pack.phase.*`), never a display word. The returned
+ * promise resolves once every write has settled; the channel ends on `done`
+ * or `failed`, so the screen follows the events rather than the promise.
+ */
+export function executeModpackInstall(
+  req: ModpackInstallRequest,
+  onEvent: (e: PackEventDto) => void,
+): Promise<ModpackApplyResultDto> {
+  return invoke<ModpackApplyResultDto>('execute_modpack_install', {
     req,
     onEvent,
   });
