@@ -91,17 +91,43 @@ pub fn lock_path(ctx: &Ctx) -> Result<PathBuf, CliError> {
     Ok(instance_dir(ctx)?.join("instance.lock.json"))
 }
 
-/// Loopback CDN (tests) may use http; everything else stays https-only
-/// inside the downloader.
-fn allow_insecure(url: &str) -> bool {
-    let host = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("");
-    host == "localhost" || host == "::1" || host.starts_with("127.")
+/// Builds the `DownloadRequest` for every CLI download, one place, so the
+/// transport decision cannot drift between commands.
+///
+/// The transport rule is ours, not the remote's: https only, exactly like
+/// the Tauri app (`commands.rs` passes `false` there). `DownloadRequest`'s
+/// insecure-loopback flag exists for test harnesses that serve wiremock on
+/// this machine, and it must never be derived from a URL that arrived over
+/// the network: `allow_insecure(&file.url)` used to make a provider
+/// response naming `http://127.evil.com` — a DNS name anyone can register
+/// — a plain-HTTP fetch with the remote author instead of us choosing the
+/// transport (AGENTS.md §5.11, `User-Agent` and CDN trust boundaries).
+///
+/// The only plain-HTTP seam is the operator's own hidden `--api-base`
+/// (tests only) pointing at a literal loopback address: that flag says this
+/// process was started to talk to a local test server, which is a property
+/// of the run, not of any response. Core still re-checks every hop, so even
+/// then only loopback *addresses* are admitted and `127.evil.com` stays
+/// refused.
+pub(crate) fn build_download_request(
+    ctx: &Ctx,
+    url: String,
+    dest: PathBuf,
+    expected_size: Option<u64>,
+    sha1_hex: Option<String>,
+    sha512_hex: Option<String>,
+) -> mm_core::downloader::DownloadRequest {
+    mm_core::downloader::DownloadRequest {
+        url,
+        dest,
+        expected_size,
+        sha1_hex,
+        sha512_hex,
+        allow_insecure_loopback: ctx
+            .api_base
+            .as_deref()
+            .is_some_and(mm_core::downloader::client::is_loopback_url),
+    }
 }
 
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
@@ -170,6 +196,7 @@ pub async fn resolve_slugs(
         .await
         .map_err(|e| CliError::Provider(e.to_string()))
 }
+
 pub fn print_plan(entries: &[PlanEntry], summary: &PlanSummary, warnings: &[Warning]) {
     print_table(
         &["status", "source", "title", "version", "file", "reason"],
@@ -196,5 +223,68 @@ pub fn print_plan(entries: &[PlanEntry], summary: &PlanSummary, warnings: &[Warn
     );
     for w in warnings {
         println!("[{}] {}", w.severity, w.message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_download_request, Ctx};
+    use std::path::PathBuf;
+
+    fn ctx(api_base: Option<&str>) -> Ctx {
+        Ctx {
+            instance: None,
+            api_base: api_base.map(str::to_string),
+        }
+    }
+
+    fn request_for(ctx: &Ctx, url: &str) -> mm_core::downloader::DownloadRequest {
+        build_download_request(
+            ctx,
+            url.to_string(),
+            PathBuf::from("x.jar"),
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// The CLI transport decision against old code: `allow_insecure(&file.url)`
+    /// read the flag out of the provider's URL, and the old `is_loopback`
+    /// prefix check made `127.evil.com` count as loopback. Remote data must
+    /// never weaken the transport rule.
+    #[test]
+    fn spec_f031_cli_never_enables_insecure_http_from_remote_urls() {
+        let production = ctx(None);
+        for url in [
+            "http://127.evil.com/x.jar",
+            "http://127.0.0.1.evil.io/x.jar",
+            "http://127.0.0.1/x.jar",
+            "http://localhost/x.jar",
+        ] {
+            let req = request_for(&production, url);
+            assert!(
+                !req.allow_insecure_loopback,
+                "{url} must not weaken the transport rule"
+            );
+        }
+    }
+
+    /// The test seam belongs to the operator's `--api-base`, and to nothing
+    /// else: a loopback base enables plain HTTP for the harness, a remote
+    /// base never does, and the response URL is never consulted.
+    #[test]
+    fn spec_f031_cli_loopback_seam_comes_from_the_operator_not_the_response() {
+        let loopback_api = ctx(Some("http://127.0.0.1:8080/v2"));
+        assert!(request_for(&loopback_api, "http://127.0.0.1:8080/x.jar").allow_insecure_loopback);
+
+        let remote_api = ctx(Some("https://api.modrinth.com/v2"));
+        assert!(
+            !request_for(&remote_api, "https://cdn.modrinth.com/x.jar").allow_insecure_loopback
+        );
+
+        // A base that only *looks* like loopback is not a loopback address.
+        let spoofed_api = ctx(Some("https://127.evil.com/v2"));
+        assert!(!request_for(&spoofed_api, "https://127.evil.com/x.jar").allow_insecure_loopback);
     }
 }

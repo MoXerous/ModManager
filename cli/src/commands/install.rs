@@ -4,10 +4,10 @@
 //! the lock is left untouched (landed `.part` files allow resume).
 
 use super::{
-    allow_insecure, client, confirm, instance_dir, io_err, lock_path, mods_dir, print_plan,
+    build_download_request, client, confirm, instance_dir, io_err, lock_path, mods_dir, print_plan,
     resolve_slugs, CliError, Ctx,
 };
-use mm_core::downloader::{DownloadRequest, DownloadStatus, Downloader};
+use mm_core::downloader::{DownloadStatus, Downloader};
 use mm_core::instances::{read_lock, write_lock, LockEntry, LockFile};
 use mm_core::resolver::primary_file;
 use std::collections::HashSet;
@@ -56,14 +56,14 @@ pub async fn install(
             CliError::Download(format!("version {version_id} has no downloadable file"))
         })?;
         let dest = mods.join(&file.filename);
-        let req = DownloadRequest {
-            url: file.url.clone(),
-            dest: dest.clone(),
-            expected_size: Some(file.size),
-            sha1_hex: file.sha1.clone(),
-            sha512_hex: file.sha512.clone(),
-            allow_insecure_loopback: allow_insecure(&file.url),
-        };
+        let req = build_download_request(
+            ctx,
+            file.url.clone(),
+            dest.clone(),
+            Some(file.size),
+            file.sha1.clone(),
+            file.sha512.clone(),
+        );
         let go = || ControlFlow::Continue(());
         let outcome = downloader
             .download(&req, &mut |_| go(), &|| false)

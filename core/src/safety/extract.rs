@@ -45,6 +45,8 @@ pub enum ExtractError {
     TooLong(PathBuf),
     #[error("empty archive (F-049)")]
     Empty,
+    #[error("member `{0}` ends with the `.part` suffix reserved for atomic writes")]
+    ReservedPartSuffix(String),
 }
 
 /// A pre-existing symlink or reparse point (e.g. NTFS junction) inside the
@@ -113,6 +115,22 @@ pub fn extract_safely<R: Read + Seek>(
     let inventory = crate::safety::inspect::inspect_zip(archive, limits)?;
     if inventory.is_empty() {
         return Err(ExtractError::Empty);
+    }
+    // The `.part` suffix is reserved by the atomic-write protocol
+    // (`safety::atomic`): a member named `<anything>.part` would land a real
+    // file at the path its sibling `<anything>` uses for in-flight bytes, and
+    // that sibling's commit would then take the path over. The whole
+    // inventory is checked before the first write, so a refused archive
+    // leaves the destination untouched no matter where the member sits.
+    // Directory entries are exempt: they are never written as files. The rule
+    // lives here — the extraction step — rather than in `inspect_zip`, so that
+    // `check_archive` keeps validating downloaded-but-never-extracted
+    // artifacts (mod jars that merely *ship* such members) exactly as before.
+    if let Some(member) = inventory
+        .iter()
+        .find(|m| !m.is_dir && m.name.to_ascii_lowercase().ends_with(".part"))
+    {
+        return Err(ExtractError::ReservedPartSuffix(member.name.clone()));
     }
     std::fs::create_dir_all(dest).map_err(|e| io_err("create_dir", dest, e))?;
     let mut report = ExtractReport::default();
@@ -254,6 +272,67 @@ mod tests {
             b"aaa"
         );
         no_parts_left(&dest);
+    }
+
+    #[test]
+    fn spec_f041_extract_refuses_part_suffix_members() {
+        // The `.part` suffix is reserved by the atomic-write protocol
+        // (`safety::atomic`): an archive member named `<anything>.part` would
+        // take over the in-flight path of the sibling `<anything>`.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("out");
+        let mut a = archive_of(&[
+            ("blob.part", b"x"),
+            ("blob2.PART", b"x"),
+            ("keep.jar", b"k"),
+        ]);
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        assert!(
+            matches!(r, Err(ExtractError::ReservedPartSuffix(ref n)) if n == "blob.part"),
+            "got {r:?}"
+        );
+        assert!(
+            !dest.join("blob.part").exists() && !dest.join("keep.jar").exists(),
+            "nothing was written from the refused archive"
+        );
+    }
+
+    #[test]
+    fn spec_f041_extract_refuses_a_member_that_would_eat_a_sibling() {
+        // Members `x.jar.part` and `x.jar`: extracting the first wrote a real
+        // file at the part path, and the second's commit then removed it and
+        // took its place — two promised files, one on disk, silently.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("out");
+        let mut a = archive_of(&[("x.jar.part", b"payload"), ("x.jar", b"mod")]);
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        assert!(
+            matches!(r, Err(ExtractError::ReservedPartSuffix(_))),
+            "got {r:?}"
+        );
+        assert!(
+            !dest.join("x.jar").exists() && !dest.join("x.jar.part").exists(),
+            "nothing was written from the refused archive"
+        );
+    }
+
+    #[test]
+    fn spec_f041_extract_refuses_part_suffix_before_any_write() {
+        // Member order must not matter: the reserved suffix is checked over
+        // the whole inventory before the first write, so an archive whose
+        // offending member comes last still leaves nothing behind.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("out");
+        let mut a = archive_of(&[("keep.jar", b"k"), ("sub/blob.part", b"x")]);
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        assert!(
+            matches!(r, Err(ExtractError::ReservedPartSuffix(_))),
+            "got {r:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "the refused archive must not even create the destination"
+        );
     }
 
     #[test]
