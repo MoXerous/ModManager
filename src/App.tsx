@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { Shell, type PageId } from './app/Shell';
+import { usePreferences } from './app/preferences';
 import { BrowsePage } from './app/pages/BrowsePage';
 import { DownloadsPage } from './app/pages/DownloadsPage';
 import { InstancesPage } from './app/pages/InstancesPage';
@@ -12,6 +13,10 @@ import { SettingsPage } from './app/pages/SettingsPage';
 // link to; Wouter comes with the screens that carry state in the URL.
 export default function App() {
   const [page, setPage] = useState<PageId>('instances');
+  // The root subscribes to preference changes (theme, locale, numerals) so any
+  // change re-renders the whole tree; pages read digits and locale at render
+  // time through the i18n format hook and formatNumber/formatBytes.
+  usePreferences();
 
   return (
     <Shell page={page} onNavigate={setPage}>
