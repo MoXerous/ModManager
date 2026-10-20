@@ -190,7 +190,7 @@ export function ModpackPage() {
       <h1 className="text-page-title font-semibold">{t('nav.modpack')}</h1>
       {plan && (
         <span className="ms-1 text-small text-muted-foreground">
-          {t('pack.count.files', { count: formatNumber(plan.writes.length) })}
+          {t('pack.count.files', { count: plan.writes.length })}
         </span>
       )}
     </div>
@@ -311,12 +311,12 @@ export function ModpackPage() {
               states the totals core computed, so a long plan cannot make them
               disagree with themselves. */}
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Chip>{t('pack.count.files', { count: formatNumber(plan.writes.length) })}</Chip>
-            <Chip>{t('pack.count.downloads', { count: formatNumber(plan.downloadCount) })}</Chip>
-            <Chip>{t('pack.count.overrides', { count: formatNumber(plan.overrideCount) })}</Chip>
+            <Chip>{t('pack.count.files', { count: plan.writes.length })}</Chip>
+            <Chip>{t('pack.count.downloads', { count: plan.downloadCount })}</Chip>
+            <Chip>{t('pack.count.overrides', { count: plan.overrideCount })}</Chip>
             {plan.replaceCount > 0 && (
               <Chip tone="issue">
-                {t('pack.count.replaces', { count: formatNumber(plan.replaceCount) })}
+                {t('pack.count.replaces', { count: plan.replaceCount })}
               </Chip>
             )}
           </div>
