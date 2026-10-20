@@ -2,9 +2,12 @@
 //! CurseForge arrives in M3 as a new design, with no behaviour to port).
 
 pub mod archive;
+pub mod exec;
 pub mod mrpack;
 
 #[cfg(test)]
 mod archive_tests;
+#[cfg(test)]
+mod exec_tests;
 #[cfg(test)]
 mod tests;
