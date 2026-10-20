@@ -37,6 +37,11 @@ pub fn run() {
             commands::abandon_create,
             commands::open_instance_folder,
             commands::execute_install,
+            // The pack commands are the module's own: `generate_handler!`
+            // resolves the macro support next to each function, so the path
+            // has to be the module that defines them.
+            commands::pack::plan_modpack_install,
+            commands::pack::execute_modpack_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

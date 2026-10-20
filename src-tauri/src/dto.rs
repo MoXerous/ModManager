@@ -514,3 +514,103 @@ pub struct InstallResultDto {
     pub installed: Vec<String>,
     pub skipped: Vec<String>,
 }
+
+// --- Modpack (.mrpack) install ------------------------------------------
+
+/// What the webview asks for: a pack file and the instance it goes into.
+///
+/// Plan and apply take the same shape on purpose. Apply rebuilds the plan from
+/// these two paths and never accepts a plan body from the webview — the same
+/// rule `execute_toggle` and `execute_create_instance` follow (AGENTS.md §5.4).
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackInstallRequest {
+    /// Absolute path of the `.mrpack` the user chose. Validated in Rust.
+    pub pack_path: String,
+    /// Absolute path of the instance the pack is installed into.
+    pub instance_root: String,
+}
+
+/// How one planned write produces its bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PackWriteKindDto {
+    /// Fetched by hash from the pack's URL or from the provider.
+    Download,
+    /// Copied out of the archive's override layer.
+    Override,
+}
+
+/// One file the pack asks to be written.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackWriteDto {
+    /// Instance-relative and already validated by core; absolute paths never
+    /// cross IPC for a file inside an instance.
+    pub safe_path: String,
+    pub kind: PackWriteKindDto,
+    /// True when a file already sits at that destination and the apply will
+    /// replace it. False means the apply creates it.
+    pub overwrites: bool,
+    /// Size the pack's index declared for a download, when it declared one.
+    /// `number | null` for the same reason as `InstanceSummaryDto.scanned_at`:
+    /// a bare `type = "number"` would also drop the nullability.
+    #[ts(type = "number | null")]
+    pub size: Option<u64>,
+}
+
+/// What the pack would do to an instance, before any of it happens.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackPlanDto {
+    pub name: String,
+    pub version_id: String,
+    pub summary: Option<String>,
+    pub writes: Vec<PackWriteDto>,
+    /// Counts, so the screen can state the totals without walking the list.
+    #[ts(type = "number")]
+    pub download_count: usize,
+    #[ts(type = "number")]
+    pub override_count: usize,
+    /// Destinations that already hold a file and will be replaced.
+    #[ts(type = "number")]
+    pub replace_count: usize,
+}
+
+/// One progress event on the modpack channel.
+///
+/// `phase` is one of core's `pack::exec::phase` keys (`pack.phase.*`), never a
+/// display word: core says what is true, the UI says how to say it. Numbers
+/// are annotated as `number` because that is what JSON carries; ts-rs would
+/// otherwise emit `bigint` for `u64`.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackEventDto {
+    pub phase: String,
+    pub safe_path: Option<String>,
+    #[ts(type = "number")]
+    pub done: u64,
+    #[ts(type = "number | null")]
+    pub total: Option<u64>,
+}
+
+/// What applying a pack did, once every op settled.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackApplyResultDto {
+    /// Files this run wrote.
+    #[ts(type = "number")]
+    pub written: usize,
+    /// Destinations that already held the right bytes, so nothing was written.
+    #[ts(type = "number")]
+    pub skipped: usize,
+    /// Bytes written, as counted by core's apply report.
+    #[ts(type = "number")]
+    pub bytes: u64,
+}

@@ -21,6 +21,11 @@ serde_json = "1"
 ts-rs = "12.0.1"
 mm-core = { path = "../core" }
 tauri-plugin-dialog = "2"
+# Not a new download: mm-core already depends on it. The bridge names the type
+# because `modpack::archive::read_pack` takes a `zip::ZipArchive<R>` — the pack
+# commands have to open the file themselves, and inventing a second reader in
+# core just to hide this type would be the seam for its own sake.
+zip = "9.0.4"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -34,6 +39,5 @@ wiremock = "0.6.5"
 # The fixture has to be a real zip (the verifier checks ZIP magic on a .jar)
 # and its sha512 has to be computed, not guessed, or the download correctly
 # fails verification and the test proves nothing.
-zip = "9.0.4"
 sha2 = "0.11.1"
 sha1 = "0.11.0"
