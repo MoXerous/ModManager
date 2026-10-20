@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
@@ -128,18 +128,43 @@ export function finishCreate(operationId: string): Promise<InstanceSummaryDto> {
 }
 
 /**
+ * Builds the progress channel a Command collects its stream through.
+ *
+ * Tauri deserializes this argument as a String in the `__CHANNEL__:<id>` form
+ * (`tauri/src/ipc/channel.rs`), and the payload is JSON-stringified, so a bare
+ * function arrives as nothing at all and the Command is rejected before it
+ * runs. A `Channel` is the counterpart that produces that id. Checking the
+ * wire form here turns the generic rejection into a message naming the cause.
+ */
+function progressChannel<T>(onEvent: (event: T) => void): Channel<T> {
+  const channel = new Channel<T>(onEvent);
+  const wire = channel.toJSON();
+  if (typeof wire !== 'string' || !wire.startsWith('__CHANNEL__:')) {
+    throw new Error(
+      `progress channel did not serialize to __CHANNEL__:<id> (got ${String(wire)})`,
+    );
+  }
+  return channel;
+}
+
+/**
  * F-063. Runs the install plan and streams progress.
  *
  * The channel is the progress; the returned promise resolves when every item has
- * settled. onEvent must be registered before invoking.
+ * settled. The handler is attached before invoking, since messages sent before
+ * a handler exists are not replayed.
+ *
+ * `async` on purpose: a channel that cannot be built is a rejection the screen
+ * already knows how to show, not a synchronous throw out of a click handler.
  */
-export function executeInstall(
+export async function executeInstall(
   req: InstallRequest,
   onEvent: (e: InstallEventDto) => void,
 ): Promise<InstallResultDto> {
+  const channel = progressChannel<InstallEventDto>(onEvent);
   return invoke<InstallResultDto>('execute_install', {
     req,
-    onEvent,
+    onEvent: channel,
   });
 }
 
@@ -161,13 +186,14 @@ export function planModpackInstall(req: ModpackInstallRequest): Promise<ModpackP
  * promise resolves once every write has settled; the channel ends on `done`
  * or `failed`, so the screen follows the events rather than the promise.
  */
-export function executeModpackInstall(
+export async function executeModpackInstall(
   req: ModpackInstallRequest,
   onEvent: (e: PackEventDto) => void,
 ): Promise<ModpackApplyResultDto> {
+  const channel = progressChannel<PackEventDto>(onEvent);
   return invoke<ModpackApplyResultDto>('execute_modpack_install', {
     req,
-    onEvent,
+    onEvent: channel,
   });
 }
 

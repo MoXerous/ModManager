@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
 import { cn } from 'cn';
@@ -58,6 +58,10 @@ export function ModpackPage() {
   const [result, setResult] = useState<ModpackApplyResultDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
+  // Every plan and apply takes the next id. A response that arrives after a
+  // newer request started describes paths the user has already left, so it is
+  // dropped instead of painted over the newer state.
+  const requestSeq = useRef(0);
 
   const loadInstances = useCallback(() => {
     setError(null);
@@ -84,8 +88,16 @@ export function ModpackPage() {
   );
 
   /** Any edit invalidates the plan: it describes a pair of paths that just
-   *  changed, so keeping it would be showing a truth about another install. */
+   *  changed, so keeping it would be showing a truth about another install.
+   *
+   *  While an install runs the fields describe the run on screen, so an edit is
+   *  a no-op: clearing here would wipe the progress of a job that is still
+   *  going and leave its eventual error with nothing to sit next to. */
   const change = (setter: (value: string) => void) => (value: string) => {
+    if (busy !== null) {
+      return;
+    }
+    requestSeq.current += 1;
     setter(value);
     setPlan(null);
     setRows([]);
@@ -126,15 +138,30 @@ export function ModpackPage() {
   const ready = packPath.trim().length > 0 && targetPath.length > 0;
 
   const preview = useCallback(() => {
+    const id = (requestSeq.current += 1);
     setBusy('plan');
     setError(null);
     setRows([]);
     setPackPhase(null);
     setResult(null);
     planModpackInstall(request())
-      .then(setPlan)
-      .catch((e) => setError(toIpcError(e)))
-      .finally(() => setBusy(null));
+      .then((next) => {
+        if (id === requestSeq.current) {
+          setPlan(next);
+        }
+      })
+      .catch((e) => {
+        if (id === requestSeq.current) {
+          setError(toIpcError(e));
+        }
+      })
+      .finally(() => {
+        // A newer request owns `busy` now; clearing it here would re-enable
+        // the fields mid-flight.
+        if (id === requestSeq.current) {
+          setBusy(null);
+        }
+      });
   }, [request]);
 
   const onEvent = useCallback((e: PackEventDto) => {
@@ -167,18 +194,38 @@ export function ModpackPage() {
     if (!plan) {
       return;
     }
+    const id = (requestSeq.current += 1);
     setBusy('apply');
     setError(null);
     setRows([]);
     setPackPhase(null);
     setResult(null);
-    executeModpackInstall(request(), onEvent)
-      .then(setResult)
-      .catch((e) => setError(toIpcError(e)))
-      .finally(() => setBusy(null));
+    // The channel is guarded by the same id as the promise: an event from a
+    // run the screen has moved past must not land in its rows.
+    executeModpackInstall(request(), (e) => {
+      if (id === requestSeq.current) {
+        onEvent(e);
+      }
+    })
+      .then((next) => {
+        if (id === requestSeq.current) {
+          setResult(next);
+        }
+      })
+      .catch((e) => {
+        if (id === requestSeq.current) {
+          setError(toIpcError(e));
+        }
+      })
+      .finally(() => {
+        if (id === requestSeq.current) {
+          setBusy(null);
+        }
+      });
   }, [onEvent, plan, request]);
 
   const discard = () => {
+    requestSeq.current += 1;
     setPlan(null);
     setRows([]);
     setPackPhase(null);
@@ -242,9 +289,10 @@ export function ModpackPage() {
               id="pack-path"
               value={packPath}
               onChange={(e) => change(setPackPath)(e.target.value)}
+              disabled={isBusy}
               dir="ltr"
               placeholder={t('pack.fieldPackPlaceholder')}
-              className="h-8 min-w-0 flex-1 rounded-control border border-input bg-surface-sunken px-2.5 font-mono text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="h-8 min-w-0 flex-1 rounded-control border border-input bg-surface-sunken px-2.5 font-mono text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60"
             />
             <Button
               type="button"
@@ -268,8 +316,9 @@ export function ModpackPage() {
             <select
               value={target}
               onChange={(e) => change(setTarget)(e.target.value)}
+              disabled={isBusy}
               aria-label={t('pack.fieldInstance')}
-              className="h-8 rounded-control border border-input bg-surface-sunken px-2 text-body text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="h-8 rounded-control border border-input bg-surface-sunken px-2 text-body text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60"
             >
               {instances.map((i) => (
                 <option key={i.id} value={i.id}>
