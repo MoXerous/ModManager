@@ -126,6 +126,7 @@ async fn mrpack_override_is_copied_with_its_bytes() {
     let plan = InstallPlan {
         ops: vec![InstallOp::CopyOverride {
             safe_path: "config/a.toml".to_string(),
+            source_layer: "overrides".to_string(),
         }],
     };
     let downloader = Downloader::new(1).expect("downloader");
@@ -153,7 +154,7 @@ async fn mrpack_override_is_copied_with_its_bytes() {
 }
 
 #[tokio::test]
-async fn mrpack_later_layer_overwrites_earlier_one() {
+async fn mrpack_override_is_copied_from_the_layer_the_plan_names() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -164,10 +165,12 @@ async fn mrpack_later_layer_overwrites_earlier_one() {
         &["client-overrides", "overrides", "server-overrides"],
         vec![],
     );
-    // The plan already collapsed the duplicate path: one op, two candidates.
+    // The planner already picked the winner; the executor must not pick again
+    // by "last layer that has the file" and accidentally copy a different one.
     let plan = InstallPlan {
         ops: vec![InstallOp::CopyOverride {
             safe_path: "config/a.toml".to_string(),
+            source_layer: "overrides".to_string(),
         }],
     };
     let downloader = Downloader::new(1).expect("downloader");
@@ -199,6 +202,7 @@ async fn mrpack_missing_override_is_refused() {
     let plan = InstallPlan {
         ops: vec![InstallOp::CopyOverride {
             safe_path: "config/gone.toml".to_string(),
+            source_layer: "overrides".to_string(),
         }],
     };
     let downloader = Downloader::new(1).expect("downloader");
@@ -347,6 +351,10 @@ async fn mrpack_wrong_hash_is_refused_and_leaves_no_file() {
         files_under(&instance).is_empty(),
         "no file or .part may survive a hash rejection"
     );
+    assert!(
+        !instance.join(".mm-staging").exists(),
+        "a failed apply must remove its staging directory too"
+    );
 }
 
 #[tokio::test]
@@ -360,6 +368,7 @@ async fn mrpack_path_escaping_the_instance_is_refused() {
     let plan = InstallPlan {
         ops: vec![InstallOp::CopyOverride {
             safe_path: "../evil.txt".to_string(),
+            source_layer: "overrides".to_string(),
         }],
     };
     let downloader = Downloader::new(1).expect("downloader");
@@ -401,6 +410,7 @@ fn mrpack_dry_run_writes_nothing() {
             },
             InstallOp::CopyOverride {
                 safe_path: "config/a.toml".to_string(),
+                source_layer: "overrides".to_string(),
             },
         ],
     };
@@ -418,11 +428,13 @@ fn mrpack_dry_run_writes_nothing() {
             size: Some(42),
         }
     );
+    assert!(!writes[0].overwrites, "nothing exists at the destination");
     assert_eq!(writes[1].safe_path, "config/a.toml");
     assert_eq!(writes[1].kind, PlannedWriteKind::Override);
+    assert!(!writes[1].overwrites, "nothing exists at the destination");
 
     // The free function produces the same list, and nothing touched the disk.
-    assert_eq!(dry_run(&plan).expect("dry run"), writes);
+    assert_eq!(dry_run(&plan, &instance).expect("dry run"), writes);
     assert!(!instance.exists(), "a dry run must not create the instance");
     assert!(
         files_under(&staging).is_empty(),
@@ -435,9 +447,13 @@ fn mrpack_dry_run_refuses_an_escaping_path() {
     let plan = InstallPlan {
         ops: vec![InstallOp::CopyOverride {
             safe_path: "mods/../../evil.txt".to_string(),
+            source_layer: "overrides".to_string(),
         }],
     };
-    assert!(matches!(dry_run(&plan), Err(ExecError::UnsafePath { .. })));
+    assert!(matches!(
+        dry_run(&plan, Path::new("unused-instance")),
+        Err(ExecError::UnsafePath { .. })
+    ));
 }
 
 #[tokio::test]
@@ -453,9 +469,11 @@ async fn mrpack_callback_receives_the_terminal_event_last() {
         ops: vec![
             InstallOp::CopyOverride {
                 safe_path: "a.txt".to_string(),
+                source_layer: "overrides".to_string(),
             },
             InstallOp::CopyOverride {
                 safe_path: "b.txt".to_string(),
+                source_layer: "overrides".to_string(),
             },
         ],
     };
@@ -485,5 +503,129 @@ async fn mrpack_callback_receives_the_terminal_event_last() {
             .count(),
         1,
         "exactly one terminal event"
+    );
+}
+
+#[test]
+fn mrpack_dry_run_marks_destinations_that_will_be_overwritten() {
+    let dir = crate::test_tempdir();
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).expect("staging");
+    let instance = dir.path().join("instance");
+    std::fs::create_dir_all(instance.join("config")).expect("config");
+    std::fs::write(instance.join("config/a.toml"), b"old").expect("seed");
+
+    let pack = pack_of(&["overrides"], vec![]);
+    let plan = InstallPlan {
+        ops: vec![
+            InstallOp::CopyOverride {
+                safe_path: "config/a.toml".to_string(),
+                source_layer: "overrides".to_string(),
+            },
+            InstallOp::CopyOverride {
+                safe_path: "config/new.toml".to_string(),
+                source_layer: "overrides".to_string(),
+            },
+        ],
+    };
+    let downloader = Downloader::new(1).expect("downloader");
+    let provider = client("http://127.0.0.1:9");
+    let executor = PlanExecutor::new(&provider, &downloader, &pack, &plan, &staging, &instance);
+
+    let writes = executor.dry_run().expect("dry run");
+    assert!(writes[0].overwrites, "an existing destination is replaced");
+    assert!(!writes[1].overwrites, "a missing destination is created");
+    assert_eq!(
+        std::fs::read(instance.join("config/a.toml")).expect("read"),
+        b"old",
+        "a dry run must not replace the file it reports"
+    );
+    assert!(!instance.join("config/new.toml").exists());
+}
+
+#[tokio::test]
+async fn mrpack_a_stale_staging_directory_is_removed_before_apply() {
+    let dir = crate::test_tempdir();
+    let staging = dir.path().join("staging");
+    write_fixture(&staging, "overrides/a.txt", b"a");
+    let instance = dir.path().join("instance");
+    std::fs::create_dir_all(instance.join(".mm-staging")).expect("stale staging");
+    std::fs::write(instance.join(".mm-staging/leftover.part"), b"stale").expect("leftover");
+
+    let pack = pack_of(&["overrides"], vec![]);
+    let plan = InstallPlan {
+        ops: vec![InstallOp::CopyOverride {
+            safe_path: "a.txt".to_string(),
+            source_layer: "overrides".to_string(),
+        }],
+    };
+    let downloader = Downloader::new(1).expect("downloader");
+    let provider = client("http://127.0.0.1:9");
+    let executor = PlanExecutor::new(&provider, &downloader, &pack, &plan, &staging, &instance);
+
+    executor.apply(&mut |_| {}).await.expect("applies");
+
+    assert_eq!(std::fs::read(instance.join("a.txt")).expect("read"), b"a");
+    assert!(
+        !instance.join(".mm-staging").exists(),
+        "a killed run's scratch directory must not survive the next apply"
+    );
+}
+
+#[tokio::test]
+async fn mrpack_overrides_extracted_into_the_staging_tree_survive_until_they_are_copied() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path().join("instance");
+    // The caller is allowed to extract the pack into the same scratch tree the
+    // downloads use; start-of-apply cleanup must not eat the overrides.
+    let staging = instance.join(".mm-staging");
+    write_fixture(&staging, "overrides/a.txt", b"a");
+
+    let pack = pack_of(&["overrides"], vec![]);
+    let plan = InstallPlan {
+        ops: vec![InstallOp::CopyOverride {
+            safe_path: "a.txt".to_string(),
+            source_layer: "overrides".to_string(),
+        }],
+    };
+    let downloader = Downloader::new(1).expect("downloader");
+    let provider = client("http://127.0.0.1:9");
+    let executor = PlanExecutor::new(&provider, &downloader, &pack, &plan, &staging, &instance);
+
+    executor.apply(&mut |_| {}).await.expect("applies");
+
+    assert_eq!(std::fs::read(instance.join("a.txt")).expect("read"), b"a");
+    assert!(
+        !instance.join(".mm-staging").exists(),
+        "the extraction tree is removed once the apply finishes"
+    );
+}
+
+#[tokio::test]
+async fn mrpack_a_plan_writing_an_app_managed_file_is_refused() {
+    let dir = crate::test_tempdir();
+    let staging = dir.path().join("staging");
+    write_fixture(&staging, "overrides/profile.json", b"{}");
+    let instance = dir.path().join("instance");
+
+    let pack = pack_of(&["overrides"], vec![]);
+    let plan = InstallPlan {
+        ops: vec![InstallOp::CopyOverride {
+            safe_path: "profile.json".to_string(),
+            source_layer: "overrides".to_string(),
+        }],
+    };
+    let downloader = Downloader::new(1).expect("downloader");
+    let provider = client("http://127.0.0.1:9");
+    let executor = PlanExecutor::new(&provider, &downloader, &pack, &plan, &staging, &instance);
+
+    let error = executor.apply(&mut |_| {}).await.expect_err("must refuse");
+    assert!(
+        matches!(error, ExecError::ReservedPath { .. }),
+        "unexpected error: {error}"
+    );
+    assert!(
+        !instance.join("profile.json").exists(),
+        "the application's own profile must not be replaced by a plan"
     );
 }

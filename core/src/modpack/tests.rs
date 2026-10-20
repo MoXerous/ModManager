@@ -152,3 +152,47 @@ fn mrpack_an_empty_pack_is_valid() {
     // The default layer still exists: a pack may ship no overrides folder.
     assert_eq!(pack.override_layers, vec!["overrides"]);
 }
+
+#[test]
+fn mrpack_a_file_path_ending_in_a_slash_is_refused() {
+    let path = one_file().replace("mods/sodium.jar", "mods/");
+    let raw = index_with(&path, "");
+    assert!(matches!(
+        parse_index(raw.as_bytes()),
+        Err(IndexError::DirectoryPath { .. })
+    ));
+}
+
+#[test]
+fn mrpack_a_file_path_that_is_app_managed_is_refused() {
+    for name in ["profile.json", "PROFILE.JSON", "instance.lock.json"] {
+        let path = one_file().replace("mods/sodium.jar", name);
+        let raw = index_with(&path, "");
+        match parse_index(raw.as_bytes()) {
+            Err(IndexError::ManagedPath { name: hit, .. }) => {
+                assert!(
+                    hit.eq_ignore_ascii_case(name),
+                    "the refusal must name the file: {hit:?} for {name:?}"
+                );
+            }
+            other => panic!("{name}: expected ManagedPath, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn mrpack_a_file_path_inside_the_staging_directory_is_refused() {
+    let path = one_file().replace("mods/sodium.jar", ".mm-staging/sodium.jar");
+    let raw = index_with(&path, "");
+    assert!(matches!(
+        parse_index(raw.as_bytes()),
+        Err(IndexError::StagingPath { .. })
+    ));
+}
+
+#[test]
+fn mrpack_a_layer_name_with_a_trailing_slash_is_normalised() {
+    let raw = index_with("", r#","clientOverrides":"client-overrides/""#);
+    let pack = parse_index(raw.as_bytes()).expect("parse");
+    assert_eq!(pack.override_layers, vec!["client-overrides", "overrides"]);
+}

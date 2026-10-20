@@ -22,6 +22,7 @@
 //! server layer entirely. Upgrade path: the installer composes three passes
 //! over the same extracted tree.
 
+use crate::instances::metadata::PROFILE_FILE_NAME;
 use crate::safety::path::{safe_member_name, NameError};
 use serde::Deserialize;
 use thiserror::Error;
@@ -30,6 +31,56 @@ use thiserror::Error;
 pub const INDEX_ENTRY: &str = "modrinth.index.json";
 /// The format version this build reads.
 pub const SUPPORTED_FORMAT_VERSION: u64 = 1;
+
+/// The executor's scratch directory at the instance root.
+///
+/// It is defined here, next to the destination policy, rather than in `exec`:
+/// the planner must refuse a pack that writes into the installer's own scratch
+/// space, and two constants drifting apart would reopen exactly that hole.
+pub const STAGING_DIR: &str = ".mm-staging";
+
+/// Root-level files this application writes and later reads as its own state.
+///
+/// `profile.json` is the portable instance mirror (`instances::metadata`) and
+/// `instance.lock.json` is the pinned install state (`instances::lock`). A pack
+/// that names one would swap app state for pack content: the next start could
+/// trust a forged profile, and a forged lock would rewrite what is pinned.
+/// Only the root is protected; `config/profile.json` is the user's file and
+/// the pack's business.
+pub const INSTANCE_MANAGED_FILES: [&str; 2] = [PROFILE_FILE_NAME, "instance.lock.json"];
+
+/// Why a path is reserved, when it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reserved {
+    /// A root-level file the application owns.
+    ManagedFile(&'static str),
+    /// The executor's scratch directory or anything below it.
+    Staging,
+}
+
+/// Returns why `safe_path` must not be a pack destination, if at all.
+///
+/// The comparison is ASCII case-insensitive because on Windows `PROFILE.JSON`
+/// lands on the same file as `profile.json`; refusing it on Linux too keeps
+/// one pack from installing on one system and replacing app state on another.
+pub fn reserved_destination(safe_path: &str) -> Option<Reserved> {
+    let (first, rest) = match safe_path.split_once('/') {
+        Some((first, rest)) => (first, Some(rest)),
+        None => (safe_path, None),
+    };
+    if first.eq_ignore_ascii_case(STAGING_DIR) {
+        return Some(Reserved::Staging);
+    }
+    if rest.is_none() {
+        if let Some(name) = INSTANCE_MANAGED_FILES
+            .iter()
+            .find(|name| first.eq_ignore_ascii_case(name))
+        {
+            return Some(Reserved::ManagedFile(name));
+        }
+    }
+    None
+}
 
 fn default_overrides() -> String {
     "overrides".to_string()
@@ -148,6 +199,15 @@ pub enum IndexError {
     NoDownload { path: String },
     #[error("pack file {path:?} has an empty sha512")]
     EmptyHash { path: String },
+    // `safe_member_name` keeps a trailing slash because a ZIP member may be a
+    // directory. An index entry names a file, so the same shape is a mistake
+    // that would otherwise become a directory-shaped write target.
+    #[error("pack file {path:?} ends with '/'; a pack file is never a directory")]
+    DirectoryPath { path: String },
+    #[error("pack file {path:?} would overwrite the application-managed file {name:?}")]
+    ManagedPath { path: String, name: String },
+    #[error("pack file {path:?} targets the installer's staging directory")]
+    StagingPath { path: String },
 }
 
 /// Reads and validates `modrinth.index.json`.
@@ -174,6 +234,25 @@ pub fn parse_index(bytes: &[u8]) -> Result<Pack, IndexError> {
             path: f.path.clone(),
             reason,
         })?;
+        if safe_path.ends_with('/') {
+            return Err(IndexError::DirectoryPath {
+                path: f.path.clone(),
+            });
+        }
+        match reserved_destination(&safe_path) {
+            Some(Reserved::ManagedFile(name)) => {
+                return Err(IndexError::ManagedPath {
+                    path: f.path.clone(),
+                    name: name.to_string(),
+                });
+            }
+            Some(Reserved::Staging) => {
+                return Err(IndexError::StagingPath {
+                    path: f.path.clone(),
+                });
+            }
+            None => {}
+        }
         if f.downloads.is_empty() {
             return Err(IndexError::NoDownload {
                 path: f.path.clone(),
@@ -220,7 +299,12 @@ pub fn parse_index(bytes: &[u8]) -> Result<Pack, IndexError> {
             path: layer.clone(),
             reason,
         })?;
-        override_layers.push(name);
+        // A layer is a folder. `safe_member_name` keeps the trailing slash it
+        // allows for directory members, so strip exactly one, the same rule
+        // `inspect_zip` uses for its collision key. Without this a pack that
+        // says `"clientOverrides": "client-overrides/"` matches no member and
+        // its whole layer vanishes with no error.
+        override_layers.push(name.strip_suffix('/').unwrap_or(&name).to_string());
     }
 
     Ok(Pack {

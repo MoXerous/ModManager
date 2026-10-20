@@ -13,12 +13,12 @@
 //! job is the *format*-specific part: which member is the index, and what the
 //! index asks to be done.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek};
 
 use zip::ZipArchive;
 
-use super::mrpack::{parse_index, IndexError, Pack};
+use super::mrpack::{parse_index, reserved_destination, IndexError, Pack, Reserved};
 use crate::safety::inspect::{inspect_zip, read_limited, ArchiveLimits, MemberInfo};
 use crate::safety::path::safe_member_name;
 
@@ -46,6 +46,15 @@ pub enum PackError {
     },
     #[error("pack file {path:?} would land outside the instance")]
     OutsideInstance { path: String },
+    // The three checks below also run in `parse_index`. They run again here
+    // because `plan_install` accepts a `Pack` that a caller could have built
+    // without going through the parser.
+    #[error("pack destination {path:?} ends with '/'; a pack file is never a directory")]
+    DirectoryPath { path: String },
+    #[error("pack destination {path:?} would overwrite the application-managed file {name:?}")]
+    ManagedPath { path: String, name: String },
+    #[error("pack destination {path:?} targets the installer's staging directory")]
+    StagingPath { path: String },
 }
 
 /// One thing the pack wants done.
@@ -58,7 +67,15 @@ pub enum InstallOp {
         size: Option<u64>,
     },
     /// Copy an override that is already inside the archive.
-    CopyOverride { safe_path: String },
+    ///
+    /// `source_layer` is the layer folder the winning copy lives under. The
+    /// plan names it instead of leaving the executor to re-derive it: with
+    /// several layers holding the same path, only this field says which bytes
+    /// the user was shown.
+    CopyOverride {
+        safe_path: String,
+        source_layer: String,
+    },
 }
 
 /// The whole of what a pack asks for, before any of it is done.
@@ -127,41 +144,90 @@ pub fn read_pack_bytes(bytes: &[u8], limits: &ArchiveLimits) -> Result<Pack, Pac
 /// Override files are the archive members that sit under a declared layer.
 /// The layer order matters and is the format's, not ours: client, then
 /// overrides, then server, each overwriting the last.
+///
+/// The inventory is in central-directory order, which says nothing about
+/// precedence. Iterating the layers first and the members second is what makes
+/// the collapse follow the format: a pack that lists `server-overrides` before
+/// `overrides` in the zip still gets the server file, because the layer loop
+/// visits `overrides` first and inserts the server value last.
 pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan, PackError> {
-    let layers: BTreeSet<&str> = pack.override_layers.iter().map(String::as_str).collect();
-    let mut ops: Vec<InstallOp> = pack
-        .files
-        .iter()
-        .map(|f| InstallOp::Download {
-            safe_path: f.safe_path.clone(),
-            sha512: f.sha512.clone(),
-            size: f.file_size,
-        })
-        .collect();
-
-    // Later layers overwrite earlier ones, so a path seen twice is one file
-    // in the plan, not two. `BTreeMap::insert` keeps the *first* position and
-    // takes the *last* value, which is exactly what a layer stack should do
-    // to a listing: the order the user reads stays stable, the content is the
-    // one that would actually win.
     let mut overrides: BTreeMap<String, InstallOp> = BTreeMap::new();
-    for member in inventory {
-        if member.is_dir {
+    for layer in &pack.override_layers {
+        // Defence in depth: `parse_index` already strips this, but a `Pack`
+        // can be built by hand and handed to this function.
+        let layer = layer.strip_suffix('/').unwrap_or(layer);
+        if layer.is_empty() {
             continue;
         }
-        let Some((layer, rest)) = member.name.split_once('/') else {
-            continue;
-        };
-        if !layers.contains(layer) {
-            continue;
-        }
-        let safe = safe_member_name(rest).map_err(|reason| PackError::Name {
-            path: member.name.clone(),
+        let layer = safe_member_name(layer).map_err(|reason| PackError::Name {
+            path: layer.to_string(),
             reason,
         })?;
-        overrides.insert(safe.clone(), InstallOp::CopyOverride { safe_path: safe });
+        let prefix = format!("{layer}/");
+        for member in inventory {
+            if member.is_dir {
+                continue;
+            }
+            let Some(rest) = member.name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let safe = safe_member_name(rest).map_err(|reason| PackError::Name {
+                path: member.name.clone(),
+                reason,
+            })?;
+            // A file member whose name ends in '/' is a directory entry that
+            // the inspector did not classify as one; it has no bytes to copy.
+            if safe.ends_with('/') {
+                continue;
+            }
+            check_reserved(&safe, &member.name)?;
+            overrides.insert(
+                safe.clone(),
+                InstallOp::CopyOverride {
+                    safe_path: safe,
+                    source_layer: layer.clone(),
+                },
+            );
+        }
+    }
+
+    let mut ops = Vec::with_capacity(pack.files.len() + overrides.len());
+    for file in &pack.files {
+        if file.safe_path.ends_with('/') {
+            return Err(PackError::DirectoryPath {
+                path: file.safe_path.clone(),
+            });
+        }
+        check_reserved(&file.safe_path, &file.safe_path)?;
+        // An override for the same destination wins. The format applies the
+        // override layers after the index files, and the bundled bytes are the
+        // author's final word: the file is in the archive the user chose, so a
+        // later download of the same path could only undo that choice. The
+        // winner is a `CopyOverride`, so the executor never fetches a file it
+        // would immediately replace.
+        if overrides.contains_key(&file.safe_path) {
+            continue;
+        }
+        ops.push(InstallOp::Download {
+            safe_path: file.safe_path.clone(),
+            sha512: file.sha512.clone(),
+            size: file.file_size,
+        });
     }
     ops.extend(overrides.into_values());
 
     Ok(InstallPlan { ops })
+}
+
+fn check_reserved(safe_path: &str, original: &str) -> Result<(), PackError> {
+    match reserved_destination(safe_path) {
+        Some(Reserved::ManagedFile(name)) => Err(PackError::ManagedPath {
+            path: original.to_string(),
+            name: name.to_string(),
+        }),
+        Some(Reserved::Staging) => Err(PackError::StagingPath {
+            path: original.to_string(),
+        }),
+        None => Ok(()),
+    }
 }

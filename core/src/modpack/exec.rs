@@ -21,8 +21,8 @@
 //!
 //! shortcut: layer precedence is a plain last-one-wins copy. `client-
 //! overrides`, then `overrides`, then `server-overrides`, each replacing the
-//! previous file; the plan already collapsed duplicate paths, so there is one
-//! op per path and the source is the last layer that actually holds it.
+//! previous file; the plan already collapsed duplicate paths and names the
+//! winning layer, so this module copies exactly that layer's bytes.
 //! Ceiling: a server install and a client install get the same files. Upgrade
 //! path: filter layers by the requested `Side` once `archive` learns to take a
 //! side, then keep this loop unchanged.
@@ -34,11 +34,13 @@
 //! module owns the profile shape.
 //!
 //! shortcut: no crash recovery for a half-applied plan. Each file is atomic,
-//! so a crash leaves whole files and possibly a `.mm-staging` leftover, never
-//! a torn one; but nothing records which ops finished. Ceiling: a retry
-//! re-copies overrides and re-hashes downloads (an already-valid destination
-//! is skipped by hash), which is correct if wasteful. Upgrade path: journal
-//! each op through `journal`, exactly as `downloader::execute_batch` does.
+//! so a crash leaves whole files and at worst a `.mm-staging` directory, never
+//! a torn file; nothing records which ops finished. Ceiling: a retry re-copies
+//! overrides and re-hashes downloads (an already-valid destination is skipped
+//! by hash), which is correct if wasteful. Upgrade path: journal each op
+//! through `journal`, exactly as `downloader::execute_batch` does. The staging
+//! directory is removed at the start of every apply, so a killed run cannot
+//! feed a later one, and at the end of every apply, success or failure.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -46,20 +48,18 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use super::archive::{InstallOp, InstallPlan};
-use super::mrpack::Pack;
+use super::mrpack::{reserved_destination, Pack, STAGING_DIR};
 use crate::downloader::client::DownloadError;
 use crate::downloader::{DownloadPhase, DownloadProgress, DownloadRequest, Downloader};
 use crate::providers::{HashAlgo, Provider};
 use crate::safety::atomic::{part_path, write_atomic, AtomicError};
 use crate::safety::path::{safe_member_name, NameError};
 
-/// Where a download is staged before it earns its destination.
-///
-/// Inside the instance root on purpose: the free-space preflight and the final
-/// copy stay on one volume, and a failed run leaves nothing on `C:`. This is
-/// the one path written outside the plan, and every file in it is removed as
-/// soon as it is committed or rejected.
-const STAGING_DIR: &str = ".mm-staging";
+/// How many times removing the staging directory is retried. A scanner or an
+/// antivirus can hold a handle on a fresh file for a moment on Windows; the
+/// same reason `safety::atomic` retries its renames.
+const STAGING_REMOVE_ATTEMPTS: u32 = 3;
+const STAGING_REMOVE_WAIT_MS: u64 = 50;
 
 /// Progress phases as i18n keys, never as display words (`AGENTS.md` §5.9).
 pub mod phase {
@@ -154,6 +154,12 @@ pub struct ApplyReport {
 pub struct PlannedWrite {
     pub safe_path: String,
     pub kind: PlannedWriteKind,
+    /// True when a file already sits at the destination and the apply will
+    /// replace it; false when the apply creates it. A download whose bytes
+    /// already match is skipped instead of rewritten, so this is existence,
+    /// not "the bytes will change". There is no backup: the plan is the
+    /// user's chance to see the replacement before it happens.
+    pub overwrites: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,10 +171,12 @@ pub enum PlannedWriteKind {
 #[derive(Debug, thiserror::Error)]
 pub enum ExecError {
     // `NameError` is Debug-only, same convention as `mrpack.rs`.
-    #[error("plan destination {path:?} is unsafe: {reason:?}")]
+    #[error("plan path {path:?} is unsafe: {reason:?}")]
     UnsafePath { path: String, reason: NameError },
     #[error("plan destination {path:?} is a directory, not a file")]
     NotAFile { path: String },
+    #[error("plan destination {path:?} is reserved by the application")]
+    ReservedPath { path: String },
     #[error("destination {} escapes the instance root", .0.display())]
     Escape(PathBuf),
     #[error("override {path:?} is not in the extracted pack tree")]
@@ -196,29 +204,42 @@ pub enum ExecError {
     Internal(&'static str),
 }
 
-/// Lists what applying `plan` would write, without touching the disk.
+/// Lists what applying `plan` to `instance_root` would write, without touching
+/// the disk.
 ///
 /// The paths get the same validation the real run gives them, so an unsafe
 /// plan is refused here too rather than only halfway through an install.
-pub fn dry_run(plan: &InstallPlan) -> Result<Vec<PlannedWrite>, ExecError> {
+/// `overwrites` is answered from the filesystem: the user sees which
+/// destinations replace an existing file before anything is written.
+pub fn dry_run(plan: &InstallPlan, instance_root: &Path) -> Result<Vec<PlannedWrite>, ExecError> {
     let mut out = Vec::with_capacity(plan.ops.len());
     for op in &plan.ops {
         match op {
-            InstallOp::CopyOverride { safe_path } => out.push(PlannedWrite {
-                safe_path: checked_relative(safe_path)?,
-                kind: PlannedWriteKind::Override,
-            }),
+            InstallOp::CopyOverride { safe_path, .. } => {
+                let rel = checked_relative(safe_path)?;
+                let overwrites = destination(instance_root, &rel)?.is_file();
+                out.push(PlannedWrite {
+                    safe_path: rel,
+                    kind: PlannedWriteKind::Override,
+                    overwrites,
+                });
+            }
             InstallOp::Download {
                 safe_path,
                 sha512,
                 size,
-            } => out.push(PlannedWrite {
-                safe_path: checked_relative(safe_path)?,
-                kind: PlannedWriteKind::Download {
-                    sha512: sha512.clone(),
-                    size: *size,
-                },
-            }),
+            } => {
+                let rel = checked_relative(safe_path)?;
+                let overwrites = destination(instance_root, &rel)?.is_file();
+                out.push(PlannedWrite {
+                    safe_path: rel,
+                    kind: PlannedWriteKind::Download {
+                        sha512: sha512.clone(),
+                        size: *size,
+                    },
+                    overwrites,
+                });
+            }
         }
     }
     Ok(out)
@@ -265,9 +286,10 @@ impl<'a> PlanExecutor<'a> {
         self
     }
 
-    /// The list of writes an [`apply`](Self::apply) would perform.
+    /// The list of writes an [`apply`](Self::apply) would perform, including
+    /// which destinations replace a file that is already there.
     pub fn dry_run(&self) -> Result<Vec<PlannedWrite>, ExecError> {
-        dry_run(self.plan)
+        dry_run(self.plan, self.instance_root)
     }
 
     /// Applies the plan, reporting through `on_event`.
@@ -283,8 +305,26 @@ impl<'a> PlanExecutor<'a> {
         &self,
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<ApplyReport, ExecError> {
+        // A staging tree from a killed run is never resumed: the decision is
+        // that `.mm-staging` only exists while an apply is running. Removing
+        // it first also makes the terminal event below mean "no scratch files
+        // anywhere", not just "no scratch files we happened to create".
+        //
+        // Unless the caller extracted the pack into that same tree: then this
+        // directory holds the overrides this plan is about to copy. It is
+        // still removed at the end, when nothing needs it any more.
+        if !self
+            .staging_root
+            .starts_with(self.instance_root.join(STAGING_DIR))
+        {
+            self.remove_staging().await;
+        }
         let mut report = ApplyReport::default();
-        match self.apply_ops(&mut report, on_event).await {
+        let outcome = self.apply_ops(&mut report, on_event).await;
+        // Runs on both paths, before the terminal event: a failed apply must
+        // not leave its scratch directory visible to the instance scan either.
+        self.remove_staging().await;
+        match outcome {
             Ok(()) => {
                 on_event(&PackEvent::operation(phase::DONE));
                 Ok(report)
@@ -296,14 +336,49 @@ impl<'a> PlanExecutor<'a> {
         }
     }
 
+    /// Deletes `<instance_root>/.mm-staging` with bounded retries.
+    ///
+    /// shortcut: this is best-effort against a handle another process holds
+    /// open. If every attempt fails, the directory stays and the next apply
+    /// removes it first, so it cannot accumulate or feed a later install.
+    /// Upgrade path: an explicit error or a cleanup queue in the journal if a
+    /// real case ever shows a permanently locked file.
+    async fn remove_staging(&self) {
+        let staging = self.instance_root.join(STAGING_DIR);
+        for attempt in 1..=STAGING_REMOVE_ATTEMPTS {
+            match std::fs::remove_dir_all(&staging) {
+                Ok(()) => return,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+                Err(_) if attempt < STAGING_REMOVE_ATTEMPTS => {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        STAGING_REMOVE_WAIT_MS * u64::from(attempt),
+                    ))
+                    .await;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %staging.display(),
+                        error = %e,
+                        "could not remove the pack staging directory"
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
     async fn apply_ops(
         &self,
         report: &mut ApplyReport,
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<(), ExecError> {
         for op in &self.plan.ops {
-            if let InstallOp::CopyOverride { safe_path } = op {
-                self.apply_override(safe_path, report, on_event)?;
+            if let InstallOp::CopyOverride {
+                safe_path,
+                source_layer,
+            } = op
+            {
+                self.apply_override(safe_path, source_layer, report, on_event)?;
             }
         }
 
@@ -338,13 +413,14 @@ impl<'a> PlanExecutor<'a> {
     fn apply_override(
         &self,
         safe_path: &str,
+        source_layer: &str,
         report: &mut ApplyReport,
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<(), ExecError> {
         let rel = checked_relative(safe_path)?;
         let dest = destination(self.instance_root, &rel)?;
         reject_link_ancestors(self.instance_root, &dest)?;
-        let (layer, src) = self.override_source(&rel)?;
+        let (layer, src) = self.override_source(&rel, source_layer)?;
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| io_err("create_dir", parent, e))?;
@@ -362,20 +438,29 @@ impl<'a> PlanExecutor<'a> {
         Ok(())
     }
 
-    /// The last layer in `pack.override_layers` that actually holds the path
-    /// wins: that is the format's order, and the plan collapsed duplicates
-    /// without remembering which layer supplied the content.
-    fn override_source(&self, rel: &str) -> Result<(String, PathBuf), ExecError> {
-        let mut found: Option<(String, PathBuf)> = None;
-        for layer in &self.pack.override_layers {
-            let candidate = self.staging_root.join(layer).join(rel);
-            if candidate.is_file() {
-                found = Some((layer.clone(), candidate));
-            }
+    /// Reads the copy from the layer the plan named.
+    ///
+    /// The plan chose the winner (the format's layer order); the executor must
+    /// not choose again. It still validates the layer name and requires the
+    /// file to exist, so a hand-built plan cannot point the read outside the
+    /// staging tree.
+    fn override_source(
+        &self,
+        rel: &str,
+        source_layer: &str,
+    ) -> Result<(String, PathBuf), ExecError> {
+        let layer = source_layer.strip_suffix('/').unwrap_or(source_layer);
+        let layer = safe_member_name(layer).map_err(|reason| ExecError::UnsafePath {
+            path: source_layer.to_string(),
+            reason,
+        })?;
+        let src = self.staging_root.join(&layer).join(rel);
+        if !src.is_file() {
+            return Err(ExecError::MissingOverride {
+                path: rel.to_string(),
+            });
         }
-        found.ok_or_else(|| ExecError::MissingOverride {
-            path: rel.to_string(),
-        })
+        Ok((layer, src))
     }
 
     /// Maps a lowercased SHA-512 to the URL of the provider file with that
@@ -490,6 +575,12 @@ impl<'a> PlanExecutor<'a> {
             std::fs::create_dir_all(parent).map_err(|e| io_err("create_dir", parent, e))?;
         }
         let staging = self.instance_root.join(STAGING_DIR);
+        // A pre-planted symlink or junction here would send every staged byte
+        // outside the instance. `apply` removed the directory first, so what
+        // exists now is either nothing or something that appeared in between.
+        if is_link_or_reparse(&staging) {
+            return Err(ExecError::Escape(staging));
+        }
         std::fs::create_dir_all(&staging).map_err(|e| io_err("create_dir", &staging, e))?;
         let staged = staging_target(&staging, &want, &dest);
 
@@ -545,7 +636,6 @@ impl<'a> PlanExecutor<'a> {
                         .map_err(|e| io_err("open", &outcome.path, e))?;
                     let bytes = write_atomic(&dest, &mut f)?;
                     let _ = std::fs::remove_file(&outcome.path);
-                    let _ = std::fs::remove_dir(&staging);
                     report.written.push(AppliedFile {
                         safe_path: rel.clone(),
                         bytes,
@@ -559,10 +649,11 @@ impl<'a> PlanExecutor<'a> {
             }
         }
 
-        // Hash rejections delete their `.part`; an empty staging dir is noise,
-        // so it goes too. A transport failure may keep a resumable `.part`,
-        // which is why `remove_dir` (empty only) is the right call.
-        let _ = std::fs::remove_dir(&staging);
+        // Whatever is left in staging (a hash rejection deletes its `.part`,
+        // a transport failure may keep one) is removed by `apply`'s cleanup,
+        // which runs on success and failure alike. There is no resume across
+        // applies by decision, so an early `remove_dir` would only race the
+        // cleanup without buying anything.
         Err(last_error.unwrap_or(ExecError::NoDownloadSource {
             path: rel,
             sha512: want,
@@ -580,6 +671,13 @@ fn checked_relative(safe_path: &str) -> Result<String, ExecError> {
     })?;
     if normalized.ends_with('/') {
         return Err(ExecError::NotAFile {
+            path: safe_path.to_string(),
+        });
+    }
+    // Same reason as the name check: the planner refused these, but the plan
+    // is data and may have been built elsewhere.
+    if reserved_destination(&normalized).is_some() {
+        return Err(ExecError::ReservedPath {
             path: safe_path.to_string(),
         });
     }
