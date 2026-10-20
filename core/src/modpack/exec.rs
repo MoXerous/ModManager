@@ -582,7 +582,7 @@ impl<'a> PlanExecutor<'a> {
             return Err(ExecError::Escape(staging));
         }
         std::fs::create_dir_all(&staging).map_err(|e| io_err("create_dir", &staging, e))?;
-        let staged = staging_target(&staging, &want, &dest);
+        let staged = staging_target(&staging, &want, &dest)?;
 
         let mut last_error: Option<ExecError> = None;
         for url in urls {
@@ -731,9 +731,21 @@ fn is_link_or_reparse(path: &Path) -> bool {
     }
 }
 
-/// Sibling-free staging name that still ends in the destination's extension.
-fn staging_target(staging_root: &Path, sha512: &str, dest: &Path) -> PathBuf {
-    let prefix = sha512.get(..16).unwrap_or(sha512);
+/// Sibling-named staging file, built only from hex characters of the hash.
+///
+/// The name comes from two sources and both are tamed: the SHA-512 is an
+/// index-controlled string, so only `[0-9a-f]` characters may contribute to
+/// it (`get(..16)` on a multibyte digest used to fall back to the whole
+/// string, letting `../` or `/` inside it pass through into the path), and
+/// the destination's file name has no separators by construction. The
+/// containment assertion mirrors `destination`: a scratch path under the
+/// staging root must never resolve outside that root, whatever the inputs.
+fn staging_target(staging_root: &Path, sha512: &str, dest: &Path) -> Result<PathBuf, ExecError> {
+    let prefix: String = sha512
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(16)
+        .collect();
     let name: String = dest
         .file_name()
         .and_then(|n| n.to_str())
@@ -741,7 +753,13 @@ fn staging_target(staging_root: &Path, sha512: &str, dest: &Path) -> PathBuf {
         .chars()
         .take(120)
         .collect();
-    staging_root.join(format!("{prefix}-{name}"))
+    let staged = staging_root.join(format!("{prefix}-{name}"));
+    // Defence in depth: the construction above cannot escape, but a helper
+    // that builds a path out of unvalidated input must still assert it.
+    if !staged.starts_with(staging_root) {
+        return Err(ExecError::Escape(staged));
+    }
+    Ok(staged)
 }
 
 async fn sha512_of(path: &Path) -> Result<String, ExecError> {

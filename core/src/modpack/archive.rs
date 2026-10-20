@@ -13,12 +13,13 @@
 //! job is the *format*-specific part: which member is the index, and what the
 //! index asks to be done.
 
-use std::collections::BTreeMap;
+use std::collections::{btree_map::Entry, BTreeMap};
 use std::io::{Cursor, Read, Seek};
 
+use unicode_normalization::UnicodeNormalization;
 use zip::ZipArchive;
 
-use super::mrpack::{parse_index, reserved_destination, IndexError, Pack, Reserved};
+use super::mrpack::{parse_index, reserved_destination, IndexError, Pack, PackFile, Reserved};
 use crate::safety::inspect::{inspect_zip, read_limited, ArchiveLimits, MemberInfo};
 use crate::safety::path::safe_member_name;
 
@@ -55,6 +56,8 @@ pub enum PackError {
     ManagedPath { path: String, name: String },
     #[error("pack destination {path:?} targets the installer's staging directory")]
     StagingPath { path: String },
+    #[error("pack file {path:?} is listed for one destination with two different sha512 hashes; the index contradicts itself")]
+    Contradiction { path: String },
 }
 
 /// One thing the pack wants done.
@@ -139,6 +142,19 @@ pub fn read_pack_bytes(bytes: &[u8], limits: &ArchiveLimits) -> Result<Pack, Pac
     read_pack(&mut zip, limits).map(|(pack, _)| pack)
 }
 
+/// Destination collision key: strip one trailing `/`, lowercase, then NFC.
+///
+/// This is the exact rule `safety::inspect::collision_key` applies to ZIP
+/// member names (private there, so it is repeated here and must never
+/// diverge): on Windows `mods/x.jar` and `mods/X.jar` are the same file, so
+/// a collapse decided on the raw spelling would install two different ops
+/// against one destination. Lowercase-then-NFC because lowercasing can
+/// denormalize.
+fn destination_key(safe_path: &str) -> String {
+    let stripped = safe_path.strip_suffix('/').unwrap_or(safe_path);
+    stripped.to_lowercase().nfc().collect()
+}
+
 /// Turns a pack plus the archive inventory into the work list.
 ///
 /// Override files are the archive members that sit under a declared layer.
@@ -151,6 +167,39 @@ pub fn read_pack_bytes(bytes: &[u8], limits: &ArchiveLimits) -> Result<Pack, Pac
 /// `overrides` in the zip still gets the server file, because the layer loop
 /// visits `overrides` first and inserts the server value last.
 pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan, PackError> {
+    // Duplicate decision for `files[]` entries naming one destination, keyed
+    // on [`destination_key`]:
+    //
+    // * SAME sha512 (ASCII case-insensitive): one file listed twice over
+    //   different transports. The entries promise byte-identical content for
+    //   one destination, so they collapse to a single download. Emitting two
+    //   ops instead would render two plan rows for one file and leave one
+    //   download silently winning, which the user cannot see.
+    //
+    // * DIFFERENT sha512: the index contradicts itself — two different files
+    //   cannot both live at one destination, and the format gives no
+    //   precedence rule for `files[]` order. The pack is refused
+    //   ([`PackError::Contradiction`]) rather than silently resolved to
+    //   last-wins.
+    let mut settled: BTreeMap<String, String> = BTreeMap::new();
+    let mut collapsed: Vec<&PackFile> = Vec::with_capacity(pack.files.len());
+    for file in &pack.files {
+        let sha = file.sha512.to_lowercase();
+        match settled.entry(destination_key(&file.safe_path)) {
+            Entry::Vacant(slot) => {
+                slot.insert(sha);
+                collapsed.push(file);
+            }
+            Entry::Occupied(slot) => {
+                if slot.get() != &sha {
+                    return Err(PackError::Contradiction {
+                        path: file.safe_path.clone(),
+                    });
+                }
+            }
+        }
+    }
+
     let mut overrides: BTreeMap<String, InstallOp> = BTreeMap::new();
     for layer in &pack.override_layers {
         // Defence in depth: `parse_index` already strips this, but a `Pack`
@@ -182,7 +231,7 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
             }
             check_reserved(&safe, &member.name)?;
             overrides.insert(
-                safe.clone(),
+                destination_key(&safe),
                 InstallOp::CopyOverride {
                     safe_path: safe,
                     source_layer: layer.clone(),
@@ -191,8 +240,8 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
         }
     }
 
-    let mut ops = Vec::with_capacity(pack.files.len() + overrides.len());
-    for file in &pack.files {
+    let mut ops = Vec::with_capacity(collapsed.len() + overrides.len());
+    for file in collapsed {
         if file.safe_path.ends_with('/') {
             return Err(PackError::DirectoryPath {
                 path: file.safe_path.clone(),
@@ -205,7 +254,7 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
         // later download of the same path could only undo that choice. The
         // winner is a `CopyOverride`, so the executor never fetches a file it
         // would immediately replace.
-        if overrides.contains_key(&file.safe_path) {
+        if overrides.contains_key(&destination_key(&file.safe_path)) {
             continue;
         }
         ops.push(InstallOp::Download {

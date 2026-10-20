@@ -11,16 +11,33 @@ use super::archive::{plan_install, read_pack_bounded, InstallOp, PackError, MAX_
 use super::mrpack::IndexError;
 use crate::safety::inspect::ArchiveLimits;
 
-const INDEX: &str = r#"{"formatVersion":1,"game":"minecraft","versionId":"v1","name":"Pack",
- "files":[{"path":"mods/sodium.jar","hashes":{"sha1":"a","sha512":"bb"},
-           "downloads":["https://cdn.modrinth.com/x.jar"],"fileSize":10}]}"#;
+fn sha128(hex: char) -> String {
+    (0..128).map(|_| hex).collect()
+}
 
-fn index_for(file_path: &str, extra: &str) -> String {
+fn index_json(files: &str, extra: &str) -> String {
     format!(
         r#"{{"formatVersion":1,"game":"minecraft","versionId":"v1","name":"Pack",
-            "files":[{{"path":{file_path:?},"hashes":{{"sha1":"a","sha512":"bb"}},
-                      "downloads":["https://cdn.modrinth.com/x.jar"],"fileSize":10}}]{extra}}}"#
+         "files":[{files}]{extra}}}"#
     )
+}
+
+fn one_download_for(path: &str, sha: &str) -> String {
+    format!(
+        r#"{{"path":"{path}","hashes":{{"sha1":"a","sha512":"{sha}"}},
+          "downloads":["https://cdn.modrinth.com/x.jar"],"fileSize":10}}"#
+    )
+}
+
+/// An index naming one download; `extra` splices in pack-level fields.
+fn index_for(file_path: &str, extra: &str) -> String {
+    index_json(&one_download_for(file_path, &sha128('a')), extra)
+}
+
+/// The well-formed single-download index the suite shares, now that a real
+/// SHA-512 stub is 128 hex characters long and `String`-sized.
+fn default_index() -> String {
+    index_for("mods/sodium.jar", "")
 }
 
 fn zip_of(entries: &[(&str, &str)]) -> Vec<u8> {
@@ -41,7 +58,7 @@ fn open(bytes: &[u8]) -> (super::mrpack::Pack, Vec<crate::safety::inspect::Membe
 #[test]
 fn mrpack_a_well_formed_pack_plans_one_download_per_index_file() {
     let bytes = zip_of(&[
-        ("modrinth.index.json", INDEX),
+        ("modrinth.index.json", &default_index()),
         ("overrides/config/x.toml", "a = 1"),
     ]);
     let (pack, inventory) = open(&bytes);
@@ -51,7 +68,7 @@ fn mrpack_a_well_formed_pack_plans_one_download_per_index_file() {
     assert_eq!(plan.overrides(), 1);
     assert!(plan.ops.contains(&InstallOp::Download {
         safe_path: "mods/sodium.jar".to_string(),
-        sha512: "bb".to_string(),
+        sha512: sha128('a'),
         size: Some(10),
     }));
     assert!(plan.ops.contains(&InstallOp::CopyOverride {
@@ -72,15 +89,18 @@ fn mrpack_an_archive_without_an_index_is_refused() {
 
 #[test]
 fn mrpack_an_oversized_index_is_refused_before_it_is_read() {
-    let bytes = zip_of(&[("modrinth.index.json", INDEX)]);
+    let bytes = zip_of(&[("modrinth.index.json", &default_index())]);
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
     match read_pack_bounded(&mut z, &ArchiveLimits::default(), 8) {
         Err(PackError::IndexTooLarge { limit: 8, .. }) => {}
         other => panic!("expected IndexTooLarge, got {other:?}"),
     }
     // The production ceiling still admits the same archive.
-    let mut z2 =
-        zip::ZipArchive::new(Cursor::new(zip_of(&[("modrinth.index.json", INDEX)]))).expect("zip");
+    let mut z2 = zip::ZipArchive::new(Cursor::new(zip_of(&[(
+        "modrinth.index.json",
+        &default_index(),
+    )])))
+    .expect("zip");
     assert!(read_pack_bounded(&mut z2, &ArchiveLimits::default(), MAX_INDEX_BYTES).is_ok());
 }
 
@@ -89,7 +109,7 @@ fn mrpack_a_traversing_override_member_is_refused_by_the_inspector() {
     // `inspect_zip` runs first and rejects the name outright, so the reader
     // never reaches the index. Two gates, and the outer one is the older.
     let bytes = zip_of(&[
-        ("modrinth.index.json", INDEX),
+        ("modrinth.index.json", &default_index()),
         ("overrides/../../escape.toml", "nope"),
     ]);
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
@@ -134,7 +154,7 @@ fn mrpack_a_later_layer_wins_the_same_path_instead_of_adding_it_twice() {
 #[test]
 fn mrpack_members_outside_a_declared_layer_are_not_installed() {
     let bytes = zip_of(&[
-        ("modrinth.index.json", INDEX),
+        ("modrinth.index.json", &default_index()),
         ("random/payload.bin", "junk"),
     ]);
     let (pack, inventory) = open(&bytes);
@@ -184,7 +204,7 @@ fn mrpack_an_index_file_may_not_replace_an_app_managed_file() {
 #[test]
 fn mrpack_an_override_may_not_replace_an_app_managed_file() {
     for member in ["overrides/profile.json", "overrides/instance.lock.json"] {
-        let bytes = zip_of(&[("modrinth.index.json", INDEX), (member, "{}")]);
+        let bytes = zip_of(&[("modrinth.index.json", &default_index()), (member, "{}")]);
         let (pack, inventory) = open(&bytes);
         match plan_install(&pack, &inventory) {
             Err(PackError::ManagedPath { .. }) => {}
@@ -204,7 +224,7 @@ fn mrpack_a_pack_may_not_write_into_the_staging_directory() {
     ));
 
     let bytes = zip_of(&[
-        ("modrinth.index.json", INDEX),
+        ("modrinth.index.json", &default_index()),
         ("overrides/.mm-staging/evil.jar", "x"),
     ]);
     let (pack, inventory) = open(&bytes);

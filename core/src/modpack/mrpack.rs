@@ -72,11 +72,20 @@ pub fn reserved_destination(safe_path: &str) -> Option<Reserved> {
         return Some(Reserved::Staging);
     }
     if rest.is_none() {
-        if let Some(name) = INSTANCE_MANAGED_FILES
-            .iter()
-            .find(|name| first.eq_ignore_ascii_case(name))
-        {
-            return Some(Reserved::ManagedFile(name));
+        for name in INSTANCE_MANAGED_FILES {
+            if first.eq_ignore_ascii_case(name) {
+                return Some(Reserved::ManagedFile(name));
+            }
+            // The `.part` suffix is reserved by the downloader's own
+            // protocol (`safety::atomic`): `write_atomic` refuses to
+            // replace a sibling `.part` it did not write, so a pack that
+            // plants `<managed-name>.part` would wedge the application's
+            // very next write of that managed file forever. The suffix is
+            // ours; a pack may not claim it.
+            let part = format!("{name}.part");
+            if first.eq_ignore_ascii_case(&part) {
+                return Some(Reserved::ManagedFile(name));
+            }
         }
     }
     None
@@ -199,6 +208,14 @@ pub enum IndexError {
     NoDownload { path: String },
     #[error("pack file {path:?} has an empty sha512")]
     EmptyHash { path: String },
+    // A `sha512` is not a free-text field: the executor derives a staging
+    // file name from it before any hash gate runs, so a value that is not
+    // exactly 128 hexadecimal characters (`sha512_invalid` in the pack
+    // spec, and anything `..` or `/` inside it can walk the staging file
+    // out of the instance root) must be refused while the pack is still
+    // text.
+    #[error("pack file {path:?} has a sha512 of {found} characters; SHA-512 is exactly 128 hexadecimal characters")]
+    InvalidHash { path: String, found: usize },
     // `safe_member_name` keeps a trailing slash because a ZIP member may be a
     // directory. An index entry names a file, so the same shape is a mistake
     // that would otherwise become a directory-shaped write target.
@@ -263,6 +280,12 @@ pub fn parse_index(bytes: &[u8]) -> Result<Pack, IndexError> {
                 path: f.path.clone(),
             });
         }
+        if !is_sha512_hex(&f.hashes.sha512) {
+            return Err(IndexError::InvalidHash {
+                path: f.path.clone(),
+                found: f.hashes.sha512.chars().count(),
+            });
+        }
         // Absent `env` means required on both sides: that is what an
         // unqualified file in a pack means, and guessing "optional" would let
         // an install silently skip a dependency.
@@ -325,3 +348,14 @@ fn side(s: RawSide) -> Side {
         RawSide::Unsupported => Side::Unsupported,
     }
 }
+
+/// SHA-512 is exactly 128 hexadecimal characters, upper or lower case;
+/// anything else is not a digest value and must never reach any helper that
+/// builds a path (staging or destination) out of it.
+fn is_sha512_hex(s: &str) -> bool {
+    s.len() == 128 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+// shortcut: `sha1` is propagated for by-hash provider lookups but carries no
+// shape gate the way `sha512` does. Nothing derives a filesystem path from
+// it; the downloader's own SHA-1 verification is the gate where it is used.

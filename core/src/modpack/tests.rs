@@ -10,12 +10,19 @@ fn index_with(files: &str, extra: &str) -> String {
     )
 }
 
+/// Placeholder digest: 128 hexadecimal characters, as SHA-512 demands.
+fn sha128(hex: char) -> String {
+    (0..128).map(|_| hex).collect()
+}
+
 fn one_file() -> String {
-    r#"{"path":"mods/sodium.jar",
-        "hashes":{"sha1":"aa","sha512":"bb"},
+    format!(
+        r#"{{"path":"mods/sodium.jar",
+        "hashes":{{"sha1":"aa","sha512":"{}"}},
         "downloads":["https://cdn.modrinth.com/data/x/y.jar"],
-        "fileSize":1234}"#
-        .to_string()
+        "fileSize":1234}}"#,
+        sha128('a')
+    )
 }
 
 #[test]
@@ -30,7 +37,7 @@ fn mrpack_index_reads_the_documented_shape() {
 
     let f = &pack.files[0];
     assert_eq!(f.safe_path, "mods/sodium.jar");
-    assert_eq!(f.sha512, "bb");
+    assert_eq!(f.sha512, sha128('a'));
     assert_eq!(f.file_size, Some(1234));
     assert_eq!(f.downloads.len(), 1);
 }
@@ -46,10 +53,13 @@ fn mrpack_a_file_without_env_is_required_on_both_sides() {
 
 #[test]
 fn mrpack_env_is_carried_through_unchanged() {
-    let f = r#"{"path":"mods/x.jar","hashes":{"sha1":"a","sha512":"b"},
+    let f = format!(
+        r#"{{"path":"mods/x.jar","hashes":{{"sha1":"a","sha512":"{}"}},
                  "downloads":["https://cdn.modrinth.com/x.jar"],
-                 "env":{"client":"required","server":"unsupported"}}"#;
-    let pack = parse_index(index_with(f, "").as_bytes()).expect("parse");
+                 "env":{{"client":"required","server":"unsupported"}}}}"#,
+        sha128('a')
+    );
+    let pack = parse_index(index_with(&f, "").as_bytes()).expect("parse");
     assert_eq!(pack.files[0].client, Side::Required);
     assert_eq!(pack.files[0].server, Side::Unsupported);
 }
@@ -108,6 +118,56 @@ fn mrpack_an_empty_sha512_is_refused() {
         parse_index(raw.as_bytes()),
         Err(IndexError::EmptyHash { .. })
     ));
+}
+
+#[test]
+fn mrpack_a_sha512_that_is_not_128_hex_characters_is_refused() {
+    // The staging file name is derived from this hash before any hash gate
+    // can run, so a value that is not a digest has no business reaching the
+    // executor: `../`, a stray `/`, or just a wrong length must all go out
+    // while the pack is still text.
+    for bad in [
+        "bb",
+        &(0..127).map(|_| 'a').collect::<String>(),
+        &(0..128).map(|_| 'g').collect::<String>(),
+        "../../../../../../Users/me/pwn",
+        "aaaebx.ab_ag-6^",
+    ] {
+        let f = format!(
+            r#"{{"path":"mods/x.jar","hashes":{{"sha1":"a","sha512":"{bad}"}},"downloads":["https://x/y.jar"]}}"#
+        );
+        let raw = index_with(&f, "");
+        match parse_index(raw.as_bytes()) {
+            Err(IndexError::InvalidHash { found, .. }) => {
+                assert_eq!(found, bad.chars().count(), "for {bad:?}");
+            }
+            other => panic!("{bad:?}: expected InvalidHash, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn mrpack_a_128_hex_sha512_is_accepted_verbatim() {
+    let good = sha128('b');
+    // Single braces: this is a plain string, not a format template. The
+    // braces only had to be doubled where a `format!` was doing the
+    // unescaping, and doubling them here produced JSON that does not parse.
+    let lower = r#"{"path":"mods/x.jar","hashes":{"sha1":"a","sha512":"good"},"downloads":["https://x/y.jar"]}"#
+        .replace("good", &good);
+    match parse_index(index_with(&lower, "").as_bytes()) {
+        Ok(pack) => assert_eq!(pack.files[0].sha512, good, "lower-case hex kept as-is"),
+        other => panic!("expected a valid pack, got {other:?}"),
+    }
+    let upper = r#"{"path":"mods/x.jar","hashes":{"sha1":"a","sha512":"good"},"downloads":["https://x/y.jar"]}"#
+        .replace("good", &good.to_uppercase());
+    match parse_index(index_with(&upper, "").as_bytes()) {
+        Ok(pack) => assert_eq!(
+            pack.files[0].sha512,
+            good.to_uppercase(),
+            "hex case is not rewritten"
+        ),
+        other => panic!("expected a valid pack, got {other:?}"),
+    }
 }
 
 #[test]
@@ -173,6 +233,31 @@ fn mrpack_a_file_path_that_is_app_managed_is_refused() {
                 assert!(
                     hit.eq_ignore_ascii_case(name),
                     "the refusal must name the file: {hit:?} for {name:?}"
+                );
+            }
+            other => panic!("{name}: expected ManagedPath, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn mrpack_a_managed_file_name_with_a_part_suffix_is_refused() {
+    // `<name>.part` is reserved by the downloader's own protocol
+    // (`safety::atomic`): a pack that plants `profile.json.part` makes the
+    // application's next atomic write of `profile.json` fail forever with
+    // a stale-part refusal, so the whole suffix is off-limits at the root.
+    for name in [
+        "profile.json.part",
+        "PROFILE.JSON.part",
+        "instance.lock.json.part",
+    ] {
+        let path = one_file().replace("mods/sodium.jar", name);
+        let raw = index_with(&path, "");
+        match parse_index(raw.as_bytes()) {
+            Err(IndexError::ManagedPath { name: hit, .. }) => {
+                assert!(
+                    hit.eq_ignore_ascii_case(name.trim_end_matches(".part")),
+                    "the refusal must name the managed file: {hit:?} for {name:?}"
                 );
             }
             other => panic!("{name}: expected ManagedPath, got {other:?}"),
