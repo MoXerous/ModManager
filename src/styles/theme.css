@@ -117,3 +117,30 @@
     unicode-bidi: isolate;
   }
 }
+
+/*
+ * Page changes. App.tsx starts a View Transition (or not, see below); only the
+ * feel lives here. The outgoing page is a real snapshot, so this is a true
+ * cross-fade rather than a fade-in over a blank frame.
+ */
+::view-transition-old(root),
+::view-transition-new(root),
+::view-transition-old(page-content),
+::view-transition-new(page-content) {
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* Motion is decoration in this app: the rail, the page fade, dialogs and
+ * progress bars all remain usable with it switched off. One rule covers every
+ * animated surface rather than a variant on each utility. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

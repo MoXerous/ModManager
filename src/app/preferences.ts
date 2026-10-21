@@ -13,10 +13,20 @@ export interface Preferences {
   theme: Theme;
   locale: Locale;
   numerals: Numerals;
+  /** Icon-only rail (true) or a rail that spells the destinations out (false). */
+  sidebarCollapsed: boolean;
 }
 
 /** Dark ships as the default (board 17); Arabic is the owner's default language. */
-const DEFAULTS: Preferences = { theme: 'dark', locale: 'ar', numerals: 'latn' };
+const DEFAULTS: Preferences = {
+  theme: 'dark',
+  locale: 'ar',
+  numerals: 'latn',
+  // The shipped shell is the 56px rail from the boards; the labels are an
+  // opt-in, so a first run looks exactly as designed and a returning user
+  // keeps whatever they chose.
+  sidebarCollapsed: true,
+};
 
 const DIRECTION: Record<Locale, 'ltr' | 'rtl'> = { en: 'ltr', ar: 'rtl' };
 
@@ -44,6 +54,10 @@ function load(): Preferences {
       theme: isOneOf(THEMES, parsed.theme) ? parsed.theme : DEFAULTS.theme,
       locale: isOneOf(LOCALES, parsed.locale) ? parsed.locale : DEFAULTS.locale,
       numerals: parsed.numerals === 'arab' ? 'arab' : DEFAULTS.numerals,
+      sidebarCollapsed:
+        typeof parsed.sidebarCollapsed === 'boolean'
+          ? parsed.sidebarCollapsed
+          : DEFAULTS.sidebarCollapsed,
     };
   } catch {
     return DEFAULTS;
@@ -55,6 +69,11 @@ const listeners = new Set<() => void>();
 
 export function isDark(theme: Theme = current.theme): boolean {
   return theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+/** The document direction, for the few icons that carry a side with them. */
+export function isRtl(locale: Locale = current.locale): boolean {
+  return DIRECTION[locale] === 'rtl';
 }
 
 export function applyToDocument(prefs: Preferences): void {

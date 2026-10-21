@@ -7,6 +7,9 @@
   "nav.downloads": "Downloads",
   "nav.settings": "Settings",
 
+  "sidebar.action.expand": "Expand sidebar",
+  "sidebar.action.collapse": "Collapse sidebar",
+
   "palette.placeholder": "Search or run a command",
   "palette.shortcut": "Ctrl K",
   "palette.title": "Command palette",
@@ -120,6 +123,8 @@
   "install.count_other": "{{count}} in the queue",
   "browse.searchPlaceholder": "Search Modrinth",
   "browse.actionSearch": "Search",
+  "browse.fieldVersion": "Minecraft version",
+  "browse.fieldLoader": "Mod loader",
   "browse.results": "{{count}} results",
   "browse.results_one": "{{count}} result",
   "browse.results_other": "{{count}} results",
@@ -127,6 +132,10 @@
   "browse.downloads_one": "{{count}} download",
   "browse.downloads_other": "{{count}} downloads",
   "browse.target": "Install into",
+
+  "combobox.suggestions": "Suggestions",
+  "combobox.empty": "No suggestions.",
+  "combobox.useTyped": "Use “{{value}}”",
   "details.installedContent": "Installed content",
   "details.count": "{{count}} files",
   "details.count_one": "{{count}} file",

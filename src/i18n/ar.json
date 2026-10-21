@@ -7,6 +7,9 @@
   "nav.downloads": "التنزيلات",
   "nav.settings": "الإعدادات",
 
+  "sidebar.action.expand": "توسيع الشريط",
+  "sidebar.action.collapse": "طيّ الشريط",
+
   "palette.placeholder": "ابحث أو نفّذ أمرًا",
   "palette.shortcut": "Ctrl K",
   "palette.title": "لوحة الأوامر",
@@ -140,6 +143,8 @@
   "install.count_other": "{{count}} في الطابور",
   "browse.searchPlaceholder": "ابحث في Modrinth",
   "browse.actionSearch": "بحث",
+  "browse.fieldVersion": "إصدار ماينكرافت",
+  "browse.fieldLoader": "اللودر",
   "browse.results": "{{count}} نتيجة",
   "browse.results_zero": "لا نتائج",
   "browse.results_one": "نتيجة واحدة",
@@ -155,6 +160,10 @@
   "browse.downloads_many": "{{count}} تنزيلًا",
   "browse.downloads_other": "{{count}} تنزيل",
   "browse.target": "التثبيت في",
+
+  "combobox.suggestions": "الاقتراحات",
+  "combobox.empty": "لا اقتراحات.",
+  "combobox.useTyped": "استخدم «{{value}}»",
   "details.installedContent": "المحتوى المثبَّت",
   "details.count": "{{count}} ملف",
   "details.count_zero": "لا ملفات",

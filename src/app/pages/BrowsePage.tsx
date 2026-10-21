@@ -5,16 +5,31 @@ import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
 import type { ProjectDto } from '../../bindings/ProjectDto';
 import type { SearchPageDto } from '../../bindings/SearchPageDto';
 import type { IpcError } from '../../bindings/IpcError';
+import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
 import { executeInstall, listInstances, searchProjects, toIpcError } from '../../lib/ipc';
 
-// shortcut: game version and loader are pinned, matching the queue. Ceiling:
-// the search and the install are for Fabric 1.21.1 only. Upgrade path: a filter
-// bar here, and then passing both to `execute_install` instead of letting it
-// re-resolve with its own defaults.
-const GAME_VERSION = '1.21.1';
-const LOADER = 'fabric';
+// Suggestions, not a closed set: Modrinth adds versions and loaders faster than
+// a release can ship a list, and the fields accept anything typed. The install
+// and the search always use what is in the field, never a row from here.
+const GAME_VERSIONS = [
+  '1.21.1',
+  '1.21',
+  '1.20.6',
+  '1.20.4',
+  '1.20.1',
+  '1.19.4',
+  '1.18.2',
+  '1.16.5',
+  '1.12.2',
+  '1.8.9',
+] as const;
+// Modrinth's loader facets are lowercase ids.
+const LOADERS = ['fabric', 'forge', 'neoforge', 'quilt'] as const;
+
+const DEFAULT_GAME_VERSION = '1.21.1';
+const DEFAULT_LOADER = 'fabric';
 
 interface Props {
   /** Where to send the user once a download starts: the queue is the only
@@ -25,6 +40,8 @@ interface Props {
 export function BrowsePage({ onInstalled }: Props) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
+  const [gameVersion, setGameVersion] = useState(DEFAULT_GAME_VERSION);
+  const [loader, setLoader] = useState(DEFAULT_LOADER);
   const [page, setPage] = useState<SearchPageDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
   const [searching, setSearching] = useState(false);
@@ -57,28 +74,36 @@ export function BrowsePage({ onInstalled }: Props) {
   const canInstall = targetPath.length > 0;
 
   const search = useCallback(() => {
-    if (query.trim().length === 0) {
+    const text = query.trim();
+    if (text.length === 0) {
       return;
     }
     setSearching(true);
     setError(null);
     searchProjects({
-      query: query.trim(),
-      gameVersion: GAME_VERSION,
-      loader: LOADER,
+      query: text,
+      // The facets are identifiers, not prose: an empty field means "no
+      // filter", and "Fabric" typed with a capital is still the fabric facet.
+      gameVersion: gameVersion.trim() || undefined,
+      loader: loader.trim().toLowerCase() || undefined,
       limit: 20,
     })
       .then(setPage)
       .catch((e) => setError(toIpcError(e)))
       .finally(() => setSearching(false));
-  }, [query]);
+  }, [gameVersion, loader, query]);
 
   const install = useCallback(
     (slug: string) => {
       setInstalling(slug);
       setError(null);
       executeInstall(
-        { instanceRoot: targetPath, slugs: [slug], gameVersion: GAME_VERSION, loader: LOADER },
+        {
+          instanceRoot: targetPath,
+          slugs: [slug],
+          gameVersion: gameVersion.trim(),
+          loader: loader.trim().toLowerCase(),
+        },
         () => {},
       )
         .then(onInstalled)
@@ -88,7 +113,7 @@ export function BrowsePage({ onInstalled }: Props) {
     // `targetPath` is read inside, so it belongs in the deps. Without it this
     // closure keeps the first render's empty string and sends an empty root,
     // which is the exact failure this commit exists to remove.
-    [onInstalled, targetPath],
+    [gameVersion, loader, onInstalled, targetPath],
   );
 
   // A name, not a path: the list already shows where each instance is, and a
@@ -112,6 +137,30 @@ export function BrowsePage({ onInstalled }: Props) {
         <Button type="button" onClick={search} disabled={searching}>
           {t('browse.actionSearch')}
         </Button>
+      </div>
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <label htmlFor="browse-version">{t('browse.fieldVersion')}</label>
+          <Combobox
+            id="browse-version"
+            label={t('browse.fieldVersion')}
+            value={gameVersion}
+            onValueChange={setGameVersion}
+            options={GAME_VERSIONS}
+            className="w-32"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label htmlFor="browse-loader">{t('browse.fieldLoader')}</label>
+          <Combobox
+            id="browse-loader"
+            label={t('browse.fieldLoader')}
+            value={loader}
+            onValueChange={setLoader}
+            options={LOADERS}
+            className="w-32"
+          />
+        </div>
       </div>
       {instances.length > 0 && (
         <label className="mt-2.5 flex items-center gap-2 text-small text-muted-foreground">
