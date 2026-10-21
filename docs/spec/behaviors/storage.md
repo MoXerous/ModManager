@@ -1,6 +1,6 @@
 # behaviors/storage.md — المخطط، والترحيلات، والنسخ الاحتياطي، وبوابة إصدار المخطط
 
-> **المرجع:** `app\storage\schema_contract.py` · `app\storage\migration_runner.py` · `app\storage\migrations\{__init__,v001_contract,v001_baseline,v002_profile_aggregate}.py` · `app\storage\database.py` · `app\storage\repositories.py` · `app\services\operation_journal.py` · `app\operation_models.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\storage\schema_contract.py` · `app\storage\migration_runner.py` · `app\storage\migrations\{__init__,v001_contract,v001_baseline,v002_profile_aggregate}.py` · `app\storage\database.py` · `app\storage\repositories.py` · `app\services\operation_journal.py` · `app\operation_models.py`
 > **إصدار المخطط الحالي: `2`.**
 
 ---

@@ -1,6 +1,6 @@
 # behaviors/resolver.md — التبعيات، والتعارضات، والخطة الجافة
 
-> **المرجع:** `app\services\resolver.py` (687 سطراً) · `app\services\batch_install_plan.py` · `app\services\safety_checks.py` · `app\domain\compatibility.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\resolver.py` (687 سطراً) · `app\services\batch_install_plan.py` · `app\services\safety_checks.py` · `app\domain\compatibility.py`
 > مبدّل Canonical = **Modrinth فقط**.
 
 ---

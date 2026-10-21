@@ -1,6 +1,6 @@
 # behaviors/providers.md — المزوّدون وحدود المعدل وإعادة المحاولة
 
-> **المرجع:** `D:\latest_project\app\providers\base.py` · `app\providers\modrinth.py` · `app\providers\modrinth_mapping.py` · `app\api\modrinth_client.py` · `tests\qa\test_modrinth_api_resilience.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\providers\base.py` · `app\providers\modrinth.py` · `app\providers\modrinth_mapping.py` · `app\api\modrinth_client.py` · `tests\qa\test_modrinth_api_resilience.py`
 > **قاعدة القراءة:** السلوك موصوف، والكود منقول. كل رقم أدناه مقروء من المصدر.
 
 ---

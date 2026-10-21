@@ -1,6 +1,6 @@
 # behaviors/logging.md — تنقية الأسرار والقرارات من السجلات
 
-> **المرجع:** `app\services\log_sanitizer.py` (502 سطراً) · `app\diagnostics.py` (553) · `tests\qa\test_log_sanitizer.py` (488، **18 اختباراً**)
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\log_sanitizer.py` (502 سطراً) · `app\diagnostics.py` (553) · `tests\qa\test_log_sanitizer.py` (488، **18 اختباراً**)
 > `foundations.md` §14 يطلب صراحةً «تنقية السجلات من الأسرار».
 
 ---
