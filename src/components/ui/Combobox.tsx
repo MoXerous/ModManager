@@ -25,8 +25,23 @@ import { cn } from "cn"
  * placed from the trigger's box, so it still lines up with the field.
  */
 
-/** How long the leave animation runs before the popup leaves the DOM. */
+/** How long the leave animation runs, in milliseconds. */
 const EXIT_MS = 200
+
+/**
+ * The net under the leave animation: the popup is hidden when the animation
+ * ends, and a cancelled animation — or one that never ran because the popup
+ * was not on screen — would leave the popup on screen for ever. The net has
+ * to be strictly longer than the animation, or it would cut the fade short.
+ */
+const EXIT_FALLBACK_MS = EXIT_MS + 150
+
+/**
+ * The name `tw-animate-css` gives its leave animation. The popup waits for
+ * this one animation and no other: the enter animation ends with the popup's
+ * own style, so its end is not the popup's end.
+ */
+const EXIT_ANIMATION = "exit"
 
 /** The popup never grows past this, whatever the window says. */
 const MAX_HEIGHT = 256
@@ -287,23 +302,59 @@ export function Combobox({
     return () => list.removeEventListener("focus", onListFocus)
   }, [])
 
-  /** The popup rides the leave animation before it leaves the DOM. */
+  /**
+   * The popup rides the leave animation before it leaves the DOM.
+   *
+   * The end of the animation is what hides the popup, and not a timer that
+   * hopes to match it: the CSS animation starts a frame after the commit and
+   * the timer starts at the commit, so the two clocks drift apart — a timer
+   * either cuts the fade short or leaves the popup on screen after the fade
+   * has ended. The leave animation holds its end state until the popup is
+   * hidden (see `fill-mode-forwards` on the popup below), so the gap between
+   * the end of the animation and the commit that hides the popup shows
+   * nothing.
+   */
   useEffect(() => {
     if (open) {
       setPresent(true)
       return
     }
-    const timer = window.setTimeout(() => setPresent(false), EXIT_MS)
-    return () => window.clearTimeout(timer)
+    const popup = popupRef.current
+    let fallback = 0
+    const hide = () => {
+      window.clearTimeout(fallback)
+      setPresent(false)
+    }
+    const onAnimationEnd = (event: AnimationEvent) => {
+      // The popup's own leave animation, and nothing that bubbled up from a
+      // row inside it: their end is not the popup's end. A popup that was
+      // opened again in the meantime has an animation of its own to wait for.
+      if (event.target !== popup || event.animationName !== EXIT_ANIMATION || openRef.current) {
+        return
+      }
+      hide()
+    }
+    popup?.addEventListener("animationend", onAnimationEnd)
+    // The net under the event, so an animation that never ends cannot leave
+    // the popup on screen for ever.
+    fallback = window.setTimeout(hide, EXIT_FALLBACK_MS)
+    return () => {
+      window.clearTimeout(fallback)
+      popup?.removeEventListener("animationend", onAnimationEnd)
+    }
   }, [open])
 
   /**
    * The popup is placed from the field's box, because it lives on the body
    * and the body does not scroll with the page. It opens downwards when there
    * is room and upwards when there is not, and it never leaves the window.
+   *
+   * The popup stops following the page the moment it starts to fade out: a
+   * popup that moves while it fades reads as a jump, and the field it was
+   * placed against is on its way under the fade anyway.
    */
   useLayoutEffect(() => {
-    if (!present) {
+    if (!present || !open) {
       return
     }
     const anchor = anchorRef.current
@@ -339,7 +390,7 @@ export function Combobox({
       window.removeEventListener("scroll", place, true)
       window.removeEventListener("resize", place)
     }
-  }, [present, pageDir])
+  }, [present, open, pageDir])
 
   const close = () => {
     setOpen(false)
@@ -521,6 +572,11 @@ export function Combobox({
               "fixed z-50 w-44 origin-top",
               "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
               "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+              // The leave animation has to hold its end state until the popup
+              // is hidden. Without it the popup falls back to its own style
+              // the moment the animation ends, and a fully visible popup
+              // flashes on the way out.
+              "data-[state=closed]:fill-mode-forwards",
               "duration-200",
             )}
           >
