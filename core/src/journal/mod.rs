@@ -3,6 +3,12 @@
 //! Records are crash-auditable JSON per operation (F-141). State moves
 //! only along the documented edges (F-142), and `discover` classifies
 //! unfinished operations for startup reporting (F-143).
+//!
+//! A pack apply records the pack it applies (F-076): a record that says
+//! "something was applied here" but not *what* cannot be resumed, and a
+//! pack that changed between the plan and the apply cannot be recognised.
+//! The pack block is additive — an operation that is not a pack apply has
+//! none, and a record written before this block existed still reads.
 
 pub mod store;
 
@@ -17,6 +23,11 @@ pub enum OperationKind {
     DownloadBatch,
     UpdateDownload,
     UpdateInstall,
+    /// F-076: applying a `.mrpack` to an instance.
+    ///
+    /// The only kind that carries a [`PackApplyMeta`] block: a pack apply is
+    /// the one operation whose subject is a *file* rather than a profile, and
+    /// resuming it means knowing which archive the plan was built from.
     MrpackInstall,
     /// F-102: creating an instance folder, its `profile.json` and its row.
     ///
@@ -28,6 +39,29 @@ pub enum OperationKind {
     /// staged or backed up. All five derived counters read 0, which callers
     /// must treat as "no items" rather than a ratio.
     InstanceCreate,
+}
+
+/// The pack a record applies (F-076).
+///
+/// Four keys, strict on both sides, exactly like every other block in a
+/// record. It is optional on the record: an operation that is not a pack
+/// apply has none, and a record written before this block existed (schema
+/// v1) has none either.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackApplyMeta {
+    /// The pack's display name, as the index spells it.
+    pub pack_name: String,
+    /// The pack's version id, as the index spells it.
+    pub pack_version_id: String,
+    /// SHA-512 of the archive the plan was built from, lowercase hex.
+    ///
+    /// This is the digest the plan showed the user. It is what ties a record
+    /// to the plan it came from, and what tells a later run that the pack in
+    /// front of the user is the pack this record is about.
+    pub archive_sha512: String,
+    /// Absolute path of the archive the bytes came from.
+    pub archive_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -138,6 +172,52 @@ pub struct OperationItem {
     pub message: String,
 }
 
+/// Builds the journal item for one pack destination (F-076).
+///
+/// The encoding is the eight-key one every `OperationItem` uses, and the
+/// meaning of each key for a pack file is:
+///
+/// - `item_id`: the destination path. The plan has one op per destination,
+///   so it is unique inside the record.
+/// - `project_id`: empty. A pack file belongs to no project.
+/// - `title`: the pack's name, so a record read on its own still says which
+///   pack it is about.
+/// - `filename`: the destination's file name.
+/// - `state`: `queued` until the apply reaches it.
+/// - `partial_path`: the `.part` this apply writes and owns. F-076: this is
+///   the proof that the file is ours, and the only thing that lets a later
+///   run remove it instead of refusing to install over it.
+/// - `final_path`: the destination the file lands at.
+/// - `message`: empty. The reason for a failure belongs to the operation's
+///   own `message`, not to every item.
+///
+/// Both paths are absolute: a relative path would depend on the working
+/// directory of whoever reads the record back, and the proof has to survive
+/// the process that wrote it.
+pub fn pack_item(
+    safe_path: &str,
+    pack_name: &str,
+    partial_path: &str,
+    final_path: &str,
+) -> OperationItem {
+    let filename = safe_path
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(safe_path)
+        .to_string();
+    OperationItem {
+        item_id: safe_path.to_string(),
+        project_id: String::new(),
+        title: pack_name.to_string(),
+        filename,
+        state: ItemState::Queued,
+        partial_path: partial_path.to_string(),
+        final_path: final_path.to_string(),
+        message: String::new(),
+    }
+}
+
 /// The 5 counters are derived from `items`, never trusted from disk: the
 /// decoder recomputes and compares them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,7 +257,8 @@ pub fn unfinished(state: OperationState) -> bool {
     !state.is_terminal()
 }
 
-/// 18 top-level keys, strict on both sides.
+/// 18 top-level keys, strict on both sides, plus the optional `pack` block
+/// (F-076): 19 for a pack apply, 18 for everything else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationRecord {
@@ -199,9 +280,29 @@ pub struct OperationRecord {
     pub skipped_count: usize,
     pub message: String,
     pub items: Vec<OperationItem>,
+    /// F-076: the pack this operation applies.
+    ///
+    /// Optional and additive: absent for every operation that is not a pack
+    /// apply, and absent from every record written before this block existed
+    /// (schema v1). The `kind` and this block must agree — see
+    /// [`OperationRecord::verify_pack`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<PackApplyMeta>,
 }
 
-pub const SCHEMA: &str = "modmanager.operation_journal.v1";
+/// The schema this build writes.
+///
+/// v2 added the optional `pack` block (F-076). v1 records are still read:
+/// they are the records this app wrote before the block existed, and refusing
+/// them would turn every one of them into a corrupt file.
+pub const SCHEMA: &str = "modmanager.operation_journal.v2";
+
+/// The schema this build still reads, and does not write.
+pub const SCHEMA_V1: &str = "modmanager.operation_journal.v1";
+
+/// Every schema this build accepts on read. Anything else is refused: a
+/// record written by a newer build may have keys this one would misread.
+pub const ACCEPTED_SCHEMAS: &[&str] = &[SCHEMA, SCHEMA_V1];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JournalError {
@@ -220,6 +321,17 @@ pub enum JournalError {
     CounterMismatch(&'static str),
     #[error("operation id must be a canonical lowercase uuid")]
     NotCanonicalId,
+    /// The record's schema is not one this build reads. It was written by a
+    /// newer build, and guessing its shape would be reading a file whose
+    /// meaning this build does not know.
+    #[error("unsupported operation journal schema: {found}")]
+    UnsupportedSchema { found: String },
+    /// F-076: the record's kind and its pack block disagree. A pack apply
+    /// without its pack cannot be resumed — there is no "what" to resume — and
+    /// a pack block on an operation that is not a pack apply is a field no
+    /// other kind has any meaning for.
+    #[error("operation kind {kind:?} and its pack block disagree (has_pack: {has_pack})")]
+    KindPackMismatch { kind: OperationKind, has_pack: bool },
     #[error("io: {0}")]
     Io(String),
 }
@@ -260,7 +372,18 @@ impl OperationRecord {
             skipped_count: counters.skipped_count,
             message: String::new(),
             items,
+            pack: None,
         }
+    }
+
+    /// F-076: attaches the pack this operation applies.
+    ///
+    /// A builder rather than a parameter of [`OperationRecord::new`]: every
+    /// other kind has no pack, and making them all pass `None` would be a
+    /// way of saying "no pack" thirty times over.
+    pub fn with_pack(mut self, pack: PackApplyMeta) -> Self {
+        self.pack = Some(pack);
+        self
     }
 
     pub fn counters(&self) -> Counters {
@@ -298,9 +421,53 @@ impl OperationRecord {
     /// Full load-time validation: strict keys happen in serde, here we
     /// re-check identity, ids, and counters.
     pub fn verify(&self) -> Result<(), JournalError> {
+        self.verify_schema()?;
         self.verify_id()?;
         self.verify_item_ids()?;
-        self.verify_counters()
+        self.verify_counters()?;
+        self.verify_pack()
+    }
+
+    /// The schema gate (F-141).
+    ///
+    /// Checked first, before anything else: a record written by a newer
+    /// build may carry keys this one would read as something else, and the
+    /// honest answer to "I do not know this file" is to refuse it rather than
+    /// to interpret it. v1 is accepted — those are the records this app wrote
+    /// before the pack block existed, and they are still perfectly readable.
+    pub fn verify_schema(&self) -> Result<(), JournalError> {
+        if ACCEPTED_SCHEMAS.contains(&self.schema.as_str()) {
+            return Ok(());
+        }
+        Err(JournalError::UnsupportedSchema {
+            found: self.schema.clone(),
+        })
+    }
+
+    /// F-076: the kind and the pack block must agree.
+    ///
+    /// A `mrpack_install` record without its pack cannot be resumed: there is
+    /// no archive to resume *against*, and a record that names no archive
+    /// could be resumed against any. A pack block on an operation that is not
+    /// a pack apply is a field that kind has no meaning for, so it is a
+    /// record this build did not write and does not understand.
+    ///
+    /// A v1 record has no pack block at all, and this build never wrote a
+    /// v1 `mrpack_install` record — the pack apply was not journalled before
+    /// this block existed — so refusing one costs nothing that was ever
+    /// written.
+    pub fn verify_pack(&self) -> Result<(), JournalError> {
+        let consistent = match self.kind {
+            OperationKind::MrpackInstall => self.pack.is_some(),
+            _ => self.pack.is_none(),
+        };
+        if consistent {
+            return Ok(());
+        }
+        Err(JournalError::KindPackMismatch {
+            kind: self.kind,
+            has_pack: self.pack.is_some(),
+        })
     }
 
     /// Canonical lowercase UUID only: `parse_str` also accepts uppercase
@@ -357,6 +524,39 @@ impl OperationRecord {
     }
 
     pub fn transition_item(&mut self, item_id: &str, to: ItemState) -> Result<(), JournalError> {
+        self.apply_item_state(item_id, to)?;
+        self.sync_counters();
+        self.touch();
+        Ok(())
+    }
+
+    /// Applies several item transitions and bumps the revision **once**.
+    ///
+    /// The state machine still gates every edge — each transition is checked
+    /// against the item's own state — but the record is written once for the
+    /// whole batch. That matters because a record is a single document: every
+    /// write rewrites the whole file, and the file grows with the number of
+    /// items. A pack apply that moved four states per file would rewrite the
+    /// record four times per file, so the bytes written grow with the square
+    /// of the file count.
+    ///
+    /// Listing the same item twice is how a caller walks an item along a
+    /// chain (`queued → downloading → verifying → committing`): each step is
+    /// still checked, and the item ends on the last one.
+    pub fn transition_items(
+        &mut self,
+        transitions: &[(String, ItemState)],
+    ) -> Result<(), JournalError> {
+        for (item_id, to) in transitions {
+            self.apply_item_state(item_id, *to)?;
+        }
+        self.sync_counters();
+        self.touch();
+        Ok(())
+    }
+
+    /// One item's state change, without touching the revision.
+    fn apply_item_state(&mut self, item_id: &str, to: ItemState) -> Result<(), JournalError> {
         let item = self
             .items
             .iter_mut()
@@ -369,10 +569,47 @@ impl OperationRecord {
             });
         }
         item.state = to;
-        self.sync_counters();
-        self.touch();
         Ok(())
     }
+}
+
+/// One journal write the caller needs.
+///
+/// A callback rather than a `&Journal`, and that is the whole point: a
+/// `&Journal` held across a multi-minute download means the mutex behind it
+/// is held for minutes too, and every other command that touches the journal
+/// — including the recovery reads on the Instances page — waits for the last
+/// byte. This type lets the caller open and close the lock per write.
+#[derive(Debug, Clone)]
+pub enum JournalOp {
+    Start {
+        target: String,
+        items: Vec<OperationItem>,
+    },
+    Operation(OperationState),
+    Item {
+        item_id: String,
+        state: ItemState,
+    },
+    /// F-076: a pack apply, with the pack's identity attached.
+    ///
+    /// A pack apply is the one operation whose subject is a file rather than
+    /// a profile, so its record has to name the archive: a record that names
+    /// no archive cannot be resumed against one.
+    PackStart {
+        target: String,
+        items: Vec<OperationItem>,
+        pack: PackApplyMeta,
+    },
+    /// Several item transitions, applied in one write.
+    ///
+    /// The same edges are checked, one after the other; only the write is
+    /// shared. A pack apply that moved four states per file would otherwise
+    /// rewrite the whole record four times per file, and the record grows
+    /// with the number of files.
+    Items {
+        transitions: Vec<(String, ItemState)>,
+    },
 }
 
 #[cfg(test)]

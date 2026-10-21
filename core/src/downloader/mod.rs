@@ -10,7 +10,11 @@ pub mod retry;
 #[cfg(test)]
 mod batch_tests;
 
-pub use batch::{execute_batch, BatchError, BatchItem, ItemProgress, JournalOp};
+pub use batch::{execute_batch, BatchError, BatchItem, ItemProgress};
 pub use client::{
     DownloadOutcome, DownloadPhase, DownloadProgress, DownloadRequest, DownloadStatus, Downloader,
 };
+// The journal vocabulary lives with the journal (F-141): the downloader and
+// the pack executor are two callers of one record format, and a re-export
+// keeps every existing caller compiling without a second definition.
+pub use crate::journal::JournalOp;

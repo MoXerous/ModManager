@@ -33,17 +33,20 @@
 //! the pack as their source. Upgrade path: write it in `instances` once that
 //! module owns the profile shape.
 //!
-//! shortcut: no crash recovery for a half-applied plan. Each file is atomic,
-//! so a crash leaves whole files and at worst a `.mm-staging` directory, never
-//! a torn file; nothing records which ops finished. Ceiling: a retry re-copies
-//! overrides and re-hashes downloads (an already-valid destination is skipped
-//! by hash), which is correct if wasteful. Upgrade path: journal each op
-//! through `journal`, exactly as `downloader::execute_batch` does. The staging
-//! directory is removed at the start of every apply, so a killed run cannot
-//! feed a later one, and at the end of every apply, success or failure.
+//! F-076: the apply is journalled. Every destination the plan names gets an
+//! item in the record, carrying the `.part` this apply owns and the path it
+//! lands at, and the record exists before the first byte moves — so a crash
+//! leaves a record that says what was planned, what landed, and which
+//! scratch file is ours. A retry re-copies overrides and re-hashes downloads
+//! (an already-valid destination is skipped by hash), which is correct if
+//! wasteful; the record is what lets a later run *resume* rather than guess.
+//! The staging directory is removed at the start of every apply, so a killed
+//! run cannot feed a later one, and at the end of every apply, success or
+//! failure.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
+use std::io::Read;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
@@ -51,8 +54,12 @@ use super::archive::{InstallOp, InstallPlan};
 use super::mrpack::{reserved_destination, Pack, STAGING_DIR};
 use crate::downloader::client::DownloadError;
 use crate::downloader::{DownloadPhase, DownloadProgress, DownloadRequest, Downloader};
+use crate::journal::{
+    pack_item, ItemState, Journal, JournalError, JournalOp, OperationItem, OperationKind,
+    OperationRecord, OperationState, PackApplyMeta,
+};
 use crate::providers::{HashAlgo, Provider};
-use crate::safety::atomic::{part_path, write_atomic, AtomicError};
+use crate::safety::atomic::{commit_part, part_path, write_part, AtomicError};
 use crate::safety::path::{safe_member_name, NameError};
 
 /// How many times removing the staging directory is retried. A scanner or an
@@ -79,6 +86,37 @@ pub mod phase {
     pub const DONE: &str = "pack.phase.done";
     /// Terminal: the plan stopped at the first failure.
     pub const FAILED: &str = "pack.phase.failed";
+}
+
+/// The identity of the pack being applied (F-076).
+///
+/// The journal has to know *which* pack a record is about: a record that
+/// names no archive cannot be resumed against one, and a later run has to be
+/// able to tell that the pack in front of the user is the pack the record
+/// belongs to. The archive's own digest is not in the index — it is computed
+/// from the bytes the plan was built from — so it travels beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackIdentity {
+    /// The pack's display name, as the index spells it.
+    pub name: String,
+    /// The pack's version id, as the index spells it.
+    pub version_id: String,
+    /// SHA-512 of the archive, lowercase hex.
+    pub archive_sha512: String,
+    /// Absolute path of the archive.
+    pub archive_path: String,
+}
+
+impl PackIdentity {
+    /// The journal's shape of this pack.
+    pub fn to_meta(&self) -> PackApplyMeta {
+        PackApplyMeta {
+            pack_name: self.name.clone(),
+            pack_version_id: self.version_id.clone(),
+            archive_sha512: self.archive_sha512.clone(),
+            archive_path: self.archive_path.clone(),
+        }
+    }
 }
 
 /// One progress event, small enough to serialize per call.
@@ -193,6 +231,10 @@ pub enum ExecError {
     Atomic(#[from] AtomicError),
     #[error(transparent)]
     Download(#[from] DownloadError),
+    /// F-076: the record could not be written. The apply stops: a file
+    /// nobody has a record of is a file no later run can reason about.
+    #[error(transparent)]
+    Journal(#[from] JournalError),
     #[error("io {op} on {}", path.display())]
     Io {
         op: &'static str,
@@ -254,12 +296,20 @@ pub struct PlanExecutor<'a> {
     plan: &'a InstallPlan,
     staging_root: &'a Path,
     instance_root: &'a Path,
+    /// F-076: which pack this apply is about. The journal needs it, and the
+    /// journal is what makes a crash resumable.
+    identity: PackIdentity,
     allow_insecure_loopback: bool,
 }
 
 impl<'a> PlanExecutor<'a> {
     /// `staging_root` is the directory `extract_safely` filled from the pack;
     /// override members live at `<staging_root>/<layer>/<safe_path>`.
+    ///
+    /// `identity` names the archive the plan was built from (F-076). It is
+    /// not optional: a pack apply without a record of *which* pack it was
+    /// leaves a half-applied instance that nothing can resume, which is the
+    /// failure this whole path exists to remove.
     pub fn new(
         provider: &'a dyn Provider,
         downloader: &'a Downloader,
@@ -267,6 +317,7 @@ impl<'a> PlanExecutor<'a> {
         plan: &'a InstallPlan,
         staging_root: &'a Path,
         instance_root: &'a Path,
+        identity: PackIdentity,
     ) -> Self {
         Self {
             provider,
@@ -275,6 +326,7 @@ impl<'a> PlanExecutor<'a> {
             plan,
             staging_root,
             instance_root,
+            identity,
             allow_insecure_loopback: false,
         }
     }
@@ -292,17 +344,26 @@ impl<'a> PlanExecutor<'a> {
         dry_run(self.plan, self.instance_root)
     }
 
-    /// Applies the plan, reporting through `on_event`.
+    /// Applies the plan, reporting through `on_event` and recording through
+    /// `journal`.
     ///
     /// The last event is always terminal: [`phase::DONE`] on success,
     /// [`phase::FAILED`] on the first error. A failure stops the run; files
     /// already committed stay committed, because re-copying them is safe and
     /// deleting them would not be.
     ///
+    /// The journal is a callback and not a `&Journal`, for the reason
+    /// `downloader::execute_batch` gives: the handle must not be held for the
+    /// length of an install, or every other command that touches the journal
+    /// waits for the last byte. A journal that cannot be written stops the
+    /// apply — a file nobody has a record of is a file no later run can
+    /// reason about.
+    ///
     /// `Send` on the callback is a consequence of the downloader wanting a
     /// `Send` progress closure; the IPC layer's channel is `Send` anyway.
     pub async fn apply(
         &self,
+        journal: &mut (dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError> + Send),
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<ApplyReport, ExecError> {
         // A staging tree from a killed run is never resumed: the decision is
@@ -320,15 +381,39 @@ impl<'a> PlanExecutor<'a> {
             self.remove_staging().await;
         }
         let mut report = ApplyReport::default();
-        let outcome = self.apply_ops(&mut report, on_event).await;
+        let mut writer = JournalWriter::new(journal);
+        let outcome = self.apply_ops(&mut report, &mut writer, on_event).await;
+        // The record is closed on both ordinary paths: an apply that stopped
+        // half way is a `failed` operation, not one that never happened. A
+        // record left `running` is offered again on every launch, forever.
+        //
+        // A journal that could not be written is the exception: the record is
+        // what says what happened, and a record we cannot write is a record
+        // we must not pretend to have closed. The operation stays unfinished,
+        // which is exactly what a crash leaves behind — and a crash is what a
+        // broken journal amounts to.
+        let closed = match &outcome {
+            Ok(()) => writer.emit(JournalOp::Operation(OperationState::Completed)),
+            Err(ExecError::Journal(_)) => Ok(()),
+            Err(_) => writer.emit(JournalOp::Operation(OperationState::Failed)),
+        };
         // Runs on both paths, before the terminal event: a failed apply must
         // not leave its scratch directory visible to the instance scan either.
         self.remove_staging().await;
         match outcome {
-            Ok(()) => {
-                on_event(&PackEvent::operation(phase::DONE));
-                Ok(report)
-            }
+            Ok(()) => match closed {
+                Ok(()) => {
+                    on_event(&PackEvent::operation(phase::DONE));
+                    Ok(report)
+                }
+                // The files landed but the record did not close. That is
+                // worth failing over: the operation stays unfinished, and an
+                // unfinished record is a thing the user is offered.
+                Err(e) => {
+                    on_event(&PackEvent::operation(phase::FAILED));
+                    Err(e)
+                }
+            },
             Err(e) => {
                 on_event(&PackEvent::operation(phase::FAILED));
                 Err(e)
@@ -370,15 +455,34 @@ impl<'a> PlanExecutor<'a> {
     async fn apply_ops(
         &self,
         report: &mut ApplyReport,
+        writer: &mut JournalWriter<'_>,
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<(), ExecError> {
+        // W1: the record exists before the first byte moves. A crash with no
+        // record leaves files on disk that nothing claims, and that is the
+        // direction this whole path exists to remove (AGENTS.md §5.4).
+        let items = self.plan_items()?;
+        writer.emit(JournalOp::PackStart {
+            target: self.instance_root.to_string_lossy().into_owned(),
+            items,
+            pack: self.identity.to_meta(),
+        })?;
+        // W2: the apply is under way.
+        writer.emit(JournalOp::Operation(OperationState::Running))?;
+
         for op in &self.plan.ops {
             if let InstallOp::CopyOverride {
                 safe_path,
                 source_layer,
             } = op
             {
-                self.apply_override(safe_path, source_layer, report, on_event)?;
+                if let Err(e) = self
+                    .apply_override(safe_path, source_layer, report, writer, on_event)
+                    .await
+                {
+                    self.record_failure(writer, safe_path, &e);
+                    return Err(e);
+                }
             }
         }
 
@@ -389,6 +493,7 @@ impl<'a> PlanExecutor<'a> {
             .filter(|op| matches!(op, InstallOp::Download { .. }))
             .collect();
         if downloads.is_empty() {
+            writer.flush()?;
             return Ok(());
         }
 
@@ -403,18 +508,85 @@ impl<'a> PlanExecutor<'a> {
             } = op
             {
                 let urls = self.candidate_urls(safe_path, sha512, &resolved);
-                self.apply_download(safe_path, sha512, *size, &urls, report, on_event)
-                    .await?;
+                if let Err(e) = self
+                    .apply_download(safe_path, sha512, *size, &urls, report, writer, on_event)
+                    .await
+                {
+                    self.record_failure(writer, safe_path, &e);
+                    return Err(e);
+                }
             }
         }
+        // The last file's ending is still owed: the record says it landed
+        // only now, in the same write that would have carried it if another
+        // file had followed.
+        writer.flush()?;
         Ok(())
     }
 
-    fn apply_override(
+    /// Records the item that failed, and says so in the record.
+    ///
+    /// A journal that cannot be written is not recorded at all: the record is
+    /// what broke, and writing a state into it now would be a state nobody
+    /// can vouch for. The record is left as a crash would leave it.
+    ///
+    /// The journal write failing here does not replace the original error:
+    /// the original error is what actually went wrong, and the record stays
+    /// unfinished either way — which is the truth about it.
+    fn record_failure(&self, writer: &mut JournalWriter<'_>, safe_path: &str, error: &ExecError) {
+        if matches!(error, ExecError::Journal(_)) {
+            return;
+        }
+        if let Err(e) = writer.fail_current(safe_path) {
+            tracing::warn!(
+                error = %e,
+                "could not record the failed pack item in the journal"
+            );
+        }
+    }
+
+    /// The record's items: one per destination the plan names.
+    ///
+    /// Every item carries the `.part` this apply owns and the destination it
+    /// lands at, and both are absolute: they are the proof that a `.part` on
+    /// the disk is ours, and a relative path would only be true for the
+    /// working directory of the process that wrote it.
+    fn plan_items(&self) -> Result<Vec<OperationItem>, ExecError> {
+        let mut items = Vec::with_capacity(self.plan.ops.len());
+        let mut seen: HashSet<&str> = HashSet::new();
+        for op in &self.plan.ops {
+            let safe_path = match op {
+                InstallOp::CopyOverride { safe_path, .. } => safe_path,
+                InstallOp::Download { safe_path, .. } => safe_path,
+            };
+            // The same gate the write itself uses, so an unsafe destination
+            // is refused before the record is created rather than halfway
+            // through an install.
+            let rel = checked_relative(safe_path)?;
+            if !seen.insert(safe_path) {
+                // The planner collapses duplicate destinations, so this can
+                // only be a plan built by hand. Two items with one id would
+                // make the record unreadable, which is worse than refusing.
+                return Err(ExecError::Internal("the plan names one destination twice"));
+            }
+            let final_path = self.instance_root.join(&rel);
+            let partial = part_path(&final_path);
+            items.push(pack_item(
+                safe_path,
+                &self.identity.name,
+                &partial.to_string_lossy(),
+                &final_path.to_string_lossy(),
+            ));
+        }
+        Ok(items)
+    }
+
+    async fn apply_override(
         &self,
         safe_path: &str,
         source_layer: &str,
         report: &mut ApplyReport,
+        writer: &mut JournalWriter<'_>,
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<(), ExecError> {
         let rel = checked_relative(safe_path)?;
@@ -426,8 +598,32 @@ impl<'a> PlanExecutor<'a> {
             std::fs::create_dir_all(parent).map_err(|e| io_err("create_dir", parent, e))?;
         }
         on_event(&PackEvent::file(phase::COPYING, &rel));
-        let mut f = std::fs::File::open(&src).map_err(|e| io_err("open", &src, e))?;
-        let bytes = write_atomic(&dest, &mut f)?;
+        // Two-phase commit: the bytes land in `<dest>.part`, are checked
+        // there, and only then are renamed into place. The file that becomes
+        // the instance's file is the file that was checked (AGENTS.md §5.5).
+        let mut reader =
+            HashingReader::new(std::fs::File::open(&src).map_err(|e| io_err("open", &src, e))?);
+        let bytes = write_part(&dest, &mut reader)?;
+        let expected = reader.finish();
+        let part = part_path(&dest);
+        on_event(&PackEvent::file(phase::VERIFYING, &rel));
+        let actual = sha512_of(&part).await?;
+        if actual != expected {
+            // Our own part, and it is wrong: it must not survive, or the next
+            // run would refuse the destination because of it.
+            let _ = std::fs::remove_file(&part);
+            return Err(ExecError::HashMismatch {
+                path: rel,
+                expected,
+                actual,
+            });
+        }
+        // The record says the rename is pending before it happens, so a crash
+        // in this window is visible in the record and not only on the disk.
+        writer.at_commit_point(safe_path)?;
+        on_event(&PackEvent::file(phase::COMMITTING, &rel));
+        commit_part(&part, &dest)?;
+        writer.after_rename(safe_path);
         report.written.push(AppliedFile {
             safe_path: rel.clone(),
             bytes,
@@ -550,6 +746,7 @@ impl<'a> PlanExecutor<'a> {
         size: Option<u64>,
         urls: &[String],
         report: &mut ApplyReport,
+        writer: &mut JournalWriter<'_>,
         on_event: &mut (dyn FnMut(&PackEvent) + Send),
     ) -> Result<(), ExecError> {
         let rel = checked_relative(safe_path)?;
@@ -561,6 +758,7 @@ impl<'a> PlanExecutor<'a> {
         // not downloaded twice.
         if dest.is_file() && sha512_of(&dest).await? == want {
             report.skipped.push(rel.clone());
+            writer.skipped(safe_path);
             on_event(&PackEvent::file(phase::SKIPPED, &rel));
             return Ok(());
         }
@@ -619,11 +817,21 @@ impl<'a> PlanExecutor<'a> {
 
             match outcome {
                 Ok(outcome) => {
-                    // Defence in depth: the downloader verified the stream,
-                    // this re-reads what actually landed before it is allowed
-                    // to become the instance's file.
-                    let actual = sha512_of(&outcome.path).await?;
+                    // Two-phase commit into the instance: the bytes land in
+                    // `<dest>.part`, the hash is checked *there*, and only
+                    // then is the part renamed into place. The file that
+                    // becomes the instance's file is the file that was
+                    // checked — the staged copy is never trusted to still
+                    // hold what it held a moment ago (AGENTS.md §5.5).
+                    let mut f = std::fs::File::open(&outcome.path)
+                        .map_err(|e| io_err("open", &outcome.path, e))?;
+                    let bytes = write_part(&dest, &mut f)?;
+                    let part = part_path(&dest);
+                    on_event(&PackEvent::file(phase::VERIFYING, &rel));
+                    let actual = sha512_of(&part).await?;
                     if actual != want {
+                        // Our own part, and it is wrong: it must not survive.
+                        let _ = std::fs::remove_file(&part);
                         let _ = std::fs::remove_file(&outcome.path);
                         last_error = Some(ExecError::HashMismatch {
                             path: rel.clone(),
@@ -632,9 +840,10 @@ impl<'a> PlanExecutor<'a> {
                         });
                         continue;
                     }
-                    let mut f = std::fs::File::open(&outcome.path)
-                        .map_err(|e| io_err("open", &outcome.path, e))?;
-                    let bytes = write_atomic(&dest, &mut f)?;
+                    writer.at_commit_point(safe_path)?;
+                    on_event(&PackEvent::file(phase::COMMITTING, &rel));
+                    commit_part(&part, &dest)?;
+                    writer.after_rename(safe_path);
                     let _ = std::fs::remove_file(&outcome.path);
                     report.written.push(AppliedFile {
                         safe_path: rel.clone(),
@@ -658,6 +867,214 @@ impl<'a> PlanExecutor<'a> {
             path: rel,
             sha512: want,
         }))
+    }
+}
+
+/// The journal's side of one apply.
+///
+/// It exists for one reason: a record is a single document, so every write
+/// rewrites the whole file, and the file grows with the number of items. A
+/// pack apply that moved four states per file would rewrite the record four
+/// times per file, so the bytes written grow with the *square* of the file
+/// count — the volume measurement in the tests measures exactly that. So the
+/// file's whole chain is written in one call, and the previous file's ending
+/// rides in the same call: one write per file, not four.
+struct JournalWriter<'a> {
+    write: &'a mut (dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError> + Send),
+    /// The item whose ending is owed to the record.
+    owed: Option<(String, ItemState)>,
+}
+
+impl<'a> JournalWriter<'a> {
+    fn new(
+        write: &'a mut (dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError> + Send),
+    ) -> Self {
+        Self { write, owed: None }
+    }
+
+    fn emit(&mut self, op: JournalOp) -> Result<(), ExecError> {
+        (self.write)(op).map(|_| ()).map_err(ExecError::from)
+    }
+
+    /// The commit point: the item's chain, and the previous item's ending.
+    ///
+    /// The chain is `queued → downloading → verifying → committing`: the
+    /// bytes are in flight, then checked, then the rename is pending. The
+    /// three steps are walked in one write, so what the record shows is
+    /// `committing` — "the part is verified and the rename has not happened
+    /// yet" — and never a state that is not true of the disk.
+    ///
+    /// The previous item's ending rides along because its file is already on
+    /// disk: the record would otherwise be a file behind, and the write it
+    /// saves is the difference between one write per file and two.
+    fn at_commit_point(&mut self, item_id: &str) -> Result<(), ExecError> {
+        let mut transitions = Vec::with_capacity(4);
+        if let Some((prev, state)) = self.owed.take() {
+            transitions.push((prev, state));
+        }
+        let id = item_id.to_string();
+        transitions.push((id.clone(), ItemState::Downloading));
+        transitions.push((id.clone(), ItemState::Verifying));
+        transitions.push((id, ItemState::Committing));
+        self.emit(JournalOp::Items { transitions })
+    }
+
+    /// The file landed; the record says so in the next write.
+    fn after_rename(&mut self, item_id: &str) {
+        self.owed = Some((item_id.to_string(), ItemState::Completed));
+    }
+
+    /// The destination already held the right bytes.
+    fn skipped(&mut self, item_id: &str) {
+        self.owed = Some((item_id.to_string(), ItemState::Skipped));
+    }
+
+    /// The item failed.
+    fn fail_current(&mut self, item_id: &str) -> Result<(), ExecError> {
+        let mut transitions = Vec::with_capacity(2);
+        if let Some((prev, state)) = self.owed.take() {
+            transitions.push((prev, state));
+        }
+        transitions.push((item_id.to_string(), ItemState::Failed));
+        self.emit(JournalOp::Items { transitions })
+    }
+
+    /// Writes the last ending, if any.
+    fn flush(&mut self) -> Result<(), ExecError> {
+        if let Some((id, state)) = self.owed.take() {
+            self.emit(JournalOp::Items {
+                transitions: vec![(id, state)],
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// A reader that hashes what it hands over.
+///
+/// The source of an override is read once: the copy and the reference hash
+/// come out of the same pass, so the two can never describe different bytes.
+struct HashingReader<R> {
+    inner: R,
+    hasher: sha2::Sha512,
+}
+
+impl<R: Read> HashingReader<R> {
+    fn new(inner: R) -> Self {
+        use sha2::Digest as _;
+        Self {
+            inner,
+            hasher: sha2::Sha512::new(),
+        }
+    }
+
+    /// The hash of everything that was read, lowercase hex.
+    fn finish(self) -> String {
+        use sha2::Digest as _;
+        self.hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        use sha2::Digest as _;
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.hasher.update(&buf[..n]);
+        }
+        Ok(n)
+    }
+}
+
+/// F-076: the `.part` files an interrupted apply of THIS pack left behind.
+///
+/// Only a record that proves the file is ours may have its `.part` removed.
+/// The proof is the record: its items name the exact `.part` this apply
+/// wrote, and its pack block names the archive. A `.part` at any other path
+/// is somebody else's file and stays untouched — removing it would destroy a
+/// file this apply never wrote, and the refusal that follows is the honest
+/// answer for a file we cannot attribute.
+pub fn interrupted_parts(
+    journal: &Journal,
+    identity: &PackIdentity,
+    instance_root: &Path,
+) -> Vec<PathBuf> {
+    journal
+        .discover()
+        .unfinished()
+        .filter(|record| record.kind == OperationKind::MrpackInstall)
+        .filter(|record| {
+            record.pack.as_ref().is_some_and(|pack| {
+                pack.archive_sha512
+                    .eq_ignore_ascii_case(&identity.archive_sha512)
+            })
+        })
+        .filter(|record| same_path(Path::new(&record.target_path), instance_root))
+        .flat_map(|record| {
+            record
+                .items
+                .iter()
+                .map(|item| PathBuf::from(&item.partial_path))
+        })
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect()
+}
+
+/// F-076: removes the `.part` files an interrupted commit of this pack left.
+///
+/// The wedge this clears: `write_part` refuses a `.part` it cannot
+/// attribute, so a `.part` left behind by an interrupted commit of the same
+/// pack makes that pack permanently uninstallable — every retry meets the
+/// same refusal, and the instance stays half-applied forever. The journal is
+/// the only thing that can tell our part from a foreign one, so only the
+/// paths a record names are removed, and only inside the instance.
+pub fn clear_interrupted_parts(
+    journal: &Journal,
+    identity: &PackIdentity,
+    instance_root: &Path,
+) -> usize {
+    let mut removed = 0usize;
+    for part in interrupted_parts(journal, identity, instance_root) {
+        // Defence in depth: the record is ours, but a hand-edited record
+        // could name a path outside the instance, and this deletes.
+        if !part.starts_with(instance_root) {
+            tracing::warn!(
+                path = %part.display(),
+                "the journal names a part outside the instance; leaving it alone"
+            );
+            continue;
+        }
+        match std::fs::remove_file(&part) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                // Best effort: the apply that follows refuses the
+                // destination with the honest `StalePart` error, which says
+                // more than a cleanup failure would.
+                tracing::warn!(
+                    path = %part.display(),
+                    error = %e,
+                    "could not remove the part file an interrupted commit left"
+                );
+            }
+        }
+    }
+    removed
+}
+
+/// Whether two paths name the same place, even when they spell it
+/// differently.
+fn same_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
     }
 }
 

@@ -797,6 +797,182 @@ fn pack_apply_cleans_staging_and_ends_the_stream_when_it_fails_before_starting()
     });
 }
 
+/// F-076: the apply leaves a record that says what it did.
+///
+/// Without it, a crash leaves half-applied files and nothing that says so:
+/// no record names the pack, the instance, or the scratch file the apply
+/// owned, so no later run can tell what happened or resume it.
+#[test]
+fn spec_f076_apply_writes_a_journal_record_that_names_the_pack_and_the_instance() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        Mock::given(method("GET"))
+            .and(path("/data/packfile.jar"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jar.clone())
+                    .insert_header("content-type", "application/java-archive"),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        let state = app_state(dir.path(), &root);
+
+        let pack = pack_bytes(&format!("{}/data/packfile.jar", server.uri()), &jar);
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(&pack_path, &pack).expect("write pack");
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        execute_modpack_install_with(
+            &state,
+            &provider,
+            request(&pack_path, &root),
+            recording_channel(&sink),
+            true,
+        )
+        .await
+        .expect("apply failed");
+
+        let handle = state.journal_handle();
+        let guard = handle.lock().expect("journal");
+        let digest = sha512_hex(&pack);
+        let found = guard.discover();
+        let record = found
+            .records()
+            .find(|r| r.pack.as_ref().is_some_and(|p| p.archive_sha512 == digest))
+            .expect("the apply must leave a record for this pack");
+        assert_eq!(record.kind, mm_core::journal::OperationKind::MrpackInstall);
+        assert_eq!(record.state, mm_core::journal::OperationState::Completed);
+        assert_eq!(
+            record.target_path,
+            std::fs::canonicalize(&root)
+                .expect("canonical root")
+                .to_string_lossy()
+        );
+        let meta = record.pack.as_ref().expect("the record names the pack");
+        assert_eq!(meta.pack_name, "Wiremock Pack");
+        assert_eq!(meta.pack_version_id, "v1.2.3");
+        assert_eq!(meta.archive_sha512, digest);
+
+        // Every destination is an item, and every item names the scratch file
+        // the apply owns and the path it lands at.
+        assert_eq!(record.items.len(), 2, "{record:?}");
+        let jar_item = record
+            .items
+            .iter()
+            .find(|i| i.item_id == "mods/packfile.jar")
+            .expect("the jar item");
+        assert_eq!(
+            jar_item.partial_path,
+            mm_core::safety::atomic::part_path(
+                &std::fs::canonicalize(&root)
+                    .expect("canon")
+                    .join("mods/packfile.jar")
+            )
+            .to_string_lossy()
+        );
+        assert!(jar_item.partial_path.ends_with(".part"));
+        assert_eq!(record.completed_count, 2);
+    });
+}
+
+/// F-076: the wedge.
+///
+/// A `.part` left by an interrupted commit of the same pack makes the
+/// destination unwritable — the write refuses a part it cannot attribute —
+/// so the pack would be permanently uninstallable. The journal is the only
+/// proof that the part is ours, so the record is what lets the next run
+/// clear it. A part no record names is somebody else's file and stays.
+#[test]
+fn spec_f076_apply_clears_the_part_an_interrupted_commit_of_the_same_pack_left() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        Mock::given(method("GET"))
+            .and(path("/data/packfile.jar"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jar.clone())
+                    .insert_header("content-type", "application/java-archive"),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        let state = app_state(dir.path(), &root);
+
+        let pack = pack_bytes(&format!("{}/data/packfile.jar", server.uri()), &jar);
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(&pack_path, &pack).expect("write pack");
+
+        // What an interrupted commit of this pack leaves behind: a `.part` at
+        // the destination, and the record that proves it is ours.
+        let canonical = std::fs::canonicalize(&root).expect("canonical root");
+        let destination = canonical.join("mods/packfile.jar");
+        let part = mm_core::safety::atomic::part_path(&destination);
+        std::fs::write(&part, b"half-written").expect("leftover");
+
+        let handle = state.journal_handle();
+        {
+            let guard = handle.lock().expect("journal");
+            let previous = guard
+                .start_pack(
+                    "i1",
+                    &canonical.to_string_lossy(),
+                    vec![mm_core::journal::pack_item(
+                        "mods/packfile.jar",
+                        "Wiremock Pack",
+                        &part.to_string_lossy(),
+                        &destination.to_string_lossy(),
+                    )],
+                    mm_core::journal::PackApplyMeta {
+                        pack_name: "Wiremock Pack".to_string(),
+                        pack_version_id: "v1.2.3".to_string(),
+                        archive_sha512: sha512_hex(&pack),
+                        archive_path: pack_path.to_string_lossy().into_owned(),
+                    },
+                )
+                .expect("start");
+            guard
+                .transition_operation(
+                    &previous.operation_id,
+                    mm_core::journal::OperationState::Running,
+                    None,
+                )
+                .expect("running");
+        }
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let result = execute_modpack_install_with(
+            &state,
+            &provider,
+            request(&pack_path, &root),
+            recording_channel(&sink),
+            true,
+        )
+        .await
+        .expect("the apply must not be wedged by its own leftover");
+
+        assert_eq!(result.written, 2, "{result:?}");
+        assert!(!part.exists(), "the part the record names must be cleared");
+        assert_eq!(
+            std::fs::read(&destination).expect("read"),
+            jar,
+            "the jar bytes lie"
+        );
+    });
+}
+
 /// Two applies into one instance must not run at the same time.
 ///
 /// They share `<instance>/.mm-staging`, so without serialization one run's

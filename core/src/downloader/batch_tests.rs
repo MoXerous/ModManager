@@ -36,6 +36,11 @@ fn writer(
             let id = current_id(j)?;
             j.transition_item(&id, &item_id, state, None)
         }
+        // The pack variants are not the downloader's business: a batch never
+        // starts a pack apply and never batches its transitions.
+        JournalOp::PackStart { .. } | JournalOp::Items { .. } => Err(
+            crate::journal::JournalError::ItemMissing("not a download batch op".into()),
+        ),
     }
 }
 
@@ -207,6 +212,9 @@ async fn spec_f063_the_journal_is_not_locked_while_a_download_runs() {
                         None => Err(crate::journal::JournalError::ItemMissing("none".into())),
                     }
                 }
+                JournalOp::PackStart { .. } | JournalOp::Items { .. } => Err(
+                    crate::journal::JournalError::ItemMissing("not a download batch op".into()),
+                ),
             }
         };
         let probe = handle.clone();

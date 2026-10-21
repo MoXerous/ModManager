@@ -54,8 +54,9 @@ use std::time::Instant;
 use tauri::ipc::Channel;
 use zip::ZipArchive;
 
+use mm_core::journal::{JournalError, JournalOp, OperationKind, OperationRecord};
 use mm_core::modpack::archive::{plan_install, read_pack, InstallPlan, PackError};
-use mm_core::modpack::exec::{self, ExecError, PackEvent};
+use mm_core::modpack::exec::{self, ExecError, PackEvent, PackIdentity};
 use mm_core::modpack::mrpack::{Pack, STAGING_DIR};
 use mm_core::safety::extract::{extract_safely, ExtractError};
 use mm_core::safety::inspect::{ArchiveLimits, InspectError};
@@ -123,9 +124,12 @@ fn exec_error(e: &ExecError) -> IpcError {
         // honest code: the file exists in no place, and retrying the same
         // apply will ask the same question.
         E::NoDownloadSource { .. } => IpcError::new(ErrorCode::NotFound, e),
-        // The plan names an override the extraction should have produced. The
+        // The plan names the override the extraction should have produced. The
         // tree is ours, so this is a bug in staging, not the user's pack.
         E::MissingOverride { .. } | E::Internal(_) => IpcError::internal(e),
+        // The record could not be written. That is our bookkeeping, not the
+        // user's input: the same words the journal's own errors get.
+        E::Journal(j) => super::journal_error(j),
         // Corrupt or tampered bytes, a failed rename, a failing disk.
         E::HashMismatch { .. } | E::Atomic(_) | E::Download(_) | E::Io { .. } => IpcError::io(e),
     }
@@ -325,22 +329,26 @@ async fn reset_staging(staging: PathBuf) {
 /// `resolve_dir` runs first so a missing folder keeps its own answer (`io`,
 /// as every command reports it) instead of being reclassified as "not
 /// registered" — the two are different problems for the user.
-async fn registered_root(state: &AppState, raw: &str) -> Result<PathBuf, IpcError> {
+///
+/// The instance's id comes back with the path: the record of a pack apply
+/// names the instance it applies to, and the id is what every other record
+/// in this app uses for that.
+async fn registered_root(state: &AppState, raw: &str) -> Result<(PathBuf, String), IpcError> {
     let root = super::resolve_dir(raw)?;
     let queried = root.clone();
-    state
+    let id = state
         .with_db(move |db| {
             let row = mm_core::db::instances::find_by_path(db, &queried)
                 .map_err(|e| super::row_error(&e))?;
-            if row.is_none() {
-                return Err(IpcError::invalid_input(
+            match row {
+                Some(row) => Ok(row.id),
+                None => Err(IpcError::invalid_input(
                     "that folder is not a registered instance",
-                ));
+                )),
             }
-            Ok(())
         })
         .await?;
-    Ok(root)
+    Ok((root, id))
 }
 
 /// One async mutex per instance root, held for the whole apply.
@@ -414,7 +422,7 @@ pub async fn plan_modpack_install_with(
     req: ModpackInstallRequest,
 ) -> Result<ModpackPlanDto, IpcError> {
     let pack_path = resolve_file(&req.pack_path)?;
-    let instance_root = registered_root(state, &req.instance_root).await?;
+    let (instance_root, _instance_id) = registered_root(state, &req.instance_root).await?;
     // The plan itself stays here: it is what the writes were derived from, and
     // the apply rebuilds it rather than accepting one from the webview. The
     // digest of those bytes is the one thing the webview gets to keep.
@@ -487,7 +495,7 @@ pub(super) async fn run_apply(
     let pack_path = resolve_file(&req.pack_path)?;
     // The registry gate comes before any staging work: a folder this app does
     // not own is never touched, not even to remove a stale tree inside it.
-    let root = registered_root(state, &req.instance_root).await?;
+    let (root, instance_id) = registered_root(state, &req.instance_root).await?;
     let staging = root.join(STAGING_DIR);
 
     // Serialized before the first reset: two applies on one root share the
@@ -541,7 +549,7 @@ pub(super) async fn run_apply(
     }
     .await;
 
-    let (_digest, pack, plan, _writes) = match extracted {
+    let (digest, pack, plan, _writes) = match extracted {
         Ok(Ok(v)) => v,
         // A refused apply must end the stream on a terminal event and leave no
         // extracted tree: the screen follows the channel, and a promise
@@ -557,6 +565,28 @@ pub(super) async fn run_apply(
         }
     };
 
+    // F-076: which pack this apply is about. The digest is the one the plan
+    // showed the user, so the record ties itself to the plan it came from.
+    let identity = PackIdentity {
+        name: pack.name.clone(),
+        version_id: pack.version_id.clone(),
+        archive_sha512: digest.clone(),
+        archive_path: pack_path.to_string_lossy().into_owned(),
+    };
+
+    // F-076: an interrupted commit of THIS pack left a `.part` at one of the
+    // destinations, and a `.part` we cannot attribute makes the destination
+    // unwritable — the pack would be permanently uninstallable. The journal
+    // is the only proof that the file is ours, so the paths come from the
+    // record; a `.part` no record names stays untouched.
+    {
+        let handle = state.journal_handle();
+        let g = handle
+            .lock()
+            .map_err(|_| IpcError::internal("journal lock poisoned"))?;
+        exec::clear_interrupted_parts(&g, &identity, &root);
+    }
+
     let mut throttle = ProgressThrottle::new();
     let mut emit = |event: &PackEvent| {
         if !throttle.allows(is_decisive_pack_phase(event.phase), Instant::now()) {
@@ -567,12 +597,54 @@ pub(super) async fn run_apply(
         let _ = on_event.send(pack_event_to_dto(event));
     };
 
-    let executor = exec::PlanExecutor::new(provider, &downloader, &pack, &plan, &staging, &root)
-        .allow_insecure_loopback(allow_insecure_loopback);
+    // The journal write, one lock per write: the handle must not be held for
+    // the length of an install, or every other command that touches the
+    // journal waits for the last byte.
+    let journal = state.journal_handle();
+    let mut operation_id = String::new();
+    let mut write = |op: JournalOp| -> Result<OperationRecord, JournalError> {
+        let g = journal
+            .lock()
+            .map_err(|_| JournalError::ItemMissing("journal lock poisoned".into()))?;
+        match op {
+            JournalOp::Start { target, items } => {
+                let r = g.start(OperationKind::DownloadBatch, "", &target, items)?;
+                operation_id = r.operation_id.clone();
+                Ok(r)
+            }
+            JournalOp::PackStart {
+                target,
+                items,
+                pack,
+            } => {
+                let r = g.start_pack(&instance_id, &target, items, pack)?;
+                operation_id = r.operation_id.clone();
+                Ok(r)
+            }
+            JournalOp::Operation(state) => g.transition_operation(&operation_id, state, None),
+            JournalOp::Item { item_id, state } => {
+                g.transition_item(&operation_id, &item_id, state, None)
+            }
+            JournalOp::Items { transitions } => {
+                g.transition_items(&operation_id, &transitions, None)
+            }
+        }
+    };
+
+    let executor = exec::PlanExecutor::new(
+        provider,
+        &downloader,
+        &pack,
+        &plan,
+        &staging,
+        &root,
+        identity,
+    )
+    .allow_insecure_loopback(allow_insecure_loopback);
 
     // Core removes the staging tree and emits the terminal event on both
     // paths, so a failure here has already finished narrating itself.
-    let report: exec::ApplyReport = match executor.apply(&mut emit).await {
+    let report: exec::ApplyReport = match executor.apply(&mut write, &mut emit).await {
         Ok(report) => report,
         Err(e) => return Err(exec_error(&e)),
     };

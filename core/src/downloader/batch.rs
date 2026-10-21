@@ -17,7 +17,9 @@ use std::sync::Arc;
 use crate::downloader::{
     DownloadPhase, DownloadProgress, DownloadRequest, DownloadStatus, Downloader,
 };
-use crate::journal::{ItemState, JournalError, OperationItem, OperationRecord, OperationState};
+use crate::journal::{
+    ItemState, JournalError, JournalOp, OperationItem, OperationRecord, OperationState,
+};
 
 /// What the caller learns about one item's progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,26 +70,11 @@ pub enum BatchError {
     Cancelled,
 }
 
-/// One journal write the batch needs.
+/// The journal writes the batch needs are [`JournalOp`], which lives with the
+/// journal itself (F-141): this module and the pack executor are two callers
+/// of one record format, and a re-export keeps every existing caller
+/// compiling without a second definition.
 ///
-/// A callback rather than a `&Journal`, and that is the whole point: a
-/// `&Journal` held across a multi-minute download means the mutex behind it is
-/// held for minutes too, and every other command that touches the journal —
-/// including the recovery reads on the Instances page — waits for the last
-/// byte. This type lets the caller open and close the lock per write.
-#[derive(Debug, Clone)]
-pub enum JournalOp {
-    Start {
-        target: String,
-        items: Vec<OperationItem>,
-    },
-    Operation(OperationState),
-    Item {
-        item_id: String,
-        state: ItemState,
-    },
-}
-
 /// Runs every item, journalling the batch as it goes.
 ///
 /// `write` is called once per state change and must not be held open between

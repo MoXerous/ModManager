@@ -86,10 +86,15 @@ fn journal_error(e: &mm_core::journal::JournalError) -> IpcError {
         // The operation id was not one of ours, so the request was malformed.
         J::NotCanonicalId | J::ItemMissing(_) | J::DuplicateItem(_) => IpcError::invalid_input(e),
         // A state or counter that does not add up is our bookkeeping, not the
-        // user's request — retrying the same action will hit it again.
+        // user's request — retrying the same action will hit it again. The
+        // schema and the pack block are the same kind of thing: the record on
+        // disk says something this build does not understand, and no answer
+        // the user gives will change that.
         J::IllegalOperationTransition { .. }
         | J::IllegalItemTransition { .. }
-        | J::CounterMismatch(_) => IpcError::internal(e),
+        | J::CounterMismatch(_)
+        | J::UnsupportedSchema { .. }
+        | J::KindPackMismatch { .. } => IpcError::internal(e),
         J::Io(_) => IpcError::io(e),
     }
 }
@@ -684,6 +689,14 @@ pub async fn execute_install_with(
                 JournalOp::Item { item_id, state } => {
                     g.transition_item(&operation_id, &item_id, state, None)
                 }
+                JournalOp::Items { transitions } => {
+                    g.transition_items(&operation_id, &transitions, None)
+                }
+                // A download batch is not a pack apply: the two never share a
+                // record, and this writer has no pack to start one with.
+                JournalOp::PackStart { .. } => Err(JournalError::ItemMissing(
+                    "a download batch cannot start a pack apply".into(),
+                )),
             }
         };
         let mut emit = |item_id: &str, p: ItemProgress| {
