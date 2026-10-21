@@ -632,10 +632,21 @@ mod tests {
                 r.get(0)
             })
             .expect("stored path");
+        // Each platform spells a stored path its own way: Windows stores the
+        // verbatim form, because that is what `canonicalize` returns there.
+        // Both sides of the split use the binding, so neither platform
+        // compiles the assertion away and leaves an unused variable behind -
+        // which is exactly how this test broke CI on Linux while passing on
+        // Windows.
         #[cfg(windows)]
         assert!(
             stored_path.starts_with("\\\\?\\"),
             "premise: rows are stored verbatim-prefixed on Windows, got {stored_path:?}"
+        );
+        #[cfg(not(windows))]
+        assert!(
+            !stored_path.starts_with("\\\\?\\"),
+            "on this platform rows carry no verbatim prefix, got {stored_path:?}"
         );
 
         let found = find_by_path(&db, &held).expect("query");
