@@ -9,27 +9,7 @@ import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
 import { executeInstall, listInstances, searchProjects, toIpcError } from '../../lib/ipc';
-
-// Suggestions, not a closed set: Modrinth adds versions and loaders faster than
-// a release can ship a list, and the fields accept anything typed. The install
-// and the search always use what is in the field, never a row from here.
-const GAME_VERSIONS = [
-  '1.21.1',
-  '1.21',
-  '1.20.6',
-  '1.20.4',
-  '1.20.1',
-  '1.19.4',
-  '1.18.2',
-  '1.16.5',
-  '1.12.2',
-  '1.8.9',
-] as const;
-// Modrinth's loader facets are lowercase ids.
-const LOADERS = ['fabric', 'forge', 'neoforge', 'quilt'] as const;
-
-const DEFAULT_GAME_VERSION = '1.21.1';
-const DEFAULT_LOADER = 'fabric';
+import { GAME_VERSIONS, LOADERS, setGameTarget, useGameTarget } from '../gameTarget';
 
 interface Props {
   /** Where to send the user once a download starts: the queue is the only
@@ -40,8 +20,9 @@ interface Props {
 export function BrowsePage({ onInstalled }: Props) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
-  const [gameVersion, setGameVersion] = useState(DEFAULT_GAME_VERSION);
-  const [loader, setLoader] = useState(DEFAULT_LOADER);
+  // The version and the loader are shared with the queue: what is filtered
+  // here is what gets installed there.
+  const { gameVersion, loader } = useGameTarget();
   const [page, setPage] = useState<SearchPageDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
   const [searching, setSearching] = useState(false);
@@ -70,8 +51,14 @@ export function BrowsePage({ onInstalled }: Props) {
   }, []);
 
   const targetPath = instances.find((i) => i.id === target)?.path ?? '';
-  // Nothing to install into is not a state the button can be pressed in.
-  const canInstall = targetPath.length > 0;
+  // Nothing to install into is not a state the button can be pressed in. An
+  // empty version or loader is not either: core reads an empty version as
+  // "any version" and installs the newest build of the fallback loader,
+  // which may not match the instance at all.
+  const canInstall =
+    targetPath.length > 0 &&
+    gameVersion.trim().length > 0 &&
+    loader.trim().length > 0;
 
   const search = useCallback(() => {
     const text = query.trim();
@@ -145,7 +132,7 @@ export function BrowsePage({ onInstalled }: Props) {
             id="browse-version"
             label={t('browse.fieldVersion')}
             value={gameVersion}
-            onValueChange={setGameVersion}
+            onValueChange={(next) => setGameTarget({ gameVersion: next })}
             options={GAME_VERSIONS}
             className="w-32"
           />
@@ -156,7 +143,7 @@ export function BrowsePage({ onInstalled }: Props) {
             id="browse-loader"
             label={t('browse.fieldLoader')}
             value={loader}
-            onValueChange={setLoader}
+            onValueChange={(next) => setGameTarget({ loader: next })}
             options={LOADERS}
             className="w-32"
           />

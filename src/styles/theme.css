@@ -131,6 +131,23 @@
   animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
+/*
+ * The header carries the page title and has no name of its own, so it rides
+ * the root's cross-fade and fades with it — the title would blink on every
+ * page change. The root is therefore not animated: the new page appears at
+ * once, header included, and only the named `page-content` region cross-fades
+ * underneath it. The old root is dropped for the same reason, and because two
+ * opaque roots blended together would wash the page out.
+ */
+::view-transition-old(root) {
+  animation: none;
+  opacity: 0;
+}
+
+::view-transition-new(root) {
+  animation: none;
+}
+
 /* Motion is decoration in this app: the rail, the page fade, dialogs and
  * progress bars all remain usable with it switched off. One rule covers every
  * animated surface rather than a variant on each utility. */

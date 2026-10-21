@@ -134,6 +134,7 @@
   "install.none": "لا شيء للتثبيت",
   "install.target": "مسار المجلد",
   "install.slugs": "أسماء المودات (مثل sodium)",
+  "install.gameTarget": "الهدف: {{version}} · {{loader}}",
   "install.count": "{{count}} في الطابور",
   "install.count_zero": "{{count}} في الطابور",
   "install.count_one": "{{count}} في الطابور",

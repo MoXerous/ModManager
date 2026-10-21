@@ -52,10 +52,14 @@ const ITEM = 'flex h-9 w-full shrink-0 items-center gap-2.5 overflow-hidden roun
  * Labels are clipped, never wrapped: a wrapping label would change the nav's
  * height mid-animation. The timing is asymmetric so the words stay out of the
  * way while collapsing and only arrive once there is room while expanding.
+ *
+ * The label is hidden from the accessibility tree while it is invisible: a
+ * screen reader must not read out a name the eye cannot see. The button
+ * carries the name of the action anyway.
  */
 function labelClass(collapsed: boolean): string {
   return cn(
-    'min-w-0 truncate whitespace-nowrap text-body transition-opacity ease-out',
+    'min-w-0 truncate whitespace-nowrap text-body transition-opacity ease-out will-change-[opacity]',
     collapsed ? 'opacity-0 duration-100' : 'opacity-100 duration-150 delay-75',
   );
 }
@@ -100,11 +104,15 @@ export function Shell({ page, onNavigate, children }: ShellProps) {
 
   return (
     <div
-      // Animating the grid track, not the rail's width, keeps the content
-      // column in the same layout: it reflows in step with the rail instead of
-      // being overlapped by an absolutely positioned rail. Reduced motion is
-      // handled once, globally, in theme.css.
-      className="grid h-screen overflow-hidden transition-[grid-template-columns] duration-200 ease-out"
+      // The rail's track changes in one step, it is not animated: the second
+      // track is `1fr`, so every frame of a track animation would lay the
+      // whole page out again — twelve layouts for one click, all of them
+      // thrown away. `grid-template-columns` cannot be composited either, so
+      // a `will-change` hint on it would promise a compositor that does not
+      // exist. The width therefore changes once, and the only motion left is
+      // the labels' opacity, which the compositor animates on its own layer.
+      // Reduced motion is handled once, globally, in theme.css.
+      className="grid h-screen overflow-hidden"
       style={{
         gridTemplateColumns: `${sidebarCollapsed ? RAIL_COLLAPSED : RAIL_EXPANDED}px 1fr`,
       }}
@@ -135,7 +143,9 @@ export function Shell({ page, onNavigate, children }: ShellProps) {
             )}
           >
             <item.icon aria-hidden className="size-[18px] shrink-0" strokeWidth={1.75} />
-            <span className={labelClass(sidebarCollapsed)}>{t(item.labelKey)}</span>
+            <span aria-hidden={sidebarCollapsed || undefined} className={labelClass(sidebarCollapsed)}>
+              {t(item.labelKey)}
+            </span>
           </button>
         ))}
 
@@ -145,17 +155,17 @@ export function Shell({ page, onNavigate, children }: ShellProps) {
             onClick={() => setPreferences({ sidebarCollapsed: !sidebarCollapsed })}
             aria-label={toggleLabel}
             title={toggleLabel}
-            // The rail is the thing being disclosed; it stays in the document
-            // and keeps working in both states, only its width changes.
-            aria-expanded={!sidebarCollapsed}
-            aria-controls="app-sidebar"
+            // The rail never leaves the page: only its labels come and go, so
+            // there is nothing here to disclose and nothing to collapse.
             className={cn(
               ITEM,
               'text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50',
             )}
           >
             <ToggleIcon aria-hidden className="size-[18px] shrink-0" strokeWidth={1.75} />
-            <span className={labelClass(sidebarCollapsed)}>{toggleLabel}</span>
+            <span aria-hidden={sidebarCollapsed || undefined} className={labelClass(sidebarCollapsed)}>
+              {toggleLabel}
+            </span>
           </button>
         </div>
       </nav>

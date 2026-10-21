@@ -118,6 +118,7 @@
   "install.none": "Nothing to install",
   "install.target": "Instance folder",
   "install.slugs": "Mod names (e.g. sodium)",
+  "install.gameTarget": "Target: {{version}} · {{loader}}",
   "install.count": "{{count}} in the queue",
   "install.count_one": "{{count}} in the queue",
   "install.count_other": "{{count}} in the queue",

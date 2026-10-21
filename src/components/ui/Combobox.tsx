@@ -1,9 +1,10 @@
-import type { FocusEvent, KeyboardEvent } from 'react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Command as CommandPrimitive } from 'cmdk';
-import { Check, ChevronDown, CornerDownLeft } from 'lucide-react';
-import { cn } from 'cn';
+import type { FocusEvent, KeyboardEvent } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
+import { useTranslation } from "react-i18next"
+import { Command as CommandPrimitive } from "cmdk"
+import { Check, ChevronDown, CornerDownLeft } from "lucide-react"
+import { cn } from "cn"
 
 /**
  * An editable dropdown: the list suggests, it never constrains.
@@ -17,26 +18,54 @@ import { cn } from 'cn';
  * and `id`, because the field is one cell in a row, not a stacked form row.
  * `label` is the field's accessible name; the listbox announces itself as
  * suggestions.
+ *
+ * The popup is a portal on `document.body`. The page scrolls inside `main`,
+ * which clips whatever overflows it, so a list opened near the bottom of a
+ * short window used to be cut off with its rows unreachable. The portal is
+ * placed from the trigger's box, so it still lines up with the field.
  */
+
+/** How long the leave animation runs before the popup leaves the DOM. */
+const EXIT_MS = 200
+
+/** The popup never grows past this, whatever the window says. */
+const MAX_HEIGHT = 256
+
+/** Space between the field and the popup, and the margin kept off the window. */
+const GAP = 4
+const MARGIN = 8
+
+interface PopupBox {
+  /** Distance from the top of the viewport, when the popup opens downwards. */
+  top?: number
+  /** Distance from the bottom of the viewport, when it opens upwards. */
+  bottom?: number
+  /** Distance from the inline start of the viewport. */
+  start: number
+  /** The popup is never narrower than the field that opened it. */
+  minWidth: number
+  maxHeight: number
+}
+
 export interface ComboboxProps {
   /** The text in the field. Free text is kept; a suggestion replaces it. */
-  value: string;
+  value: string
   /** Every keystroke and every pick land here. */
-  onValueChange: (value: string) => void;
+  onValueChange: (value: string) => void
   /** Offered rows. A value outside this list is still a valid value. */
-  options: readonly string[];
+  options: readonly string[]
   /** Accessible name for the field and the popup. */
-  label: string;
+  label: string
   /** Ties an external `<label htmlFor>` to the input. */
-  id?: string;
-  placeholder?: string;
-  disabled?: boolean;
+  id?: string
+  placeholder?: string
+  disabled?: boolean
   /** Direction of the field itself: versions and loaders are Latin tokens. */
-  dir?: 'ltr' | 'rtl';
+  dir?: "ltr" | "rtl"
   /** Classes for the positioning root, e.g. a width. */
-  className?: string;
+  className?: string
   /** Classes for the popup, e.g. a width wider than a narrow field. */
-  listClassName?: string;
+  listClassName?: string
 }
 
 export function Combobox({
@@ -47,36 +76,80 @@ export function Combobox({
   id,
   placeholder,
   disabled = false,
-  dir = 'ltr',
+  dir = "ltr",
   className,
   listClassName,
 }: ComboboxProps) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
   /**
    * Opening is not editing. A field already holding "1.21.1" must still show
    * the other versions, otherwise the popup would offer the value that is
    * already in the box and nothing else; the narrowing starts with a keystroke.
    */
-  const [editing, setEditing] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false)
+  /** The popup stays in the DOM while it fades out, then it is hidden. */
+  const [present, setPresent] = useState(false)
+  const [box, setBox] = useState<PopupBox | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const anchorRef = useRef<HTMLDivElement>(null)
   /** Read by the observer below, which outlives every open/close render. */
-  const openRef = useRef(open);
+  const openRef = useRef(open)
 
-  const typed = value.trim();
-  const query = typed.toLowerCase();
+  const typed = value.trim()
+  const query = typed.toLowerCase()
   // `<select>` options are unique by contract; a free-typed list is not, and a
   // duplicate would make cmdk's item map and React's keys disagree.
-  const unique = Array.from(new Set(options.filter((option) => option.length > 0)));
+  const unique = Array.from(new Set(options.filter((option) => option.length > 0)))
   const visible =
     editing && query.length > 0
       ? unique.filter((option) => option.toLowerCase().includes(query))
-      : unique;
+      : unique
   // "Use what I typed" is an action, not a suggestion: it appears only while
   // editing and only when no row already says exactly that.
   const showCustom =
-    editing && typed.length > 0 && !unique.some((option) => option.toLowerCase() === query);
+    editing && typed.length > 0 && !unique.some((option) => option.toLowerCase() === query)
+
+  /**
+   * The popup lines up with the field, not with the page. The page is RTL by
+   * default, so the side the popup grows towards follows the document's
+   * direction while the rows themselves keep the field's direction.
+   */
+  const pageDir = document.documentElement.dir === "rtl" ? "rtl" : "ltr"
+
+  /**
+   * cmdk highlights a row by writing `aria-selected` straight into that row;
+   * the surrounding component does not re-render, so no effect here would see
+   * the change, and cmdk only publishes the active row on arrow keys. A
+   * combobox must announce what Enter would pick as soon as the list filters,
+   * so the highlight is mirrored onto the field.
+   *
+   * The mirror runs from the layout effect below, so it is refreshed on every
+   * render — reopening the popup republishes the row that is still active —
+   * and from the observer below, which sees the rows change without a render.
+   */
+  const syncActiveDescendant = useCallback(() => {
+    const input = inputRef.current
+    const list = listRef.current
+    if (!input || !list) {
+      return
+    }
+    if (!openRef.current) {
+      if (input.hasAttribute("aria-activedescendant")) {
+        input.removeAttribute("aria-activedescendant")
+      }
+      return
+    }
+    const active = list.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
+    if (active?.id) {
+      if (input.getAttribute("aria-activedescendant") !== active.id) {
+        input.setAttribute("aria-activedescendant", active.id)
+      }
+    } else if (input.hasAttribute("aria-activedescendant")) {
+      input.removeAttribute("aria-activedescendant")
+    }
+  }, [])
 
   /**
    * cmdk is a palette primitive: its input hardcodes `aria-expanded="true"`
@@ -86,157 +159,204 @@ export function Combobox({
    * commit — React will not touch them again while its props stay the same.
    */
   useLayoutEffect(() => {
-    openRef.current = open;
-    const input = inputRef.current;
+    openRef.current = open
+    const input = inputRef.current
     if (!input) {
-      return;
+      return
     }
-    input.setAttribute('aria-expanded', open ? 'true' : 'false');
-    const root = input.closest('[cmdk-root]');
+    input.setAttribute("aria-expanded", open ? "true" : "false")
+    const root = input.closest("[cmdk-root]")
     if (id) {
-      input.id = id;
+      input.id = id
       // cmdk's own screen-reader label still names this field; point it at the
       // real id so its `for` and the caller's visible `<label for>` agree.
-      const ownLabel = root?.querySelector<HTMLLabelElement>('label[cmdk-label]');
+      const ownLabel = root?.querySelector<HTMLLabelElement>("label[cmdk-label]")
       if (ownLabel) {
-        ownLabel.htmlFor = id;
+        ownLabel.htmlFor = id
       }
     }
-    if (!open) {
-      input.removeAttribute('aria-activedescendant');
+    syncActiveDescendant()
+  })
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) {
+      return
     }
-  });
+    const observer = new MutationObserver(() => syncActiveDescendant())
+    observer.observe(list, {
+      attributes: true,
+      attributeFilter: ["aria-selected"],
+      subtree: true,
+    })
+    return () => observer.disconnect()
+  }, [syncActiveDescendant])
 
   /**
-   * cmdk highlights a row by writing `aria-selected` straight into that row;
-   * the surrounding component does not re-render, so no effect here would see
-   * the change, and cmdk only publishes the active row on arrow keys. A
-   * combobox must announce what Enter would pick as soon as the list filters,
-   * so the highlight is mirrored onto the field. The observer also runs while
-   * closed, because a pick makes cmdk write the id it just selected into a
-   * field that no longer shows a list.
+   * cmdk gives the caret back after a pick by looking the input up by the id
+   * it generated, and falls back to the listbox when that lookup misses. Our
+   * id replaces cmdk's, so the lookup misses and the listbox would take the
+   * focus: the caret would vanish and typing would freeze. The listbox is
+   * never the focus target, so the focus goes back to the field instead.
    */
   useEffect(() => {
-    const input = inputRef.current;
-    const list = listRef.current;
-    if (!input || !list) {
-      return;
+    const list = listRef.current
+    const input = inputRef.current
+    if (!list || !input) {
+      return
     }
-    const sync = () => {
-      if (!openRef.current) {
-        if (input.hasAttribute('aria-activedescendant')) {
-          input.removeAttribute('aria-activedescendant');
-        }
-        return;
+    const onListFocus = (event: Event) => {
+      if (event.target === list) {
+        input.focus()
       }
-      const active = list.querySelector<HTMLElement>('[role="option"][aria-selected="true"]');
-      if (active?.id) {
-        if (input.getAttribute('aria-activedescendant') !== active.id) {
-          input.setAttribute('aria-activedescendant', active.id);
-        }
-      } else if (input.hasAttribute('aria-activedescendant')) {
-        input.removeAttribute('aria-activedescendant');
-      }
-    };
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(list, { attributes: true, attributeFilter: ['aria-selected'], subtree: true });
-    // React owns the attribute too (cmdk renders it from its own state), so a
-    // render that follows one of our writes must not leave the field pointing
-    // at nothing.
-    observer.observe(input, { attributes: true, attributeFilter: ['aria-activedescendant'] });
-    return () => observer.disconnect();
-  }, []);
+    }
+    list.addEventListener("focus", onListFocus)
+    return () => list.removeEventListener("focus", onListFocus)
+  }, [])
+
+  /** The popup rides the leave animation before it leaves the DOM. */
+  useEffect(() => {
+    if (open) {
+      setPresent(true)
+      return
+    }
+    const timer = window.setTimeout(() => setPresent(false), EXIT_MS)
+    return () => window.clearTimeout(timer)
+  }, [open])
+
+  /**
+   * The popup is placed from the field's box, because it lives on the body
+   * and the body does not scroll with the page. It opens downwards when there
+   * is room and upwards when there is not, and it never leaves the window.
+   */
+  useLayoutEffect(() => {
+    if (!present) {
+      return
+    }
+    const anchor = anchorRef.current
+    const list = listRef.current
+    if (!anchor) {
+      return
+    }
+    const place = () => {
+      const rect = anchor.getBoundingClientRect()
+      const height = list?.scrollHeight ?? 0
+      const width = list?.offsetWidth ?? rect.width
+      const below = window.innerHeight - rect.bottom - GAP - MARGIN
+      const above = rect.top - GAP - MARGIN
+      const downwards = below >= height || below >= above
+      const maxHeight = Math.max(96, Math.min(MAX_HEIGHT, downwards ? below : above))
+      // The inline start of the field, in the direction the page reads in.
+      const raw = pageDir === "rtl" ? window.innerWidth - rect.right : rect.left
+      // The popup never leaves the window, whichever way it opens.
+      const max = Math.max(MARGIN, window.innerWidth - width - MARGIN)
+      const start = Math.min(Math.max(raw, MARGIN), max)
+      setBox({
+        top: downwards ? rect.bottom + GAP : undefined,
+        bottom: downwards ? undefined : window.innerHeight - rect.top + GAP,
+        start,
+        minWidth: rect.width,
+        maxHeight,
+      })
+    }
+    place()
+    window.addEventListener("scroll", place, true)
+    window.addEventListener("resize", place)
+    return () => {
+      window.removeEventListener("scroll", place, true)
+      window.removeEventListener("resize", place)
+    }
+  }, [present, pageDir])
 
   const close = () => {
-    setOpen(false);
-    setEditing(false);
-  };
+    setOpen(false)
+    setEditing(false)
+  }
 
   const choose = (next: string) => {
-    onValueChange(next);
-    close();
-  };
+    onValueChange(next)
+    close()
+  }
 
   const type = (next: string) => {
-    setEditing(true);
-    setOpen(true);
-    onValueChange(next);
-  };
+    setEditing(true)
+    setOpen(true)
+    onValueChange(next)
+  }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // An IME composition is still typing: arrows and Enter belong to it.
     if (event.nativeEvent.isComposing) {
-      return;
+      return
     }
 
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       if (!open) {
         // Nothing to dismiss here; a surrounding dialog still gets its Escape.
-        return;
+        return
       }
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-      return;
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+      return
     }
 
-    if (event.key === 'Tab') {
+    if (event.key === "Tab") {
       // Not prevented: Tab keeps moving focus, it only leaves the popup behind.
-      close();
-      return;
+      close()
+      return
     }
 
-    if (event.key === 'Home' || event.key === 'End') {
+    if (event.key === "Home" || event.key === "End") {
       // cmdk reads Home/End as "first/last option". In an editable field the
       // caret has to win, so the list jump is prevented and the caret moved by
       // hand (shift keeps extending a selection).
-      event.preventDefault();
-      const input = inputRef.current;
+      event.preventDefault()
+      const input = inputRef.current
       if (!input) {
-        return;
+        return
       }
-      const at = event.key === 'Home' ? 0 : input.value.length;
-      const start = input.selectionStart ?? at;
-      const end = input.selectionEnd ?? at;
+      const at = event.key === "Home" ? 0 : input.value.length
+      const start = input.selectionStart ?? at
+      const end = input.selectionEnd ?? at
       if (event.shiftKey) {
-        if (event.key === 'Home') {
-          input.setSelectionRange(at, end);
+        if (event.key === "Home") {
+          input.setSelectionRange(at, end)
         } else {
-          input.setSelectionRange(start, at);
+          input.setSelectionRange(start, at)
         }
       } else {
-        input.setSelectionRange(at, at);
+        input.setSelectionRange(at, at)
       }
-      return;
+      return
     }
 
-    if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       // Nothing is rendered to move over yet: open, and let the next press move.
       // Preventing the default also stops cmdk from selecting off-screen rows.
-      event.preventDefault();
-      setOpen(true);
-      return;
+      event.preventDefault()
+      setOpen(true)
+      return
     }
 
-    if (!open && event.key === 'Enter') {
+    if (!open && event.key === "Enter") {
       // The typed value is already committed. Without this, cmdk would pick the
       // row that was active when the popup last closed.
-      event.preventDefault();
+      event.preventDefault()
     }
-  };
+  }
 
   /** Focus leaving the whole widget, not just moving inside it. */
   const onBlur = (event: FocusEvent<HTMLDivElement>) => {
-    const next = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+    const next = event.relatedTarget instanceof Node ? event.relatedTarget : null
     if (next && event.currentTarget.contains(next)) {
-      return;
+      return
     }
-    close();
-  };
+    close()
+  }
 
   return (
-    <div className={cn('relative', className)} onBlur={onBlur}>
+    <div className={cn("relative", className)} onBlur={onBlur}>
       <CommandPrimitive
         label={label}
         shouldFilter={false}
@@ -249,15 +369,15 @@ export function Combobox({
         onKeyDown={onKeyDown}
         className="w-full"
       >
-        <div dir={dir} className="relative">
+        <div ref={anchorRef} dir={dir} className="relative">
           <CommandPrimitive.Input
             ref={inputRef}
             id={id}
             value={value}
             onValueChange={type}
             onFocus={() => {
-              setOpen(true);
-              setEditing(false);
+              setOpen(true)
+              setEditing(false)
             }}
             // A second click on an already focused field must reopen what
             // Escape closed, and focus does not fire again for that.
@@ -274,66 +394,92 @@ export function Combobox({
           />
         </div>
 
-        {/* Kept mounted so cmdk's item registry and selection survive a close;
-            `hidden` takes the whole listbox out of the layout and a11y tree. */}
-        <div hidden={!open} dir={dir} className="absolute start-0 top-full z-50 mt-1 w-44 min-w-full">
-          <CommandPrimitive.List
-            ref={listRef}
-            label={t('combobox.suggestions')}
-            // A pointer press must not blur the input: the click that follows
-            // is what selects, and blur would close the list first.
-            onMouseDown={(event) => event.preventDefault()}
+        {/*
+          Kept mounted so cmdk's item registry and selection survive a close;
+          `hidden` takes the whole listbox out of the layout and the a11y tree.
+          The portal puts it on the body, where the scrolling page cannot clip
+          it, and the box places it under the field.
+        */}
+        {createPortal(
+          <div
+            dir={pageDir}
+            data-slot="combobox-popup"
+            data-state={open ? "open" : "closed"}
+            hidden={!present}
+            style={{
+              insetInlineStart: box?.start,
+              top: box?.top,
+              bottom: box?.bottom,
+              minWidth: box?.minWidth,
+            }}
             className={cn(
-              'max-h-64 overflow-y-auto rounded-card border border-border bg-popover p-1 text-popover-foreground shadow-md',
-              listClassName,
+              "fixed z-50 w-44 origin-top",
+              "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+              "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+              "duration-200",
             )}
           >
-            {visible.map((option) => (
-              <CommandPrimitive.Item
-                key={option}
-                value={option}
-                onSelect={() => choose(option)}
-                className="flex h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 font-mono text-body text-foreground outline-none select-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
-              >
-                <span className="min-w-0 flex-1 truncate">{option}</span>
-                {option === value && (
-                  <Check aria-hidden strokeWidth={1.75} className="size-4 shrink-0 text-primary" />
-                )}
-              </CommandPrimitive.Item>
-            ))}
-
-            {/* Our own row, not cmdk's `Empty`: the "use what I typed" item is
-                an item, so cmdk would always consider the list non-empty. */}
-            {visible.length === 0 && (
-              <div className="px-2.5 py-2 text-center text-small text-muted-foreground">
-                {t('combobox.empty')}
-              </div>
-            )}
-
-            {showCustom && (
-              <>
-                <CommandPrimitive.Separator alwaysRender className="my-1 h-px bg-border" />
+            <CommandPrimitive.List
+              ref={listRef}
+              dir={dir}
+              label={t("combobox.suggestions")}
+              // A pointer press must not blur the input: the click that follows
+              // is what selects, and blur would close the list first.
+              onMouseDown={(event) => event.preventDefault()}
+              style={{ maxHeight: box?.maxHeight }}
+              className={cn(
+                "max-h-64 w-full overflow-y-auto rounded-card border border-border bg-popover p-1 text-popover-foreground shadow-md",
+                listClassName,
+              )}
+            >
+              {visible.map((option) => (
                 <CommandPrimitive.Item
-                  // Not a value anyone could type: cmdk keys its registry by it,
-                  // and it must not collide with a real option.
-                  value="__combobox_use_typed__"
-                  onSelect={() => choose(typed)}
-                  className="flex min-h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-body text-muted-foreground outline-none select-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
+                  key={option}
+                  value={option}
+                  onSelect={() => choose(option)}
+                  className="flex h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 font-mono text-body text-foreground outline-none select-none data-[selected=true]:bg-primary/20"
                 >
-                  <CornerDownLeft
-                    aria-hidden
-                    strokeWidth={1.75}
-                    className="size-4 shrink-0"
-                  />
-                  <span className="min-w-0 flex-1">
-                    {t('combobox.useTyped', { value: typed })}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate">{option}</span>
+                  {option === value && (
+                    <Check aria-hidden strokeWidth={1.75} className="size-4 shrink-0 text-primary" />
+                  )}
                 </CommandPrimitive.Item>
-              </>
-            )}
-          </CommandPrimitive.List>
-        </div>
+              ))}
+
+              {/* Our own row, not cmdk's `Empty`: the "use what I typed" item is
+                  an item, so cmdk would always consider the list non-empty. */}
+              {visible.length === 0 && (
+                <div className="px-2.5 py-2 text-center text-small text-muted-foreground">
+                  {t("combobox.empty")}
+                </div>
+              )}
+
+              {showCustom && (
+                <>
+                  <CommandPrimitive.Separator alwaysRender className="my-1 h-px bg-border" />
+                  <CommandPrimitive.Item
+                    // Not a value anyone could type: cmdk keys its registry by it,
+                    // and it must not collide with a real option.
+                    value="__combobox_use_typed__"
+                    onSelect={() => choose(typed)}
+                    className="flex min-h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-body text-muted-foreground outline-none select-none data-[selected=true]:bg-primary/20 data-[selected=true]:text-foreground"
+                  >
+                    <CornerDownLeft
+                      aria-hidden
+                      strokeWidth={1.75}
+                      className="size-4 shrink-0"
+                    />
+                    <span className="min-w-0 flex-1">
+                      {t("combobox.useTyped", { value: typed })}
+                    </span>
+                  </CommandPrimitive.Item>
+                </>
+              )}
+            </CommandPrimitive.List>
+          </div>,
+          document.body,
+        )}
       </CommandPrimitive>
     </div>
-  );
+  )
 }

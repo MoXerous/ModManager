@@ -8,9 +8,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState } from '../../components/state';
 import { executeInstall, toIpcError } from '../../lib/ipc';
 import { formatBytes } from '../../lib/format';
-
-const GAME_VERSION = '1.21.1';
-const LOADER = 'fabric';
+import { useGameTarget } from '../gameTarget';
 
 interface Row extends InstallEventDto {
   /** The last thing that happened, so a re-sent download event does not
@@ -33,6 +31,10 @@ export function DownloadsPage() {
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState('');
   const [slugs, setSlugs] = useState('');
+  // The same version and loader Browse resolved with. They used to be
+  // hard-coded here, so a search for 1.20.4 followed by a manual install
+  // quietly pulled the 1.21.1 build.
+  const { gameVersion, loader } = useGameTarget();
 
   const onEvent = useCallback((e: InstallEventDto) => {
     setRows((prev) => {
@@ -54,15 +56,20 @@ export function DownloadsPage() {
         .split(/[\s,]+/)
         .map((s) => s.trim())
         .filter(Boolean),
-      // shortcut: the game version and loader are pinned because the queue has no
-    // filter bar yet. Ceiling: this installs Fabric 1.21.1 mods and nothing
-    // else. Upgrade path: move both to Browse, where the filters and the
-    // resolved versions already live, and pass the plan in rather than
-    // re-resolving it here.
-    gameVersion: GAME_VERSION,
-    loader: LOADER,
+      // The version and the loader come from the same place Browse reads
+      // them, so the queue installs what the screen asked for.
+      gameVersion: gameVersion.trim(),
+      loader: loader.trim().toLowerCase(),
     };
-    if (req.slugs.length === 0 || req.instanceRoot.length === 0) {
+    // An empty version or loader is refused: core reads an empty version as
+    // "any version" and would install the newest build of the fallback
+    // loader, which may not match the instance at all.
+    if (
+      req.slugs.length === 0 ||
+      req.instanceRoot.length === 0 ||
+      req.gameVersion.length === 0 ||
+      req.loader.length === 0
+    ) {
       return;
     }
     setBusy(true);
@@ -71,7 +78,7 @@ export function DownloadsPage() {
     executeInstall(req, onEvent)
       .catch((e) => setError(toIpcError(e)))
       .finally(() => setBusy(false));
-  }, [target, slugs, onEvent]);
+  }, [gameVersion, loader, target, slugs, onEvent]);
 
   // Explicit membership, not a suffix test: `install.phase.unlanded` would match
   // `endsWith('landed')`, and a renamed key would stop being terminal without
@@ -84,9 +91,20 @@ export function DownloadsPage() {
   ]);
   const terminal = (phase: string) => TERMINAL.has(phase);
 
+  // The queue installs what Browse resolved with, so the pair has to be there.
+  const hasVersion = gameVersion.trim().length > 0 && loader.trim().length > 0;
+
   const content = (
     <>
       <div className="flex flex-col gap-2 px-5 pt-4">
+        {hasVersion && (
+          <p className="text-small text-muted-foreground">
+            {t('install.gameTarget', {
+              version: gameVersion.trim(),
+              loader: loader.trim().toLowerCase(),
+            })}
+          </p>
+        )}
         <div className="flex items-center gap-2">
           <input
             value={target}
@@ -106,7 +124,7 @@ export function DownloadsPage() {
             aria-label={t('install.slugs')}
             className="h-8 min-w-0 flex-1 rounded-control border border-input bg-surface-sunken px-2.5 text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
-          <Button type="button" onClick={start} disabled={busy}>
+          <Button type="button" onClick={start} disabled={busy || !hasVersion}>
             {t('install.start')}
           </Button>
         </div>
