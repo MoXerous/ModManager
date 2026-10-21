@@ -53,6 +53,7 @@
 
   "error.internal": "An unexpected internal error occurred.",
   "error.invalidInput": "The input was rejected as invalid.",
+  "error.packChanged": "The pack file changed after the plan was shown. Show the plan again before installing.",
   "error.notFound": "The requested item was not found.",
   "error.providerApi": "The mod provider rejected the request.",
   "error.rateLimited": "Too many requests. Try again later.",

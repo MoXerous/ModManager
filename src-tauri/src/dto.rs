@@ -36,6 +36,10 @@ impl From<mm_core::AppInfo> for AppInfo {
 pub enum ErrorCode {
     Internal,
     InvalidInput,
+    /// The archive is not the one the shown plan was built from: it changed on
+    /// disk between the preview and the confirm. A malformed request is
+    /// `InvalidInput`; this is a file the user must look at again.
+    PackChanged,
     NotFound,
     /// 404 من المزوّد.
     ProviderApi,

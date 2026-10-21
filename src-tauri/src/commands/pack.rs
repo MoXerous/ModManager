@@ -224,10 +224,13 @@ fn read_plan(
     let (mut archive, digest) = open_archive(pack_path)?;
     if let Some(expected) = expected_digest {
         if !digest.eq_ignore_ascii_case(expected) {
-            return Err(IpcError::invalid_input(format!(
-                "{} is not the archive the plan was built from (planned {expected}, found {digest})",
-                pack_path.display()
-            )));
+            return Err(IpcError::new(
+                ErrorCode::PackChanged,
+                format!(
+                    "{} is not the archive the plan was built from (planned {expected}, found {digest})",
+                    pack_path.display()
+                ),
+            ));
         }
     }
     let (pack, inventory) = read_pack(&mut archive, &limits).map_err(|e| pack_error(&e))?;

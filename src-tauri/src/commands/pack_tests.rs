@@ -653,7 +653,7 @@ fn pack_apply_refuses_a_pack_file_that_changed_after_the_plan() {
         let err = out.expect_err("a pack replaced after its plan must be refused");
         assert_eq!(
             err.code,
-            ErrorCode::InvalidInput,
+            ErrorCode::PackChanged,
             "the request names an archive that is no longer there: {err:?}"
         );
 
@@ -662,6 +662,59 @@ fn pack_apply_refuses_a_pack_file_that_changed_after_the_plan() {
             inventory(&root),
             before,
             "the unseen pack wrote into the instance"
+        );
+        assert!(
+            !root.join(".mm-staging").exists(),
+            "the refused apply left its staging tree behind"
+        );
+        let events = sink.lock().expect("events").clone();
+        assert_eq!(
+            events.last().map(phase),
+            Some("pack.phase.failed"),
+            "the refusal did not end the stream: {events:?}"
+        );
+    });
+}
+
+/// A request without a digest is malformed, not a changed file: the two
+/// refusals are different states to the user, so they carry different codes.
+#[test]
+fn pack_apply_refuses_a_request_without_a_pack_digest() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        let state = app_state(dir.path(), &root);
+
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(
+            &pack_path,
+            pack_bytes("https://cdn.example.com/x.jar", &jar_bytes()),
+        )
+        .expect("write pack");
+
+        let before = inventory(&root);
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base("http://127.0.0.1:1").expect("provider");
+
+        let mut req = request(&pack_path, &root);
+        req.pack_sha512 = None;
+        let out =
+            execute_modpack_install_with(&state, &provider, req, recording_channel(&sink), true)
+                .await;
+
+        let err = out.expect_err("an apply without a plan digest must be refused");
+        assert_eq!(
+            err.code,
+            ErrorCode::InvalidInput,
+            "an absent digest is a malformed request, not a changed file: {err:?}"
+        );
+
+        assert_eq!(
+            inventory(&root),
+            before,
+            "the refused apply wrote into the instance"
         );
         assert!(
             !root.join(".mm-staging").exists(),
