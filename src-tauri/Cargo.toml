@@ -26,6 +26,11 @@ tauri-plugin-dialog = "2"
 # commands have to open the file themselves, and inventing a second reader in
 # core just to hide this type would be the seam for its own sake.
 zip = "9.0.4"
+# Not a new download: `mm-core` already depends on it and this crate already
+# used it in tests. The pack commands hash the archive they read (SHA-512) so a
+# file swapped between the plan and the apply is refused, which is a production
+# need, not a test one.
+sha2 = "0.11.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -35,9 +40,8 @@ tempfile = "3.27.0"
 # person clicking anything. The Channel path was otherwise covered only by
 # reasoning.
 wiremock = "0.6.5"
-# Both already in the workspace through mm-core, so neither downloads anything.
-# The fixture has to be a real zip (the verifier checks ZIP magic on a .jar)
-# and its sha512 has to be computed, not guessed, or the download correctly
-# fails verification and the test proves nothing.
-sha2 = "0.11.1"
+# Already in the workspace through mm-core, so it downloads nothing. The
+# fixture has to be a real zip (the verifier checks ZIP magic on a .jar) and
+# its sha1 has to be computed, not guessed, or the download correctly fails
+# verification and the test proves nothing.
 sha1 = "0.11.0"

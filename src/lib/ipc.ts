@@ -171,8 +171,10 @@ export async function executeInstall(
 // --- Modpacks (.mrpack) -------------------------------------------------
 //
 // Plan then apply, the same shape `preview_toggle` and `execute_toggle` use.
-// Both take the same two paths: the apply re-reads the archive and rebuilds
-// the plan in Rust, so a plan shown on screen is never sent back as truth.
+// Both take the same paths: the apply re-reads the archive and rebuilds the
+// plan in Rust, so a plan shown on screen is never sent back as truth. One
+// token travels back with the confirm — the digest of the pack file the plan
+// was built from — so a file replaced in between is refused instead of applied.
 
 /** What a `.mrpack` would write into an instance. Writes nothing. */
 export function planModpackInstall(req: ModpackInstallRequest): Promise<ModpackPlanDto> {
@@ -181,6 +183,10 @@ export function planModpackInstall(req: ModpackInstallRequest): Promise<ModpackP
 
 /**
  * Applies the pack and streams one `PackEventDto` per phase change.
+ *
+ * `req.packSha512` must be the `packSha512` of the plan the user confirmed: the
+ * command recomputes the digest of the file it is about to read and refuses a
+ * mismatch, so the applied archive is always the one that was shown.
  *
  * `phase` is an i18n key (`pack.phase.*`), never a display word. The returned
  * promise resolves once every write has settled; the channel ends on `done`

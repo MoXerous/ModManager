@@ -127,6 +127,8 @@ export function ModpackPage() {
     }
   };
 
+  /** The pair the plan is built from. No digest yet: the plan is what hands
+   *  one back, and the apply adds it (see `apply`). */
   const request = useCallback(
     (): ModpackInstallRequest => ({
       packPath: packPath.trim(),
@@ -202,7 +204,11 @@ export function ModpackPage() {
     setResult(null);
     // The channel is guarded by the same id as the promise: an event from a
     // run the screen has moved past must not land in its rows.
-    executeModpackInstall(request(), (e) => {
+    //
+    // The digest is the plan's own, not a fresh hash: it is what binds this
+    // confirm to the archive the user just reviewed. If the file changed since,
+    // the command refuses and that refusal lands in `error` below.
+    executeModpackInstall({ ...request(), packSha512: plan.packSha512 }, (e) => {
       if (id === requestSeq.current) {
         onEvent(e);
       }

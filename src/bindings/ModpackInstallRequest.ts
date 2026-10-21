@@ -6,6 +6,13 @@
  * Plan and apply take the same shape on purpose. Apply rebuilds the plan from
  * these two paths and never accepts a plan body from the webview — the same
  * rule `execute_toggle` and `execute_create_instance` follow (AGENTS.md §5.4).
+ *
+ * `pack_sha512` is the exception to "the paths are the whole request": it is
+ * the digest [`ModpackPlanDto::pack_sha512`] handed back, and the apply
+ * recomputes it and refuses a mismatch. Without it a `.mrpack` replaced
+ * between the preview and the confirm would be applied unseen. Optional in
+ * the type because the plan call cannot send what it is about to receive; the
+ * apply treats an absent digest as a refusal, never as "whatever is there".
  */
 export type ModpackInstallRequest = { 
 /**
@@ -15,4 +22,8 @@ packPath: string,
 /**
  * Absolute path of the instance the pack is installed into.
  */
-instanceRoot: string, };
+instanceRoot: string, 
+/**
+ * SHA-512 of the pack file, lowercase hex, exactly as the plan returned it.
+ */
+packSha512?: string, };
