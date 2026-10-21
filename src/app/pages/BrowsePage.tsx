@@ -9,7 +9,14 @@ import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
 import { executeInstall, listInstances, searchProjects, toIpcError } from '../../lib/ipc';
-import { GAME_VERSIONS, LOADERS, setGameTarget, useGameTarget } from '../gameTarget';
+import {
+  GAME_VERSIONS,
+  LOADERS,
+  getGameTarget,
+  setGameTarget,
+  setTargetInstance,
+  useGameTarget,
+} from '../gameTarget';
 
 interface Props {
   /** Where to send the user once a download starts: the queue is the only
@@ -45,10 +52,27 @@ export function BrowsePage({ onInstalled }: Props) {
     void listInstances()
       .then((rows) => {
         setInstances(rows);
-        setTarget(rows[0]?.id ?? '');
+        // The instance picked last is still the one the user means, even
+        // after a page switch, and a value they typed for it stands with it.
+        // An instance that is gone falls back to the first one.
+        const remembered = getGameTarget().instanceId;
+        const chosen = rows.find((i) => i.id === remembered) ?? rows[0] ?? null;
+        setTarget(chosen?.id ?? '');
+        // The instance knows its own version and loader, so it is what the
+        // fields start from.
+        setTargetInstance(chosen);
       })
       .catch((e) => setError(toIpcError(e)));
   }, []);
+
+  /** Picking an instance sets the version and the loader from that instance. */
+  const selectInstance = useCallback(
+    (id: string) => {
+      setTarget(id);
+      setTargetInstance(instances.find((i) => i.id === id) ?? null);
+    },
+    [instances],
+  );
 
   const targetPath = instances.find((i) => i.id === target)?.path ?? '';
   // Nothing to install into is not a state the button can be pressed in. An
@@ -154,7 +178,7 @@ export function BrowsePage({ onInstalled }: Props) {
           {t('browse.target')}
           <select
             value={target}
-            onChange={(e) => setTarget(e.target.value)}
+            onChange={(e) => selectInstance(e.target.value)}
             aria-label={t('browse.target')}
             className="h-8 rounded-control border border-input bg-surface-sunken px-2 text-body text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >

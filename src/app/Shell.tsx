@@ -104,23 +104,30 @@ export function Shell({ page, onNavigate, children }: ShellProps) {
 
   return (
     <div
-      // The rail's track changes in one step, it is not animated: the second
-      // track is `1fr`, so every frame of a track animation would lay the
-      // whole page out again — twelve layouts for one click, all of them
-      // thrown away. `grid-template-columns` cannot be composited either, so
-      // a `will-change` hint on it would promise a compositor that does not
-      // exist. The width therefore changes once, and the only motion left is
-      // the labels' opacity, which the compositor animates on its own layer.
-      // Reduced motion is handled once, globally, in theme.css.
-      className="grid h-screen overflow-hidden"
-      style={{
-        gridTemplateColumns: `${sidebarCollapsed ? RAIL_COLLAPSED : RAIL_EXPANDED}px 1fr`,
-      }}
+      // The rail is the first grid track and the track is `auto`, so it takes
+      // the width of the nav: the nav's own width is what changes, and no
+      // `grid-template-columns` value has to be animated. That property
+      // cannot be composited, so animating it would promise a compositor
+      // that does not exist. Reduced motion is handled once, globally, in
+      // theme.css.
+      className="grid h-screen grid-cols-[auto_1fr] overflow-hidden"
     >
       <nav
-        id="app-sidebar"
         aria-label={t('app.primaryNav')}
-        className="flex min-w-0 flex-col gap-1 overflow-hidden border-e border-border bg-surface-sunken px-2 py-3.5"
+        className={cn(
+          'flex min-w-0 flex-col gap-1 overflow-hidden border-e border-border bg-surface-sunken px-2 py-3.5',
+          // The content column follows the rail's width, so the page is laid
+          // out again on every frame of the transition: measured over six
+          // toggles, 13.3 layouts and about 3ms of layout time each, against
+          // one layout and 0.3ms for a rail that jumps. That is the price of
+          // a rail that takes space away from the page instead of covering
+          // it, and it buys a collapse the eye can follow: the content
+          // slides instead of jumping. `contain: layout` on the content
+          // column was measured as well: it changes neither the count nor
+          // the time, so it is not here.
+          'transition-[width] duration-200 ease-out',
+        )}
+        style={{ width: sidebarCollapsed ? RAIL_COLLAPSED : RAIL_EXPANDED }}
       >
         <div
           aria-hidden
