@@ -96,6 +96,14 @@ export function Combobox({
   const anchorRef = useRef<HTMLDivElement>(null)
   /** Read by the observer below, which outlives every open/close render. */
   const openRef = useRef(open)
+  /**
+   * cmdk's own id for the input, read before ours replaces it. cmdk looks the
+   * input up by that id to give the caret back whenever the list moved it
+   * away, so the lookup has to keep working.
+   */
+  const cmdkInputIdRef = useRef<string | null>(null)
+  /** True while the focus is on its way back from the listbox to the field. */
+  const restoringRef = useRef(false)
 
   const typed = value.trim()
   const query = typed.toLowerCase()
@@ -157,6 +165,16 @@ export function Combobox({
    * its own generated one. This popup closes and sits beside a visible
    * `<label htmlFor={id}>`, so both attributes are corrected after every
    * commit — React will not touch them again while its props stay the same.
+   *
+   * The id is the delicate part. cmdk looks the input up by the id it
+   * generated whenever it wants to give the caret back, and falls back to the
+   * listbox when that lookup misses. Ours replaces the id, so the lookup would
+   * miss and the focus would land in the listbox: the field would lose the
+   * caret in the middle of a word, and since the listbox is portalled out of
+   * the widget, the widget reads that as "the user left" and throws the typed
+   * filter away. The id is therefore parked on the field's box, which is not
+   * focusable: cmdk's lookup lands on a dead end, the caret stays in the
+   * field, and the listbox is never the focus target.
    */
   useLayoutEffect(() => {
     openRef.current = open
@@ -167,6 +185,16 @@ export function Combobox({
     input.setAttribute("aria-expanded", open ? "true" : "false")
     const root = input.closest("[cmdk-root]")
     if (id) {
+      // cmdk's id is on the input until we replace it, so this reads it once.
+      // A remount gives cmdk a new one, and then the input carries an id that
+      // is not ours again.
+      if (cmdkInputIdRef.current === null || input.id !== id) {
+        cmdkInputIdRef.current = input.id || null
+      }
+      const anchor = anchorRef.current
+      if (anchor && cmdkInputIdRef.current && anchor.id !== cmdkInputIdRef.current) {
+        anchor.id = cmdkInputIdRef.current
+      }
       input.id = id
       // cmdk's own screen-reader label still names this field; point it at the
       // real id so its `for` and the caller's visible `<label for>` agree.
@@ -193,11 +221,10 @@ export function Combobox({
   }, [syncActiveDescendant])
 
   /**
-   * cmdk gives the caret back after a pick by looking the input up by the id
-   * it generated, and falls back to the listbox when that lookup misses. Our
-   * id replaces cmdk's, so the lookup misses and the listbox would take the
-   * focus: the caret would vanish and typing would freeze. The listbox is
-   * never the focus target, so the focus goes back to the field instead.
+   * The listbox is never the focus target: the caret belongs in the field.
+   * Should anything focus the list anyway, the focus goes back to the field —
+   * and the field's own focus handler must not read that return as a fresh
+   * visit, or it would throw the typed filter away.
    */
   useEffect(() => {
     const list = listRef.current
@@ -207,6 +234,7 @@ export function Combobox({
     }
     const onListFocus = (event: Event) => {
       if (event.target === list) {
+        restoringRef.current = true
         input.focus()
       }
     }
@@ -369,6 +397,12 @@ export function Combobox({
         onKeyDown={onKeyDown}
         className="w-full"
       >
+        {/*
+          The field's box. It carries cmdk's own id for the input, which the
+          layout effect above parks there: cmdk looks the input up by that id
+          to give the caret back, and a box that cannot be focused is a dead
+          end, so the focus never leaves the field.
+        */}
         <div ref={anchorRef} dir={dir} className="relative">
           <CommandPrimitive.Input
             ref={inputRef}
@@ -377,7 +411,13 @@ export function Combobox({
             onValueChange={type}
             onFocus={() => {
               setOpen(true)
-              setEditing(false)
+              // A return from the listbox is not a new visit: the text the
+              // user typed, and the filter it narrowed the list with, have to
+              // survive it.
+              if (!restoringRef.current) {
+                setEditing(false)
+              }
+              restoringRef.current = false
             }}
             // A second click on an already focused field must reopen what
             // Escape closed, and focus does not fire again for that.
@@ -437,11 +477,20 @@ export function Combobox({
                   key={option}
                   value={option}
                   onSelect={() => choose(option)}
-                  className="flex h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 font-mono text-body text-foreground outline-none select-none data-[selected=true]:bg-primary/20"
+                  // The selected row is a solid --primary, not a tint of it:
+                  // a tint of the one accent that differs from the popover
+                  // measured 1.5:1 in dark and 1.3:1 in light, and a boundary
+                  // below 3:1 is not a boundary (WCAG 1.4.11). The check mark
+                  // follows the row's own colour, or it would vanish into it.
+                  className="group flex h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 font-mono text-body text-foreground outline-none select-none data-[selected=true]:bg-primary data-[selected=true]:text-primary-foreground"
                 >
                   <span className="min-w-0 flex-1 truncate">{option}</span>
                   {option === value && (
-                    <Check aria-hidden strokeWidth={1.75} className="size-4 shrink-0 text-primary" />
+                    <Check
+                      aria-hidden
+                      strokeWidth={1.75}
+                      className="size-4 shrink-0 text-primary group-data-[selected=true]:text-primary-foreground"
+                    />
                   )}
                 </CommandPrimitive.Item>
               ))}
@@ -462,7 +511,7 @@ export function Combobox({
                     // and it must not collide with a real option.
                     value="__combobox_use_typed__"
                     onSelect={() => choose(typed)}
-                    className="flex min-h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-body text-muted-foreground outline-none select-none data-[selected=true]:bg-primary/20 data-[selected=true]:text-foreground"
+                    className="flex min-h-8 cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-body text-muted-foreground outline-none select-none data-[selected=true]:bg-primary data-[selected=true]:text-primary-foreground"
                   >
                     <CornerDownLeft
                       aria-hidden
