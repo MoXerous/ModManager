@@ -148,8 +148,13 @@ function CommandItem({
   return (
     <CommandPrimitive.Item
       data-slot="command-item"
+      // The selected row is a solid --primary, not a tint of it: --accent is
+      // the same value as --popover in both themes, so an accent row was the
+      // same colour as the list around it (1.31:1 dark, 1.27:1 light against
+      // the card) and the highlight was invisible. The foreground follows the
+      // row, or the text would vanish into it.
       className={cn(
-        "relative flex cursor-default items-center gap-2.5 rounded-none px-4 py-2 text-body text-muted-foreground outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent data-[selected=true]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-[18px]",
+        "relative flex cursor-default items-center gap-2.5 rounded-none px-4 py-2 text-body text-muted-foreground outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-primary data-[selected=true]:text-primary-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-[18px]",
         className
       )}
       {...props}

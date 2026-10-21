@@ -94,16 +94,30 @@ export function Combobox({
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const anchorRef = useRef<HTMLDivElement>(null)
+  /**
+   * The portalled popup. It is the widget's other half, but it is not its
+   * child: the portal puts it on the body, so a focus check that only asks
+   * about the field's own box reads a move into the popup as a departure.
+   */
+  const popupRef = useRef<HTMLDivElement>(null)
+  /** The widget: the field's box, and through the portal the popup. */
+  const widgetRef = useRef<HTMLDivElement>(null)
   /** Read by the observer below, which outlives every open/close render. */
   const openRef = useRef(open)
   /**
    * cmdk's own id for the input, read before ours replaces it. cmdk looks the
    * input up by that id to give the caret back whenever the list moved it
-   * away, so the lookup has to keep working.
+   * away, so the lookup has to keep working. The same id is recorded on
+   * cmdk's root, which lives exactly as long as the cmdk instance that made
+   * it: a render that comes back with a fresh set of refs still finds it.
    */
   const cmdkInputIdRef = useRef<string | null>(null)
-  /** True while the focus is on its way back from the listbox to the field. */
-  const restoringRef = useRef(false)
+  /**
+   * The id we last patched onto the input. A caller that changes its `id`
+   * leaves our own id behind on the input and on cmdk's label, and those are
+   * not cmdk's id: the capture has to tell them apart.
+   */
+  const patchedIdRef = useRef<string | null>(null)
 
   const typed = value.trim()
   const query = typed.toLowerCase()
@@ -170,11 +184,25 @@ export function Combobox({
    * generated whenever it wants to give the caret back, and falls back to the
    * listbox when that lookup misses. Ours replaces the id, so the lookup would
    * miss and the focus would land in the listbox: the field would lose the
-   * caret in the middle of a word, and since the listbox is portalled out of
-   * the widget, the widget reads that as "the user left" and throws the typed
-   * filter away. The id is therefore parked on the field's box, which is not
-   * focusable: cmdk's lookup lands on a dead end, the caret stays in the
-   * field, and the listbox is never the focus target.
+   * caret in the middle of a word. The id is therefore parked on the field's
+   * box, which is not focusable: cmdk's lookup lands on a dead end, the caret
+   * stays in the field, and the listbox is never the focus target.
+   *
+   * Parking is an optimisation, not the mechanism. The filter survives a focus
+   * that moved to the listbox anyway (see the blur handler below), so a
+   * capture that comes back empty costs the caret, not the filter. It is
+   * still read as carefully as it can be:
+   *
+   *  - cmdk's own label carries the id cmdk expects in its `for`, and React
+   *    rewrites that attribute whenever cmdk renders a new id, so it is the
+   *    one place the live id survives our own patch;
+   *  - the input's own id, whenever it is not ours — a fresh input carries
+   *    cmdk's id;
+   *  - the id recorded on cmdk's root, which outlives the render that read it
+   *    and outlives the refs of that render.
+   *
+   * The capture runs before the patch: afterwards the input and the label
+   * both carry our id, and cmdk's is only in the root's record.
    */
   useLayoutEffect(() => {
     openRef.current = open
@@ -185,20 +213,30 @@ export function Combobox({
     input.setAttribute("aria-expanded", open ? "true" : "false")
     const root = input.closest("[cmdk-root]")
     if (id) {
-      // cmdk's id is on the input until we replace it, so this reads it once.
-      // A remount gives cmdk a new one, and then the input carries an id that
-      // is not ours again.
-      if (cmdkInputIdRef.current === null || input.id !== id) {
-        cmdkInputIdRef.current = input.id || null
+      const ownLabel = root?.querySelector<HTMLLabelElement>("label[cmdk-label]")
+      const labelFor = ownLabel?.getAttribute("for") ?? null
+      const inputFor = input.id || null
+      const recorded = root?.getAttribute("data-cmdk-input-id") ?? null
+      // Ours is not cmdk's: neither the id we use now nor the one we used
+      // before are candidates.
+      const ours = [id, patchedIdRef.current]
+      const cmdkId = [labelFor, inputFor, recorded].find(
+        (candidate) => candidate !== null && candidate !== "" && !ours.includes(candidate),
+      )
+      if (cmdkId) {
+        cmdkInputIdRef.current = cmdkId
+        // The record lives on cmdk's root, so it lives exactly as long as the
+        // cmdk instance that generated the id.
+        root?.setAttribute("data-cmdk-input-id", cmdkId)
       }
       const anchor = anchorRef.current
       if (anchor && cmdkInputIdRef.current && anchor.id !== cmdkInputIdRef.current) {
         anchor.id = cmdkInputIdRef.current
       }
       input.id = id
+      patchedIdRef.current = id
       // cmdk's own screen-reader label still names this field; point it at the
       // real id so its `for` and the caller's visible `<label for>` agree.
-      const ownLabel = root?.querySelector<HTMLLabelElement>("label[cmdk-label]")
       if (ownLabel) {
         ownLabel.htmlFor = id
       }
@@ -222,9 +260,10 @@ export function Combobox({
 
   /**
    * The listbox is never the focus target: the caret belongs in the field.
-   * Should anything focus the list anyway, the focus goes back to the field —
-   * and the field's own focus handler must not read that return as a fresh
-   * visit, or it would throw the typed filter away.
+   * Should anything focus the list anyway — cmdk does it whenever its lookup
+   * for the input misses — the focus goes back to the field, caret and all.
+   * The field's own focus handler reads the return as a return, not as a
+   * fresh visit, so the typed filter survives it (see the handler below).
    */
   useEffect(() => {
     const list = listRef.current
@@ -233,9 +272,15 @@ export function Combobox({
       return
     }
     const onListFocus = (event: Event) => {
-      if (event.target === list) {
-        restoringRef.current = true
-        input.focus()
+      if (event.target !== list) {
+        return
+      }
+      const start = input.selectionStart
+      const end = input.selectionEnd
+      input.focus()
+      // `focus()` alone would drop the caret at the end of the word.
+      if (start !== null && end !== null) {
+        input.setSelectionRange(start, end)
       }
     }
     list.addEventListener("focus", onListFocus)
@@ -374,17 +419,24 @@ export function Combobox({
     }
   }
 
-  /** Focus leaving the whole widget, not just moving inside it. */
+  /**
+   * Focus leaving the whole widget, not just moving inside it.
+   *
+   * The popup is portalled onto the body, so it is not a DOM child of the
+   * field: a focus that moves into the popup looks like a departure, and the
+   * widget would close and throw the typed filter away. The popup is part of
+   * the widget, so both are asked, and the field keeps what was typed.
+   */
   const onBlur = (event: FocusEvent<HTMLDivElement>) => {
     const next = event.relatedTarget instanceof Node ? event.relatedTarget : null
-    if (next && event.currentTarget.contains(next)) {
+    if (next && (event.currentTarget.contains(next) || popupRef.current?.contains(next))) {
       return
     }
     close()
   }
 
   return (
-    <div className={cn("relative", className)} onBlur={onBlur}>
+    <div ref={widgetRef} className={cn("relative", className)} onBlur={onBlur}>
       <CommandPrimitive
         label={label}
         shouldFilter={false}
@@ -409,15 +461,17 @@ export function Combobox({
             id={id}
             value={value}
             onValueChange={type}
-            onFocus={() => {
+            onFocus={(event) => {
               setOpen(true)
-              // A return from the listbox is not a new visit: the text the
-              // user typed, and the filter it narrowed the list with, have to
-              // survive it.
-              if (!restoringRef.current) {
+              // A focus that came back from the listbox is not a new visit:
+              // the text the user typed, and the filter it narrowed the list
+              // with, have to survive it. cmdk moves the focus there on its
+              // own whenever its lookup for the input misses, and the widget
+              // has to be ready for that.
+              const from = event.relatedTarget instanceof Node ? event.relatedTarget : null
+              if (!from || !popupRef.current?.contains(from)) {
                 setEditing(false)
               }
-              restoringRef.current = false
             }}
             // A second click on an already focused field must reopen what
             // Escape closed, and focus does not fire again for that.
@@ -442,10 +496,21 @@ export function Combobox({
         */}
         {createPortal(
           <div
+            ref={popupRef}
             dir={pageDir}
             data-slot="combobox-popup"
             data-state={open ? "open" : "closed"}
             hidden={!present}
+            onBlur={(event) => {
+              // The popup is the widget's other half, so a focus that leaves
+              // it for the field is still inside the widget — and a focus that
+              // leaves it for the rest of the page is not.
+              const next = event.relatedTarget instanceof Node ? event.relatedTarget : null
+              if (next && (event.currentTarget.contains(next) || widgetRef.current?.contains(next))) {
+                return
+              }
+              close()
+            }}
             style={{
               insetInlineStart: box?.start,
               top: box?.top,
