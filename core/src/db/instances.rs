@@ -196,6 +196,24 @@ fn assemble(t: RowTuple) -> Result<InstanceRow, InstanceRowError> {
     })
 }
 
+/// The Windows verbatim prefix `canonicalize` writes in front of an absolute
+/// path (`\\?\C:\...`) — and therefore in front of what [`insert`] stores.
+const VERBATIM_PREFIX: &str = "\\\\?\\";
+
+/// Drops the verbatim prefix from a stored spelling, if it has one.
+///
+/// It must be handled here, on the stored side: rows already in the database
+/// carry the prefix, and no migration rewrites stored paths to compare one
+/// spelling. Comparing the prefix itself would mean comparing the four
+/// characters against a path, which `Path::starts_with` cannot do portably
+/// (`\\?\` parses as a component only on Windows).
+fn strip_verbatim_prefix(p: &Path) -> &Path {
+    p.to_str()
+        .and_then(|s| s.strip_prefix(VERBATIM_PREFIX))
+        .map(Path::new)
+        .unwrap_or(p)
+}
+
 /// The row registered for this exact folder, if any.
 ///
 /// A direct query rather than a scan of `list`, for two reasons: `list` decodes
@@ -203,28 +221,74 @@ fn assemble(t: RowTuple) -> Result<InstanceRow, InstanceRowError> {
 /// take this with it; and this is called on the rollback path, where guessing
 /// wrong means deleting a folder another instance owns.
 ///
-/// The argument is normalised the same way [`insert`] stores it. Comparing the
-/// caller's own spelling instead would answer "nobody owns this folder" for a
-/// folder that is registered — on Windows `canonicalize` adds the `\\?\`
-/// verbatim prefix, so the two spellings differ in the common case.
+/// The argument is normalised the same way [`insert`] stores it: an existing
+/// folder resolves to the spelling `canonicalize` wrote, and the two meet
+/// exactly. Comparing the caller's own spelling instead would answer "nobody
+/// owns this folder" for a folder that is registered — on Windows
+/// `canonicalize` adds the `\\?\` verbatim prefix, so the two spellings differ
+/// in the common case.
 ///
 /// A path that cannot be normalised is queried as given. That is sound rather
 /// than merely a best effort: `insert` refuses a path that does not exist, so
-/// no row can point at one.
+/// no row can point at one *whenever it was written* — but a row's folder can
+/// be deleted *afterwards*, and the row is still the user's registration (F-101
+/// lists it). A caller asking about a registered folder that is gone cannot
+/// resolve anything, so the exact match is followed by a spelling comparison
+/// ([`find_by_spelling`]): the stored spelling may still name the folder the
+/// caller holds, verbatim prefix and all. Without it, `open_instance_folder`
+/// answers "that folder is not a registered instance" for a row this same
+/// command listed a moment ago, while the pack gate answers "cannot open" for
+/// the same bytes — one folder, three stories.
 pub fn find_by_path(db: &Db, path: &Path) -> Result<Option<InstanceRow>, InstanceRowError> {
     let stored_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let id: Option<String> = db
-        .conn()
+    let conn = db.conn();
+    let mut id: Option<String> = conn
         .query_row(
             "SELECT id FROM instances WHERE path = ?1",
             [stored_path.to_string_lossy().as_ref()],
             |r| r.get(0),
         )
         .ok();
+    if id.is_none() {
+        id = find_by_spelling(conn, &stored_path)?;
+    }
     let Some(id) = id else {
         return Ok(None);
     };
     get(db, &id)
+}
+
+/// The exact match missed: does a stored spelling name this folder after all?
+///
+/// Only the shape of the stored string can differ here — every row is
+/// canonicalized at insert, so both sides are absolute — and on Windows the
+/// stored one may wear the verbatim prefix a caller asking about a deleted
+/// folder can no longer produce. The comparison is the stored path, then the
+/// same path without the prefix. It folds no case: the caller asks with the
+/// spelling it got from the registry (`list`), and case-folding here would
+/// make two case-different spellings of one NTFS folder collide (F-103).
+///
+/// Only `id` and `path` are read, so a corrupt `source` value anywhere in the
+/// table cannot make this fail and turn a registered folder into an
+/// unregistered one — the reason a scan of [`list`] was refused in the first
+/// place.
+fn find_by_spelling(
+    conn: &rusqlite::Connection,
+    asked: &Path,
+) -> Result<Option<String>, InstanceRowError> {
+    let mut stmt = conn
+        .prepare("SELECT id, path FROM instances")
+        .map_err(DbError::from)?;
+    let mut rows = stmt.query([]).map_err(DbError::from)?;
+    while let Some(row) = rows.next().map_err(DbError::from)? {
+        let id: String = row.get(0).map_err(DbError::from)?;
+        let stored: String = row.get(1).map_err(DbError::from)?;
+        let stored = Path::new(&stored);
+        if stored == asked || strip_verbatim_prefix(stored) == asked {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
 }
 
 /// Inserts a row, resolving `path` first so that two spellings of one folder
@@ -538,6 +602,59 @@ mod tests {
         );
         let found = find_by_path(&db, &raw).expect("query");
         assert!(found.is_some(), "the caller's own spelling missed the row");
+    }
+
+    #[test]
+    fn spec_f102_find_by_path_matches_a_registered_row_whose_folder_is_gone() {
+        // The row is the user's registration, not a filesystem index: a folder
+        // that was registered and then deleted keeps its row in `list`, and
+        // commands that answer for folders (`open_instance_folder`, the pack
+        // gate) must still be able to say "that folder is ours" about it. The
+        // stored spelling carries the Windows verbatim prefix, which a caller
+        // holding a deleted folder can never canonicalize into — so the
+        // comparison must handle the stored spelling, not the query's.
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        let root = folder(dir.path(), "Gone");
+        insert(&db, &row("i1", &root, InstanceSource::Managed)).expect("insert");
+
+        // Hold the spelling the registry itself reported (what `list` hands
+        // back is exactly this), while the folder is still there to ask about.
+        let held = std::fs::canonicalize(&root).expect("canon");
+        std::fs::remove_dir_all(&root).expect("delete the folder");
+
+        // The stored row really is the spelling the deletion invalidated:
+        // on Windows `insert` stored the verbatim-prefixed form, and this is
+        // the case the exact match above can never produce.
+        let stored_path: String = db
+            .conn()
+            .query_row("SELECT path FROM instances WHERE id = 'i1'", [], |r| {
+                r.get(0)
+            })
+            .expect("stored path");
+        #[cfg(windows)]
+        assert!(
+            stored_path.starts_with("\\\\?\\"),
+            "premise: rows are stored verbatim-prefixed on Windows, got {stored_path:?}"
+        );
+
+        let found = find_by_path(&db, &held).expect("query");
+        assert!(
+            found.is_some(),
+            "a registered folder that the disk deleted now looks unregistered"
+        );
+        let got = found.expect("row");
+        assert_eq!(got.id, "i1");
+
+        // And the registry question stays a registry question: nothing was
+        // ever registered at this spelling, deleted or not.
+        let stranger = dir.path().join("Stranger");
+        std::fs::create_dir_all(&stranger).expect("mkdir stranger");
+        std::fs::remove_dir_all(&stranger).expect("delete the stranger too");
+        assert!(
+            find_by_path(&db, &stranger).expect("query").is_none(),
+            "a folder nobody registered has no row to find"
+        );
     }
 
     #[test]
