@@ -121,24 +121,80 @@ fn request(pack_path: &Path, instance_root: &Path) -> ModpackInstallRequest {
 /// has no row here must be refused, so every test that wants to get past the
 /// gate has to register its root the way `execute_create_instance` would.
 fn app_state(dir: &Path, instance_root: &Path) -> AppState {
+    app_state_with_roots(dir, &[instance_root])
+}
+
+/// The same, for a registry that owns several instance roots.
+///
+/// Each root gets its own row and its own id, the way `execute_create_instance`
+/// would. Two instances are what makes "the record of *this* instance" a
+/// meaningful thing to look for, so the isolation regression needs them.
+fn app_state_with_roots(dir: &Path, instance_roots: &[&Path]) -> AppState {
     let db = mm_core::db::open(&dir.join("registry.db")).expect("open db");
-    let path = std::fs::canonicalize(instance_root).expect("canonical instance");
-    mm_core::db::instances::insert(
-        &db,
-        &mm_core::db::instances::InstanceRow {
-            id: "i1".into(),
-            name: "Test Instance".into(),
-            path,
-            minecraft_root: PathBuf::new(),
-            minecraft_version: None,
-            loader: None,
-            source: mm_core::db::instances::InstanceSource::Managed,
-            created_at: 1,
-            scanned_at: None,
-        },
-    )
-    .expect("seed instance row");
+    for (index, instance_root) in instance_roots.iter().enumerate() {
+        let id = format!("i{}", index + 1);
+        mm_core::db::instances::insert(
+            &db,
+            &mm_core::db::instances::InstanceRow {
+                id: id.clone(),
+                name: format!("Test Instance {id}"),
+                path: std::fs::canonicalize(instance_root).expect("canonical instance"),
+                minecraft_root: PathBuf::new(),
+                minecraft_version: None,
+                loader: None,
+                source: mm_core::db::instances::InstanceSource::Managed,
+                created_at: 1,
+                scanned_at: None,
+            },
+        )
+        .expect("seed instance row");
+    }
     AppState::from_db(db)
+}
+
+/// The canonical spelling of an instance root, as a record spells it.
+///
+/// The apply is handed the canonical root the registry gate resolved, and the
+/// record names that root, so this is the key that says "this record is about
+/// this folder".
+fn canonical_root(instance_root: &Path) -> String {
+    std::fs::canonicalize(instance_root)
+        .expect("canonical instance root")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Every journal record that names this instance and this archive.
+///
+/// The lookup is scoped by the instance root because the archive digest alone
+/// is not unique. Two things make it ambiguous:
+///
+/// - The journal store is shared by every test in this process. The test
+///   seam names its root after the process id, so one store holds the records
+///   of all the tests in the binary.
+/// - The packs two tests build can be byte-identical. Wiremock pools its
+///   servers and hands the same one to tests that run one after the other, so
+///   the same download URL — and so the same archive digest.
+///
+/// A lookup by the digest alone therefore finds whichever record sorts first
+/// — often another test's, pointing at another instance's folder.
+fn records_for(
+    journal: &mm_core::journal::Journal,
+    instance_root: &Path,
+    archive_sha512: &str,
+) -> Vec<mm_core::journal::OperationRecord> {
+    let root = canonical_root(instance_root);
+    journal
+        .discover()
+        .records()
+        .filter(|r| {
+            r.target_path == root
+                && r.pack
+                    .as_ref()
+                    .is_some_and(|p| p.archive_sha512 == archive_sha512)
+        })
+        .cloned()
+        .collect()
 }
 
 /// The file inventory under `root`: every file, relative to it, sorted.
@@ -842,18 +898,23 @@ fn spec_f076_apply_writes_a_journal_record_that_names_the_pack_and_the_instance(
         let handle = state.journal_handle();
         let guard = handle.lock().expect("journal");
         let digest = sha512_hex(&pack);
-        let found = guard.discover();
-        let record = found
-            .records()
-            .find(|r| r.pack.as_ref().is_some_and(|p| p.archive_sha512 == digest))
-            .expect("the apply must leave a record for this pack");
+        // The lookup names THIS instance as well as THIS archive: the journal
+        // store is shared by every test in this process and two tests can
+        // build byte-identical packs, so the digest alone finds another
+        // test's record — one that points at another instance's folder.
+        let records = records_for(&guard, &root, &digest);
+        assert_eq!(
+            records.len(),
+            1,
+            "the apply must leave exactly one record for this pack in this instance: {records:?}"
+        );
+        let record = &records[0];
         assert_eq!(record.kind, mm_core::journal::OperationKind::MrpackInstall);
         assert_eq!(record.state, mm_core::journal::OperationState::Completed);
+        assert_eq!(record.target_path, canonical_root(&root));
         assert_eq!(
-            record.target_path,
-            std::fs::canonicalize(&root)
-                .expect("canonical root")
-                .to_string_lossy()
+            record.profile_id, "i1",
+            "the record names the registry row it applied to"
         );
         let meta = record.pack.as_ref().expect("the record names the pack");
         assert_eq!(meta.pack_name, "Wiremock Pack");
@@ -879,6 +940,104 @@ fn spec_f076_apply_writes_a_journal_record_that_names_the_pack_and_the_instance(
         );
         assert!(jar_item.partial_path.ends_with(".part"));
         assert_eq!(record.completed_count, 2);
+    });
+}
+
+/// F-076: a test's journal lookup finds the record of its OWN instance.
+///
+/// The journal store is shared by every test in this process, and two tests
+/// can build byte-identical packs: wiremock pools its servers and hands the
+/// same one to tests that run one after the other, so the same download URL —
+/// so the same archive digest. A lookup by that digest alone is therefore
+/// ambiguous: it finds whichever record sorts first, which is often another
+/// test's, naming another instance's folder. That is how the F-076 record
+/// test came to fail in CI with a record from another test's temp directory.
+///
+/// Two applies of ONE pack into two instances pin the fix: both records
+/// carry the same digest, so only the instance root tells them apart, and
+/// each lookup must come back with its own record.
+#[test]
+fn spec_f076_journal_lookup_finds_the_record_of_its_own_instance() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        Mock::given(method("GET"))
+            .and(path("/data/packfile.jar"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jar.clone())
+                    .insert_header("content-type", "application/java-archive"),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::fs::create_dir_all(first.join("mods")).expect("mkdir first");
+        std::fs::create_dir_all(second.join("mods")).expect("mkdir second");
+        let state = app_state_with_roots(dir.path(), &[&first, &second]);
+
+        // ONE pack, applied twice: both records carry the same digest, so
+        // the digest alone cannot tell them apart.
+        let pack = pack_bytes(&format!("{}/data/packfile.jar", server.uri()), &jar);
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(&pack_path, &pack).expect("write pack");
+        let digest = sha512_hex(&pack);
+
+        for root in [&first, &second] {
+            let sink: Sink = Arc::new(Mutex::new(vec![]));
+            let provider =
+                mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+            execute_modpack_install_with(
+                &state,
+                &provider,
+                request(&pack_path, root),
+                recording_channel(&sink),
+                true,
+            )
+            .await
+            .expect("apply failed");
+        }
+
+        let handle = state.journal_handle();
+        let guard = handle.lock().expect("journal");
+
+        // The fixture really is ambiguous: two records, one digest. Without
+        // this the test would pass even if the lookup were the broken one.
+        let found = guard.discover();
+        let shared: Vec<_> = found
+            .records()
+            .filter(|r| r.pack.as_ref().is_some_and(|p| p.archive_sha512 == digest))
+            .collect();
+        assert!(
+            shared.len() >= 2,
+            "the fixture must make a digest-only lookup ambiguous: {shared:?}"
+        );
+
+        // Each lookup comes back with the record of its own instance.
+        let first_records = records_for(&guard, &first, &digest);
+        let second_records = records_for(&guard, &second, &digest);
+        assert_eq!(
+            first_records.len(),
+            1,
+            "the first apply must leave exactly one record: {first_records:?}"
+        );
+        assert_eq!(
+            second_records.len(),
+            1,
+            "the second apply must leave exactly one record: {second_records:?}"
+        );
+        let first_record = &first_records[0];
+        let second_record = &second_records[0];
+        assert_ne!(
+            first_record.operation_id, second_record.operation_id,
+            "the two applies wrote one record between them"
+        );
+        assert_eq!(first_record.target_path, canonical_root(&first));
+        assert_eq!(second_record.target_path, canonical_root(&second));
+        assert_eq!(first_record.profile_id, "i1");
+        assert_eq!(second_record.profile_id, "i2");
     });
 }
 
