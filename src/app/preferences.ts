@@ -31,8 +31,9 @@ const DEFAULTS: Preferences = {
 const DIRECTION: Record<Locale, 'ltr' | 'rtl'> = { en: 'ltr', ar: 'rtl' };
 
 // shortcut: preferences live in localStorage because three UI flags do not
-// deserve a database table yet; move them to core's SQLite settings table when
-// the Settings screen persists anything the app must remember per install.
+// deserve a file on disk yet; move them to core's JSON settings file
+// (core/src/settings.rs, under config_dir) when the Settings screen persists
+// anything the app must remember per install.
 const STORAGE_KEY = 'modmanager.preferences.v1';
 
 function isOneOf<T extends string>(allowed: readonly T[], value: unknown): value is T {

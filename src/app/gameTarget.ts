@@ -13,9 +13,10 @@ import { useSyncExternalStore } from 'react';
  * own loader, so picking an instance is what sets the fields; the user may
  * override them, and the override stands until another instance is picked.
  *
- * shortcut: the pair is session state, not a database row; move it to core's
- * SQLite settings table when an instance has to remember a pair the user
- * chose rather than the one it was created with.
+ * shortcut: the pair is session state, not a persisted row; move it to core's
+ * JSON settings file (core/src/settings.rs, under config_dir) when an instance
+ * has to remember a pair the user chose rather than the one it was created
+ * with.
  */
 
 /** Suggestions, not a closed set: Modrinth adds versions and loaders faster
