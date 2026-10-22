@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 )
 ```
 
-**`profiles`** — 33 عموداً (22 قديمة + 11 من v2)
+**`profiles`** — 34 عموداً (23 قديمة + 11 من v2) · الـDDL أدناه يحوي 34 سطر عمود، و`app/storage/migrations/v001_contract.py:26-50` يعرّف 23، و`app/storage/schema_contract.py:24-59` يعرّف 34
 ```sql
 CREATE TABLE IF NOT EXISTS profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
