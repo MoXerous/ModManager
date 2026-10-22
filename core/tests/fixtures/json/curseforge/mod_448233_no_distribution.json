@@ -1,0 +1,233 @@
+{
+  "data": {
+    "screenshots": [],
+    "id": 448233,
+    "gameId": 432,
+    "name": "Entity Culling Fabric/Forge",
+    "slug": "entityculling",
+    "links": {
+      "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/entityculling",
+      "wikiUrl": "",
+      "issuesUrl": "https://github.com/example-author-1/EntityCulling/issues",
+      "sourceUrl": "https://github.com/example-author-1/EntityCulling-Fabric"
+    },
+    "summary": "Using async path-tracing to hide BlockEntities/Entities that are not visible",
+    "status": 4,
+    "downloadCount": 236069474,
+    "favoriteCount": 6406,
+    "isFeatured": false,
+    "primaryCategoryId": 425,
+    "categories": [
+      {
+        "id": 425,
+        "gameId": 432,
+        "name": "Miscellaneous",
+        "slug": "mc-miscellaneous",
+        "url": "https://www.curseforge.com/minecraft/mc-mods/mc-miscellaneous",
+        "iconUrl": "https://media.forgecdn.net/avatars/6/40/635351497693711265.png",
+        "dateModified": "2014-06-15T04:27:14.543Z",
+        "isClass": false,
+        "classId": 6,
+        "parentCategoryId": 6
+      },
+      {
+        "id": 5191,
+        "gameId": 432,
+        "name": "Utility & QoL",
+        "slug": "utility-qol",
+        "url": "https://www.curseforge.com/minecraft/mc-mods/utility-qol",
+        "iconUrl": "https://media.forgecdn.net/avatars/456/558/637727379086405233.png",
+        "dateModified": "2021-11-17T11:45:09.143Z",
+        "isClass": false,
+        "classId": 6,
+        "parentCategoryId": 6
+      }
+    ],
+    "classId": 6,
+    "authors": [
+      {
+        "id": 900001,
+        "name": "Example Author 1",
+        "url": "https://www.curseforge.com/members/example-author-1",
+        "avatarUrl": "https://example.com/avatars/example-author-1.png",
+        "userTierInfo": {
+          "tierLevel": 6,
+          "downloadsThreshold": 500000000
+        }
+      }
+    ],
+    "logo": {
+      "id": 345318,
+      "modId": 448233,
+      "title": "637492631463701682.png",
+      "description": "",
+      "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/345/318/256/256/637492631463701682.png",
+      "url": "https://media.forgecdn.net/avatars/345/318/637492631463701682.png"
+    },
+    "mainFileId": 9100316,
+    "latestFiles": [
+      {
+        "id": 3208944,
+        "gameId": 432,
+        "modId": 448233,
+        "isAvailable": true,
+        "displayName": "1.0.1 vanilla tags",
+        "fileName": "EntityCulling-Fabric-1.0.1-vanilla-tags.jar",
+        "releaseType": 1,
+        "fileStatus": 4,
+        "hashes": [
+          {
+            "value": "b9935546220635faa33f3450b8a85251e1b3d6e6",
+            "algo": 1
+          },
+          {
+            "value": "cfe88ea2e20a6782e0ebd8800a44d647",
+            "algo": 2
+          }
+        ],
+        "fileDate": "2021-02-18T23:00:10Z",
+        "fileLength": 38217,
+        "downloadCount": 315662,
+        "downloadUrl": null,
+        "gameVersions": [
+          "1.16.5",
+          "1.16.4"
+        ],
+        "sortableGameVersions": [
+          {
+            "gameVersionName": "1.16.5",
+            "gameVersionPadded": "0000000001.0000000016.0000000005",
+            "gameVersion": "1.16.5",
+            "gameVersionReleaseDate": "2021-01-15T14:14:48.91Z",
+            "gameVersionTypeId": 70886
+          },
+          {
+            "gameVersionName": "1.16.4",
+            "gameVersionPadded": "0000000001.0000000016.0000000004",
+            "gameVersion": "1.16.4",
+            "gameVersionReleaseDate": "2020-11-02T18:40:51.49Z",
+            "gameVersionTypeId": 70886
+          }
+        ],
+        "dependencies": [],
+        "alternateFileId": 0,
+        "isServerPack": false,
+        "fileFingerprint": 1580186310,
+        "modules": [
+          {
+            "name": "LICENSE_EntityCulling-Fabric",
+            "fingerprint": 2369434594
+          },
+          {
+            "name": "fabric.mod.json",
+            "fingerprint": 3976570316
+          },
+          {
+            "name": "entityculling.mixins.json",
+            "fingerprint": 1123097676
+          }
+        ]
+      },
+      {
+        "id": 6236207,
+        "gameId": 432,
+        "modId": 448233,
+        "isAvailable": true,
+        "displayName": "1.7.3-1.21.4 - NeoForge",
+        "fileName": "entityculling-neoforge-1.7.3-mc1.21.4.jar",
+        "releaseType": 2,
+        "fileStatus": 4,
+        "hashes": [
+          {
+            "value": "936fdead69a3b44c6660c94093b6fe81430831b0",
+            "algo": 1
+          },
+          {
+            "value": "ebbefa8c98a24eb9bbf67a08769908e4",
+            "algo": 2
+          }
+        ],
+        "fileDate": "2025-02-25T20:17:40.577Z",
+        "fileLength": 74856,
+        "downloadCount": 71358,
+        "fileSizeOnDisk": 137346,
+        "downloadUrl": null,
+        "gameVersions": [
+          "1.21.4",
+          "NeoForge"
+        ],
+        "sortableGameVersions": [
+          {
+            "gameVersionName": "1.21.4",
+            "gameVersionPadded": "0000000001.0000000021.0000000004",
+            "gameVersion": "1.21.4",
+            "gameVersionReleaseDate": "2024-12-03T16:26:15.35Z",
+            "gameVersionTypeId": 77784
+          },
+          {
+            "gameVersionName": "NeoForge",
+            "gameVersionPadded": "0",
+            "gameVersion": "",
+            "gameVersionReleaseDate": "2023-07-25T00:00:00Z",
+            "gameVersionTypeId": 68441
+          }
+        ],
+        "dependencies": [],
+        "alternateFileId": 0,
+        "isServerPack": false,
+        "fileFingerprint": 1164166530,
+        "modules": [
+          {
+            "name": "META-INF",
+            "fingerprint": 2959585208
+          },
+          {
+            "name": "LICENSE",
+            "fingerprint": 1929528592
+          },
+          {
+            "name": "LICENSE-EntityCulling",
+            "fingerprint": 3421239066
+          }
+        ]
+      }
+    ],
+    "latestFilesIndexes": [
+      {
+        "gameVersion": "26.3",
+        "fileId": 9100316,
+        "filename": "entityculling-neoforge-1.11.3-mc26.3.jar",
+        "releaseType": 1,
+        "gameVersionTypeId": 88556,
+        "modLoader": 6
+      },
+      {
+        "gameVersion": "26.3",
+        "fileId": 9100315,
+        "filename": "entityculling-fabric-1.11.3-mc26.3.jar",
+        "releaseType": 1,
+        "gameVersionTypeId": 88556,
+        "modLoader": 4
+      },
+      {
+        "gameVersion": "26.2",
+        "fileId": 9100314,
+        "filename": "entityculling-neoforge-1.11.3-mc26.2.jar",
+        "releaseType": 1,
+        "gameVersionTypeId": 86297,
+        "modLoader": 6
+      }
+    ],
+    "latestEarlyAccessFilesIndexes": [],
+    "dateCreated": "2021-02-21T09:31:33.887Z",
+    "dateModified": "2026-10-08T16:57:36.24Z",
+    "dateReleased": "2026-10-08T16:52:19.54Z",
+    "allowModDistribution": false,
+    "gamePopularityRank": 21,
+    "isAvailable": true,
+    "hasCommentsEnabled": false,
+    "licenseType": "Custom License",
+    "thumbsUpCount": 0,
+    "featuredProjectTag": 0
+  }
+}
