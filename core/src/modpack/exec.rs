@@ -133,7 +133,8 @@ pub struct PackEvent {
 }
 
 impl PackEvent {
-    fn operation(phase: &'static str) -> Self {
+    /// An event about the operation as a whole, with no file attached.
+    pub fn operation(phase: &'static str) -> Self {
         Self {
             phase,
             safe_path: None,
@@ -300,6 +301,13 @@ pub struct PlanExecutor<'a> {
     /// journal is what makes a crash resumable.
     identity: PackIdentity,
     allow_insecure_loopback: bool,
+    /// F-076: the record this apply CONTINUES, when it continues one.
+    ///
+    /// `None` for an ordinary apply: it starts a record of its own. `Some`
+    /// for the recovery: the record a crashed apply left is the only
+    /// account of what was planned and of which scratch files are ours,
+    /// and a second record would be a second account of the same work.
+    resume: Option<String>,
 }
 
 impl<'a> PlanExecutor<'a> {
@@ -328,7 +336,25 @@ impl<'a> PlanExecutor<'a> {
             instance_root,
             identity,
             allow_insecure_loopback: false,
+            resume: None,
         }
+    }
+
+    /// Continues an existing record instead of starting a new one (F-076).
+    ///
+    /// The recovery needs this. The record of a crashed apply is the
+    /// account of the work: it names every destination, every scratch file
+    /// this apply owns, and how far it got. Writing a second record would
+    /// lose that account — and the item ids of the new record would be the
+    /// ids the executor writes under, so the old record's history would be
+    /// a different document.
+    ///
+    /// The operation id is kept so the executor can say which record it is
+    /// continuing; the writes themselves still go through the caller's
+    /// callback, which is what decides where they land.
+    pub fn resuming(mut self, operation_id: impl Into<String>) -> Self {
+        self.resume = Some(operation_id.into());
+        self
     }
 
     /// Tests serve wiremock over loopback `http`; production leaves this off so
@@ -378,28 +404,35 @@ impl<'a> PlanExecutor<'a> {
             .staging_root
             .starts_with(self.instance_root.join(STAGING_DIR))
         {
-            self.remove_staging().await;
+            remove_staging(self.instance_root).await;
         }
         let mut report = ApplyReport::default();
         let mut writer = JournalWriter::new(journal);
         let outcome = self.apply_ops(&mut report, &mut writer, on_event).await;
-        // The record is closed on both ordinary paths: an apply that stopped
-        // half way is a `failed` operation, not one that never happened. A
-        // record left `running` is offered again on every launch, forever.
+        // F-076: the record is closed only when the plan was applied.
         //
-        // A journal that could not be written is the exception: the record is
-        // what says what happened, and a record we cannot write is a record
-        // we must not pretend to have closed. The operation stays unfinished,
-        // which is exactly what a crash leaves behind — and a crash is what a
-        // broken journal amounts to.
+        // A FAILED apply leaves the operation RUNNING, not `failed`. A
+        // failed apply leaves the instance half applied, exactly like a
+        // crash, so the app must be able to describe that state and offer
+        // to finish it — and an unfinished record is what the recovery
+        // reads. `failed` is terminal: a terminal record is never offered
+        // again, and the half applied instance would be left with nothing
+        // that says so. This is the convention `downloader::execute_batch`
+        // already follows: the item goes `failed`, the OPERATION stays
+        // `running`, and `discover().unfinished()` keeps offering it.
+        //
+        // A journal that could not be written is the same case: the record
+        // is what says what happened, and a record we cannot write is a
+        // record we must not pretend to have closed. The operation stays
+        // unfinished, which is exactly what a crash leaves behind — and a
+        // crash is what a broken journal amounts to.
         let closed = match &outcome {
             Ok(()) => writer.emit(JournalOp::Operation(OperationState::Completed)),
-            Err(ExecError::Journal(_)) => Ok(()),
-            Err(_) => writer.emit(JournalOp::Operation(OperationState::Failed)),
+            Err(_) => Ok(()),
         };
         // Runs on both paths, before the terminal event: a failed apply must
         // not leave its scratch directory visible to the instance scan either.
-        self.remove_staging().await;
+        remove_staging(self.instance_root).await;
         match outcome {
             Ok(()) => match closed {
                 Ok(()) => {
@@ -421,37 +454,6 @@ impl<'a> PlanExecutor<'a> {
         }
     }
 
-    /// Deletes `<instance_root>/.mm-staging` with bounded retries.
-    ///
-    /// shortcut: this is best-effort against a handle another process holds
-    /// open. If every attempt fails, the directory stays and the next apply
-    /// removes it first, so it cannot accumulate or feed a later install.
-    /// Upgrade path: an explicit error or a cleanup queue in the journal if a
-    /// real case ever shows a permanently locked file.
-    async fn remove_staging(&self) {
-        let staging = self.instance_root.join(STAGING_DIR);
-        for attempt in 1..=STAGING_REMOVE_ATTEMPTS {
-            match std::fs::remove_dir_all(&staging) {
-                Ok(()) => return,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => return,
-                Err(_) if attempt < STAGING_REMOVE_ATTEMPTS => {
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        STAGING_REMOVE_WAIT_MS * u64::from(attempt),
-                    ))
-                    .await;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %staging.display(),
-                        error = %e,
-                        "could not remove the pack staging directory"
-                    );
-                    return;
-                }
-            }
-        }
-    }
-
     async fn apply_ops(
         &self,
         report: &mut ApplyReport,
@@ -461,12 +463,27 @@ impl<'a> PlanExecutor<'a> {
         // W1: the record exists before the first byte moves. A crash with no
         // record leaves files on disk that nothing claims, and that is the
         // direction this whole path exists to remove (AGENTS.md §5.4).
+        //
+        // A resumed apply has no W1 to do: the record is already there, and
+        // it is the account of the work this apply is finishing. The items
+        // are still built, because they are what validates the plan's
+        // destinations before the first byte moves.
         let items = self.plan_items()?;
-        writer.emit(JournalOp::PackStart {
-            target: self.instance_root.to_string_lossy().into_owned(),
-            items,
-            pack: self.identity.to_meta(),
-        })?;
+        match &self.resume {
+            None => {
+                writer.emit(JournalOp::PackStart {
+                    target: self.instance_root.to_string_lossy().into_owned(),
+                    items,
+                    pack: self.identity.to_meta(),
+                })?;
+            }
+            Some(operation_id) => {
+                tracing::debug!(
+                    operation_id = %operation_id,
+                    "continuing the record of an interrupted pack apply"
+                );
+            }
+        }
         // W2: the apply is under way.
         writer.emit(JournalOp::Operation(OperationState::Running))?;
 
@@ -870,6 +887,43 @@ impl<'a> PlanExecutor<'a> {
     }
 }
 
+/// Deletes `<instance_root>/.mm-staging` with bounded retries.
+///
+/// The staging tree exists only while an apply runs: a tree a killed run
+/// left behind is never resumed, and every apply removes it first so it
+/// cannot accumulate or feed a later install. The recovery resets the same
+/// tree before it extracts — the atomic writer refuses a `.part` it cannot
+/// attribute, and the tree of a killed run holds exactly that.
+///
+/// shortcut: this is best-effort against a handle another process holds
+/// open. If every attempt fails, the directory stays and the next apply
+/// removes it first, so it cannot accumulate or feed a later install.
+/// Upgrade path: an explicit error or a cleanup queue in the journal if a
+/// real case ever shows a permanently locked file.
+pub async fn remove_staging(instance_root: &Path) {
+    let staging = instance_root.join(STAGING_DIR);
+    for attempt in 1..=STAGING_REMOVE_ATTEMPTS {
+        match std::fs::remove_dir_all(&staging) {
+            Ok(()) => return,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+            Err(_) if attempt < STAGING_REMOVE_ATTEMPTS => {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    STAGING_REMOVE_WAIT_MS * u64::from(attempt),
+                ))
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %staging.display(),
+                    error = %e,
+                    "could not remove the pack staging directory"
+                );
+                return;
+            }
+        }
+    }
+}
+
 /// The journal's side of one apply.
 ///
 /// It exists for one reason: a record is a single document, so every write
@@ -1081,7 +1135,10 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// Re-runs the plan's path gate. `archive` already did this when it built the
 /// plan; doing it again is cheap and closes the hole where a plan arrives from
 /// somewhere other than `archive::plan_install`.
-fn checked_relative(safe_path: &str) -> Result<String, ExecError> {
+///
+/// `pub(super)`: the recovery builds its work list from a plan too, and it
+/// gates the same way.
+pub(super) fn checked_relative(safe_path: &str) -> Result<String, ExecError> {
     let normalized = safe_member_name(safe_path).map_err(|reason| ExecError::UnsafePath {
         path: safe_path.to_string(),
         reason,
@@ -1187,13 +1244,28 @@ async fn sha512_of(path: &Path) -> Result<String, ExecError> {
     result.map_err(|e| io_err("read", path, e))
 }
 
-fn sha512_of_file(path: &Path) -> io::Result<String> {
-    use sha2::Digest as _;
+/// SHA-512 of a file on disk, lowercase hex.
+///
+/// `pub(super)`: the recovery measures the same bytes on the same way — it
+/// has to decide whether a rename landed, and a hash is the only honest way
+/// to ask.
+pub(super) fn sha512_of_file(path: &Path) -> io::Result<String> {
     let mut file = std::fs::File::open(path)?;
+    sha512_of_reader(&mut file)
+}
+
+/// SHA-512 of everything left in `reader`, lowercase hex.
+///
+/// The reader form exists because the digest of an archive must be computed
+/// from the very handle the archive is parsed from: hashing the path and
+/// then reopening it is two reads of two files, and the bytes that are
+/// checked would not be the bytes that are read.
+pub(super) fn sha512_of_reader(reader: &mut impl Read) -> io::Result<String> {
+    use sha2::Digest as _;
     let mut hasher = sha2::Sha512::new();
     let mut buf = [0u8; 65536];
     loop {
-        let n = io::Read::read(&mut file, &mut buf)?;
+        let n = io::Read::read(reader, &mut buf)?;
         if n == 0 {
             break;
         }

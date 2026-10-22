@@ -4,10 +4,13 @@
 pub mod archive;
 pub mod exec;
 pub mod mrpack;
+pub mod recovery;
 
 #[cfg(test)]
 mod archive_tests;
 #[cfg(test)]
 mod exec_tests;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod tests;
