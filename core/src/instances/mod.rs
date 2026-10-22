@@ -1,9 +1,12 @@
-//! Instance folders: read-only scanning, lock file, enable/disable.
+﻿//! Instance folders: read-only scanning, lock file, enable/disable.
 //!
 //! Scanning never writes. The only writer here is [`toggle`] (rename
 //! only) and [`lock`] (the lock file itself).
 
 pub mod lock;
+pub mod metadata;
+pub mod recovery;
+pub mod registry;
 pub mod toggle;
 
 pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile};
@@ -11,7 +14,7 @@ pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile};
 use crate::jar_reader::{classify_local_resource_type, ResourceType};
 use std::path::{Path, PathBuf};
 
-/// One scanned file: orthogonal facts, never a single enum (spec §5).
+/// One scanned file: orthogonal facts, never a single enum (spec Â§5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalContentFact {
     pub path: PathBuf,
@@ -22,7 +25,7 @@ pub struct LocalContentFact {
     pub disabled: bool,
 }
 
-/// Suffixes accepted by the scan (spec §4-1 + F-090 names).
+/// Suffixes accepted by the scan (spec Â§4-1 + F-090 names).
 fn scan_accepted(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".jar")
@@ -51,7 +54,7 @@ pub fn is_disabled_path(path: &Path) -> bool {
 }
 
 /// Non-recursive scan files: top-level entries plus `disabled_mods/`,
-/// deduped and casefold-sorted. Missing dir ⇒ [].
+/// deduped and casefold-sorted. Missing dir â‡’ [].
 pub fn iter_local_mod_scan_files(folder: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -88,8 +91,8 @@ fn has_launcher_metadata(dir: &Path) -> bool {
 }
 
 /// Instance + minecraft roots: a `.minecraft`/`minecraft` child whose
-/// parent carries launcher metadata ⇒ parent is the instance root
-/// (Prism/MultiMC shape, spec §2-1).
+/// parent carries launcher metadata â‡’ parent is the instance root
+/// (Prism/MultiMC shape, spec Â§2-1).
 pub fn detect_instance_roots(selected: &Path) -> (PathBuf, PathBuf) {
     if let Some(name) = selected.file_name().and_then(|n| n.to_str()) {
         let lower = name.to_lowercase();

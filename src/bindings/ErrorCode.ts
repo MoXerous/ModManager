@@ -4,4 +4,4 @@
  * رمز الخطأ المرسل للواجهة؛ تترجمه الواجهة إلى نص حسب لغة المستخدم.
  * `message` للتشخيص فقط (سجلّ) ولا يُعرض أبدًا.
  */
-export type ErrorCode = "internal" | "invalidInput" | "notFound" | "providerApi" | "rateLimited" | "timeout" | "io" | "newerSchema";
+export type ErrorCode = "internal" | "invalidInput" | "packChanged" | "notFound" | "providerApi" | "rateLimited" | "timeout" | "io" | "newerSchema";

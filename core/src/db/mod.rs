@@ -3,13 +3,14 @@
 //! `Db::open` is the only entry point: pragmas, gate, backup, migrate.
 
 pub mod cache;
+pub mod instances;
 pub mod schema;
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Current schema version (`MIGRATIONS.len()`).
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -34,6 +35,11 @@ impl Db {
     /// Filesystem path of this database (used for backup naming).
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Read/write access for the row modules in this crate.
+    pub(crate) fn conn(&self) -> &rusqlite::Connection {
+        &self.conn
     }
 }
 
@@ -150,7 +156,101 @@ mod tests {
     }
 
     #[test]
-    fn spec_f133_creates_schema_then_v2() {
+    fn spec_f104_upgrades_v2_to_v3_preserving_rows() {
+        let dir = crate::test_tempdir();
+        let p = dir.path().join("t.db");
+        {
+            let mut conn = rusqlite::Connection::open(&p).expect("raw open");
+            schema::migrations()
+                .to_version(&mut conn, 2)
+                .expect("to v2");
+            conn.execute(
+                "INSERT INTO instances (id, name, path, minecraft_version, loader, created_at)
+                 VALUES ('i1', 'n', 'p', '1.21', 'fabric', 1)",
+                [],
+            )
+            .expect("seed");
+        }
+        let db = open(&p).expect("upgrade");
+        let v: u32 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("version");
+        assert_eq!(v, 3);
+        let (name, source, minecraft_root, scanned_at): (String, String, String, Option<i64>) = db
+            .conn
+            .query_row(
+                "SELECT name, source, minecraft_root, scanned_at FROM instances WHERE id = 'i1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("row preserved");
+        assert_eq!(name, "n");
+        assert_eq!(source, "managed", "pre-existing rows default to managed");
+        assert_eq!(minecraft_root, "");
+        assert_eq!(scanned_at, None, "never scanned is NULL, not 0");
+    }
+
+    #[test]
+    fn spec_f104_source_rejects_unknown_value() {
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        for good in ["managed", "manual", "adopted"] {
+            db.conn
+                .execute(
+                    "INSERT INTO instances
+                     (id, name, path, minecraft_version, loader, created_at, source)
+                     VALUES (?1, 'n', ?1, '1.21', 'fabric', 1, ?2)",
+                    rusqlite::params![format!("id-{good}"), good],
+                )
+                .expect("allowed source");
+        }
+        let err = db
+            .conn
+            .execute(
+                "INSERT INTO instances
+                 (id, name, path, minecraft_version, loader, created_at, source)
+                 VALUES ('bad', 'n', 'bad', '1.21', 'fabric', 1, 'linked_modpack')",
+                [],
+            )
+            .expect_err("CHECK must reject an unlisted source");
+        let text = err.to_string();
+        assert!(
+            text.contains("CHECK") && text.contains("source"),
+            "expected a CHECK failure naming source, got: {text}"
+        );
+    }
+
+    #[test]
+    fn spec_f104_path_unique_is_case_sensitive_so_writes_canonicalize() {
+        // Documents why the repository canonicalizes before insert: SQLite's
+        // UNIQUE is case-sensitive, so two spellings of one NTFS path would
+        // otherwise register the same folder twice.
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        let a = dir.path().join("Case");
+        std::fs::create_dir_all(&a).expect("mkdir");
+        for (id, spelling) in [
+            ("i1", a.to_string_lossy().into_owned()),
+            ("i2", "c:\\users\\A".to_string()),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO instances (id, name, path, minecraft_version, loader, created_at)
+                     VALUES (?1, 'n', ?2, '1.21', 'fabric', 1)",
+                    rusqlite::params![id, spelling],
+                )
+                .expect("both spellings are accepted by the database");
+        }
+        let n: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM instances", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 2, "the schema does not dedupe; the writer must");
+    }
+
+    #[test]
+    fn spec_f133_creates_schema_then_latest() {
         let dir = crate::test_tempdir();
         let db = open(&dir.path().join("t.db")).expect("open");
         let t = tables(&db);
@@ -220,7 +320,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(v, 2);
+        assert_eq!(v, CURRENT_VERSION, "open() always lands on the latest");
         let name: String = db
             .conn
             .query_row("SELECT name FROM instances WHERE id = 'i1'", [], |r| {

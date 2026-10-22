@@ -254,3 +254,93 @@ fn spec_f141_oversize_record_is_refused_on_read() {
     let found = j.discover();
     assert_eq!(found.issues().count(), 1);
 }
+
+fn pack_meta() -> crate::journal::PackApplyMeta {
+    crate::journal::PackApplyMeta {
+        pack_name: "Test pack".to_string(),
+        pack_version_id: "ver-1".to_string(),
+        archive_sha512: "ab".repeat(64),
+        archive_path: "C:/packs/test.mrpack".to_string(),
+    }
+}
+
+#[test]
+fn spec_f076_start_pack_writes_the_pack_with_the_record() {
+    // The pack is part of the record from the first write: a record that
+    // names no archive cannot be resumed against one.
+    let d = crate::test_tempdir();
+    let j = journal_in(d.path());
+    let rec = j
+        .start_pack("prof", "/target", vec![item("a")], pack_meta())
+        .expect("start");
+    assert_eq!(rec.kind, crate::journal::OperationKind::MrpackInstall);
+    assert_eq!(rec.pack.as_ref().expect("pack").pack_name, "Test pack");
+    assert!(rec.verify().is_ok());
+
+    let back = j.read(&rec.operation_id).expect("read");
+    assert_eq!(back, rec);
+    let text = std::fs::read_to_string(j.root().join(format!("{}.json", rec.operation_id)))
+        .expect("read raw");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        json.as_object().expect("obj").len(),
+        19,
+        "the pack block is the nineteenth top-level key"
+    );
+    assert!(json.get("pack").is_some());
+}
+
+#[test]
+fn spec_f141_transition_items_writes_the_record_once() {
+    // The reason the batched write exists: a record is one document, so
+    // every write rewrites the whole file, and the file grows with the
+    // number of items. Several transitions, one write, one revision.
+    let d = crate::test_tempdir();
+    let j = journal_in(d.path());
+    let rec = j
+        .start(
+            crate::journal::OperationKind::DownloadBatch,
+            "p",
+            "/t",
+            vec![item("a"), item("b")],
+        )
+        .expect("start");
+    let after = j
+        .transition_items(
+            &rec.operation_id,
+            &[
+                ("a".to_string(), ItemState::Downloading),
+                ("a".to_string(), ItemState::Verifying),
+                ("a".to_string(), ItemState::Committing),
+                ("b".to_string(), ItemState::Downloading),
+            ],
+            None,
+        )
+        .expect("transitions");
+    assert_eq!(after.revision, rec.revision + 1, "one write, one revision");
+    assert_eq!(after.items[0].state, ItemState::Committing);
+    assert_eq!(after.items[1].state, ItemState::Downloading);
+
+    // The same transitions through the one-at-a-time method walk the same
+    // states, one revision each — which is the cost the batch avoids.
+    let rec2 = j
+        .start(
+            crate::journal::OperationKind::DownloadBatch,
+            "p",
+            "/t",
+            vec![item("a")],
+        )
+        .expect("start");
+    let mut revision = rec2.revision;
+    for state in [
+        ItemState::Downloading,
+        ItemState::Verifying,
+        ItemState::Committing,
+    ] {
+        let r = j
+            .transition_item(&rec2.operation_id, "a", state, None)
+            .expect("transition");
+        revision += 1;
+        assert_eq!(r.revision, revision);
+    }
+}

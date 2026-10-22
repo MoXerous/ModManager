@@ -1,7 +1,9 @@
 //! `update`: newest compatible per lock pin via hash-batch, then swap.
 
-use super::{allow_insecure, client, instance_dir, io_err, lock_path, mods_dir, CliError, Ctx};
-use mm_core::downloader::{DownloadRequest, Downloader};
+use super::{
+    build_download_request, client, instance_dir, io_err, lock_path, mods_dir, CliError, Ctx,
+};
+use mm_core::downloader::Downloader;
 use mm_core::instances::{read_lock, write_lock, LockEntry};
 use mm_core::providers::{HashAlgo, LatestFilter, Provider};
 use mm_core::resolver::primary_file;
@@ -112,14 +114,14 @@ pub async fn update(
     let backup = super::remove::backup_dir(ctx)?;
     let mut new_entries: Vec<LockEntry> = Vec::new();
     for r in &rows {
-        let req = DownloadRequest {
-            url: r.url.clone(),
-            dest: mods.join(&r.filename),
-            expected_size: Some(r.size),
-            sha1_hex: r.sha1.clone(),
-            sha512_hex: r.sha512.clone(),
-            allow_insecure_loopback: allow_insecure(&r.url),
-        };
+        let req = build_download_request(
+            ctx,
+            r.url.clone(),
+            mods.join(&r.filename),
+            Some(r.size),
+            r.sha1.clone(),
+            r.sha512.clone(),
+        );
         let go = || ControlFlow::Continue(());
         let outcome = downloader
             .download(&req, &mut |_| go(), &|| false)
@@ -165,6 +167,7 @@ pub async fn update(
             version_id: r.version_id.clone(),
             filename: landed,
             sha1: r.sha1.clone().unwrap_or_default(),
+            sha512: r.sha512.clone().unwrap_or_default(),
         });
     }
     let path = lock_path(ctx)?;

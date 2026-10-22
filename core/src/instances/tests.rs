@@ -86,6 +86,29 @@ fn spec_f101_prism_child_uses_parent_root() {
 }
 
 #[test]
+fn spec_f101_a_lock_written_before_sha512_existed_still_reads() {
+    // The field was added after locks were already on disk. Every field here is
+    // `serde(default)` for that reason, and this is the check: an old lock must
+    // not become unreadable, or upgrading the app would strand its instances.
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    std::fs::write(
+        &p,
+        r#"{"schema_version":1,"entries":[{"provider":"modrinth","project_id":"a",
+        "slug":"a-mod","version_id":"v","filename":"a.jar","sha1":"00"}]}"#,
+    )
+    .expect("write old lock");
+
+    let back = read_lock(&p).expect("an old lock must still parse");
+    assert_eq!(back.entries.len(), 1);
+    assert_eq!(back.entries[0].sha1, "00");
+    assert_eq!(
+        back.entries[0].sha512, "",
+        "absent sha512 reads as empty, not as an error"
+    );
+}
+
+#[test]
 fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
     let d = crate::test_tempdir();
     let p = d.path().join("instance.lock.json");
@@ -97,6 +120,7 @@ fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
             version_id: "v".to_string(),
             filename: "a.jar".to_string(),
             sha1: "00".to_string(),
+            sha512: "ff".to_string(),
         }],
     };
     write_lock(&p, &lock).expect("write");

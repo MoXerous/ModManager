@@ -170,8 +170,8 @@ impl Downloader {
     pub async fn download(
         &self,
         req: &DownloadRequest,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
-        is_paused: &dyn Fn() -> bool,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
+        is_paused: &(dyn Fn() -> bool + Sync),
     ) -> Result<DownloadOutcome, DownloadError> {
         validate_url(&req.url, req.allow_insecure_loopback)?;
         // F-032/F-033: an existing dest is never silently overwritten.
@@ -211,8 +211,8 @@ impl Downloader {
     async fn try_once(
         &self,
         req: &DownloadRequest,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
-        is_paused: &dyn Fn() -> bool,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
+        is_paused: &(dyn Fn() -> bool + Sync),
     ) -> Result<DownloadOutcome, DownloadError> {
         use reqwest::header::{CONTENT_LENGTH, LOCATION, RANGE};
         use reqwest::StatusCode;
@@ -407,7 +407,7 @@ impl Downloader {
         done: u64,
         sha1: sha1::Sha1,
         sha512: sha2::Sha512,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
     ) -> Result<DownloadOutcome, DownloadError> {
         use sha1::Digest as _;
         let part = atomic::part_path(&req.dest);
@@ -490,7 +490,7 @@ impl Downloader {
         &self,
         req: &DownloadRequest,
         content_type: Option<String>,
-        on_progress: &mut dyn FnMut(DownloadProgress) -> ControlFlow<()>,
+        on_progress: &mut (dyn FnMut(DownloadProgress) -> ControlFlow<()> + Send),
     ) -> Result<DownloadOutcome, DownloadError> {
         let part = atomic::part_path(&req.dest);
         let (len, sha1hex, sha512hex, head) = tokio::task::spawn_blocking({
@@ -691,8 +691,64 @@ fn validate_url(raw: &str, allow_loopback: bool) -> Result<reqwest::Url, Downloa
     }
 }
 
+/// Loopback is an ADDRESS test, not a name-prefix test: `127.evil.com`
+/// starts with `127.` but its owner's DNS points wherever they registered
+/// it, so a string prefix would put a plain-HTTP fetch at the mercy of
+/// remote data. `localhost` stays accepted as the literal name, the
+/// bracketed IPv6 serialization (`[::1]`, per `Url::host_str()`) is
+/// unwrapped, and a trailing `:port` is tolerated defensively for callers
+/// that pass `host:port` — the production call path (`Url::host_str()`)
+/// never includes one.
 fn is_loopback(host: &str) -> bool {
-    host == "localhost" || host.starts_with("127.") || host == "::1" || host == "[::1]"
+    if host == "localhost" {
+        return true;
+    }
+    // Url serializes IPv6 with brackets: `[::1]`, possibly `[::1]:8080`
+    // from a non-Url caller. Cut at the closing bracket.
+    let candidate = if let Some(rest) = host.strip_prefix('[') {
+        match rest.find(']') {
+            Some(end) => &rest[..end],
+            None => rest,
+        }
+    } else {
+        host
+    };
+    // Legacy IPv4 spellings (`2130706433`, `0177.0.0.1`, `0x7f.0.0.1`) do
+    // not parse as addresses here and are therefore not loopback — an
+    // address test, not a spelling test, is the safe default.
+    if let Ok(ip) = candidate.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    // `host:port` fallback: only unambiguous before a printable port, and
+    // only permissive for a real loopback address or the literal name.
+    if let Some((bare, port)) = candidate.split_once(':') {
+        if !port.is_empty() && port.parse::<u16>().is_ok() {
+            if bare == "localhost" {
+                return true;
+            }
+            if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+                return ip.is_loopback();
+            }
+        }
+    }
+    false
+}
+
+/// True when `raw` parses as an absolute URL with no embedded credentials
+/// whose host is a loopback *address* (or the literal name `localhost`).
+///
+/// Only the CLI's hidden `--api-base` test seam uses this, to recognise that
+/// the operator pointed this very process at a local test server. It is never
+/// applied to a URL that arrived over the network: a provider response is
+/// data, and data does not get to choose the transport.
+pub fn is_loopback_url(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    url.host_str().is_some_and(is_loopback)
 }
 
 /// Suffix-gated archive sanity (spec §9 steps 6-7, F-042): `.jar`, `.mrpack`
@@ -1100,6 +1156,70 @@ mod tests {
         ));
         assert!(!dest.exists());
         assert!(!crate::safety::atomic::part_path(&dest).exists());
+    }
+
+    #[test]
+    fn spec_f031_loopback_is_an_address_not_a_name_prefix() {
+        // An address check, not a string prefix: `127.evil.com` starts with
+        // `127.` but its owner's DNS points wherever they registered it.
+        for good in ["127.0.0.1", "127.5.7.9", "::1", "[::1]", "localhost"] {
+            assert!(is_loopback(good), "{good} is loopback");
+        }
+        for bad in [
+            "127.evil.com",
+            "127.0.0.1.evil.io",
+            "localhostish",
+            "example.com",
+        ] {
+            assert!(!is_loopback(bad), "{bad} is not loopback");
+        }
+        // Legacy integer and octal-shaped IPv4 spellings are not addresses.
+        assert!(!is_loopback("2130706433"));
+        assert!(!is_loopback("0177.0.0.1"));
+        // A port suffix is tolerated for callers that pass `host:port`.
+        assert!(is_loopback("127.0.0.1:8080"));
+        assert!(is_loopback("[::1]:8080"));
+        assert!(!is_loopback("127.0.0.1.evil.io:8080"));
+    }
+
+    #[test]
+    fn spec_f031_loopback_url_is_parsed_not_prefix_matched() {
+        // The CLI's only plain-HTTP seam is a loopback `--api-base`; it must
+        // parse as a URL and pass the same address test, not a prefix.
+        assert!(is_loopback_url("http://127.0.0.1:8080/v2"));
+        assert!(is_loopback_url("https://[::1]:9090/v2"));
+        assert!(is_loopback_url("http://localhost/v2"));
+        for bad in [
+            "http://127.evil.com/v2",
+            "https://127.0.0.1.evil.io/v2",
+            "https://api.modrinth.com/v2",
+            "http://user:pw@127.0.0.1/v2",
+            "not a url",
+            "file:///etc/passwd",
+        ] {
+            assert!(!is_loopback_url(bad), "{bad} is not a loopback URL");
+        }
+    }
+
+    #[test]
+    fn spec_f031_insecure_loopback_never_admits_attacker_domains() {
+        // End to end through the real validator: the flag widens the scheme
+        // rule to loopback only. Old code let any `127.`-prefixed DNS name
+        // through, so `http://127.evil.com` fetched over plain HTTP.
+        assert!(validate_url("http://127.0.0.1/x.jar", true).is_ok());
+        assert!(validate_url("http://[::1]:9090/x.jar", true).is_ok());
+        assert!(validate_url("http://localhost/x.jar", true).is_ok());
+        for bad in [
+            "http://127.evil.com/x.jar",
+            "http://127.0.0.1.evil.io/x.jar",
+            "http://example.com/x.jar",
+            "file:///etc/passwd",
+            "http://user:pw@127.0.0.1/x.jar",
+        ] {
+            assert!(validate_url(bad, true).is_err(), "{bad} must be refused");
+        }
+        // And no address-downgrade at all when the flag is false.
+        assert!(validate_url("http://127.0.0.1/x.jar", false).is_err());
     }
 
     #[tokio::test]

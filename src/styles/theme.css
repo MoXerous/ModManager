@@ -1,0 +1,163 @@
+/* ModManager — Tailwind 4 entry point.
+ *
+ * Source of truth for colors, radii and font stacks is `tokens.css`, a verbatim
+ * copy of the design package's `tokens/design-tokens.css`. Nothing below
+ * repeats a hex value: the `@theme inline` block only points Tailwind
+ * utilities at the variables that file already defines.
+ *
+ * `:root` = light, `.dark` = dark (dark is the shipped default, board 17),
+ * so a theme switch is one class on <html> and utilities never change.
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./tokens.css";
+
+/* Class-based dark mode. Without this Tailwind follows prefers-color-scheme,
+ * which would fight the in-app theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  /* shadcn/ui variable names -> Tailwind color utilities */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Design-package extras. Declared in the --color-* namespace so
+   * bg-surface-sunken / text-status-issue work with no per-status component. */
+  --color-surface-sunken: var(--surface-sunken);
+  --color-status-update: var(--status-update);
+  --color-status-disabled: var(--status-disabled);
+  --color-status-issue: var(--status-issue);
+  --color-status-manual: var(--status-manual);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+
+  --radius-control: var(--radius-control);
+  --radius-segmented: var(--radius-segmented);
+  --radius-card: var(--radius-card);
+  --radius-dialog: var(--radius-dialog);
+  /* tokens.css omits these two, but design-tokens.json lists them and the
+   * boards use both (the version chip and the downloads badge). */
+  --radius-chip: 6px;
+  --radius-badge: 5px;
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  /* Type scale from tokens/design-tokens.json -> metrics. shadcn's components
+   * ask for text-sm / text-xs, whose Tailwind defaults (14px / 12px) would be
+   * off-spec against the 13px body, so they are pinned here. */
+  --text-sm: 13px;
+  --text-xs: 12px;
+  --text-body: 13px;
+  --text-small: 12px;
+  --text-caption: 11.5px;
+  --text-page-title: 18px;
+  --text-first-run-title: 26px;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    line-height: 1.4;
+    color-scheme: light;
+  }
+
+  /* Arabic needs more leading than Latin at the same size (tokens metrics). */
+  html[dir="rtl"] {
+    line-height: 1.65;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  /*
+   * 13px belongs on `body`, never on `html`: Tailwind's spacing and radius
+   * utilities are rem-based, so a 13px root would render `h-8` at 26px and
+   * `rounded-md` at 4.9px. Base *text* is 13px per the design; the rem basis
+   * stays 16px so `h-11` is the topbar's 44px and `h-9` the nav item's 36px.
+   */
+  body {
+    margin: 0;
+    font-size: 13px;
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tailwind 4's preflight leaves bare `border` at currentColor and outlines
+   * unpainted; shadcn's components rely on these two defaults. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--border);
+  }
+
+  /* Version strings, hashes and the Ctrl K chip are Latin regardless of the
+   * UI language; `unicode-bidi: isolate` keeps them from reordering. */
+  .font-mono {
+    unicode-bidi: isolate;
+  }
+}
+
+/*
+ * Page changes. App.tsx starts a View Transition (or not, see below); only the
+ * feel lives here. The outgoing page is a real snapshot, so this is a true
+ * cross-fade rather than a fade-in over a blank frame.
+ */
+::view-transition-old(root),
+::view-transition-new(root),
+::view-transition-old(page-content),
+::view-transition-new(page-content) {
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+}
+
+/*
+ * The header carries the page title and has no name of its own, so it rides
+ * the root's cross-fade and fades with it — the title would blink on every
+ * page change. The root is therefore not animated: the new page appears at
+ * once, header included, and only the named `page-content` region cross-fades
+ * underneath it. The old root is dropped for the same reason, and because two
+ * opaque roots blended together would wash the page out.
+ */
+::view-transition-old(root) {
+  animation: none;
+  opacity: 0;
+}
+
+::view-transition-new(root) {
+  animation: none;
+}
+
+/* Motion is decoration in this app: the rail, the page fade, dialogs and
+ * progress bars all remain usable with it switched off. One rule covers every
+ * animated surface rather than a variant on each utility. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

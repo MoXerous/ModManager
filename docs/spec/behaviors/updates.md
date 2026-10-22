@@ -1,6 +1,6 @@
 # behaviors/updates.md — فحص التحديث، ومعاينة التحديث، والتثبيت الآمن
 
-> **المرجع:** `app\models.py::UpdatePreviewResult` · `app\ui\main_window.py:7309-7690` (سلاسل النداء منقولة من تقرير الوكيل، **غير مقروءة سطراً بسطر**) · `app\ui\pages\download_manager_page.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\models.py::UpdatePreviewResult` · `app\ui\main_window.py:7309-7690` (سلاسل النداء منقولة من تقرير الوكيل، **غير مقروءة سطراً بسطر**) · `app\ui\pages\download_manager_page.py`
 > ⚠️ **تنبيه الدقة:** `main_window.py` فيه 13,061 سطراً. ما يلي مستخرج من **أسماء الدوال ونصوص الحوارات**، لا من أجسامها. كل ما يعتمد على منطق داخلي يُوسم **غير مُتحقَّق**.
 
 ---

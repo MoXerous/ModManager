@@ -14,6 +14,9 @@ struct Cli {
     /// Modrinth API base (hidden, tests only: points at wiremock).
     #[arg(long, global = true, hide = true)]
     api_base: Option<String>,
+    /// Allow plain HTTP to loopback addresses (hidden, tests only).
+    #[arg(long, global = true, hide = true)]
+    insecure_loopback: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -97,6 +100,7 @@ async fn run(cli: Cli) -> Result<(), commands::CliError> {
     let ctx = commands::Ctx {
         instance: cli.instance,
         api_base: cli.api_base,
+        insecure_loopback: cli.insecure_loopback,
     };
     match cli.command {
         Command::Info => commands::info(),

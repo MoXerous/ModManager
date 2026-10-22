@@ -4,6 +4,166 @@ use super::*;
 use crate::dto::ErrorCode;
 
 #[test]
+fn spec_f104_registry_errors_map_to_codes() {
+    use mm_core::db::instances::InstanceRowError;
+    use mm_core::db::DbError;
+    use mm_core::instances::metadata::MetadataError;
+    use mm_core::instances::registry::RegistryError;
+    use std::path::PathBuf;
+
+    let cases: Vec<(RegistryError, ErrorCode)> = vec![
+        // The request cannot be satisfied as stated.
+        (
+            RegistryError::RootNotEmpty(PathBuf::from("a")),
+            ErrorCode::InvalidInput,
+        ),
+        (
+            RegistryError::AlreadyAnInstance(PathBuf::from("a")),
+            ErrorCode::InvalidInput,
+        ),
+        (
+            RegistryError::RootIsFile(PathBuf::from("a")),
+            ErrorCode::InvalidInput,
+        ),
+        (
+            RegistryError::UnsafeName("CON".into()),
+            ErrorCode::InvalidInput,
+        ),
+        (
+            RegistryError::Row(InstanceRowError::DuplicatePath(PathBuf::from("a"))),
+            ErrorCode::InvalidInput,
+        ),
+        // Folder the user pointed at is not there vs is not a folder.
+        (
+            RegistryError::Row(InstanceRowError::UnresolvablePath {
+                path: "a".into(),
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            }),
+            ErrorCode::NotFound,
+        ),
+        (
+            RegistryError::Row(InstanceRowError::UnresolvablePath {
+                path: "a".into(),
+                source: std::io::Error::other("not a folder"),
+            }),
+            ErrorCode::InvalidInput,
+        ),
+        // Retryable: disk.
+        (
+            RegistryError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            ErrorCode::Io,
+        ),
+        (
+            RegistryError::Row(InstanceRowError::Db(DbError::Io(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            )))),
+            ErrorCode::Io,
+        ),
+        // Needs a newer app, not a retry.
+        (
+            RegistryError::Row(InstanceRowError::Db(DbError::NewerSchema {
+                found: 9,
+                supported: 3,
+            })),
+            ErrorCode::NewerSchema,
+        ),
+        // A corrupt file we wrote is our bug.
+        (
+            RegistryError::Metadata(MetadataError::Parse("{".into())),
+            ErrorCode::Internal,
+        ),
+        (
+            RegistryError::Metadata(MetadataError::NewerSchema {
+                found: "v9".into(),
+                supported: "v1".into(),
+            }),
+            ErrorCode::NewerSchema,
+        ),
+        (
+            RegistryError::Metadata(MetadataError::TooLarge { size: 9, max: 1 }),
+            ErrorCode::InvalidInput,
+        ),
+        (
+            RegistryError::RolledBack(2, "boom".into()),
+            ErrorCode::Internal,
+        ),
+    ];
+    for (err, want) in cases {
+        assert_eq!(registry_error(&err).code, want, "{err}");
+    }
+}
+
+/// The screen's "never scanned" wording depends on this staying a null that
+/// serialises as null, not an optional field that may be absent.
+#[test]
+fn spec_f101_summary_marks_a_deleted_folder_without_hiding_the_row() {
+    let dir = tempfile::tempdir().expect("temp");
+    let root = dir.path().join("Gone");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let row = mm_core::db::instances::InstanceRow {
+        id: "i1".into(),
+        name: "Gone".into(),
+        path: std::fs::canonicalize(&root).expect("canon"),
+        minecraft_root: PathBuf::new(),
+        minecraft_version: None,
+        loader: None,
+        source: mm_core::db::instances::InstanceSource::Manual,
+        created_at: 1,
+        scanned_at: None,
+    };
+    assert!(!summary(&row).path_missing, "present on disk");
+
+    std::fs::remove_dir_all(&root).expect("remove");
+    let gone = summary(&row);
+    assert!(gone.path_missing, "reported as needing attention");
+    assert_eq!(gone.id, "i1", "the row is still described, not dropped");
+    assert_eq!(gone.scanned_at, None);
+    assert_eq!(gone.minecraft_version, None);
+    assert_eq!(gone.source, crate::dto::InstanceSourceDto::Manual);
+}
+
+/// Exercises the real handle: `AppState` -> `spawn_blocking` -> the `Mutex` ->
+/// SQLite. No Tauri app needed, which is the point of keeping the state a
+/// plain struct.
+#[test]
+fn spec_f101_list_instances_runs_through_the_shared_db_handle() {
+    let dir = tempfile::tempdir().expect("temp");
+    let db = mm_core::db::open(&dir.path().join("t.db")).expect("open");
+    let root = dir.path().join("Survival");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let canonical = std::fs::canonicalize(&root).expect("canon");
+
+    mm_core::db::instances::insert(
+        &db,
+        &mm_core::db::instances::InstanceRow {
+            id: "i1".into(),
+            name: "Survival".into(),
+            path: canonical.clone(),
+            minecraft_root: PathBuf::new(),
+            minecraft_version: Some("1.21.1".into()),
+            loader: Some("fabric".into()),
+            source: mm_core::db::instances::InstanceSource::Managed,
+            created_at: 1,
+            scanned_at: None,
+        },
+    )
+    .expect("seed");
+
+    let state = AppState::from_db(db);
+    let rows = tauri::async_runtime::block_on(
+        state.with_db(|db| mm_core::db::instances::list(db).map_err(|e| row_error(&e))),
+    )
+    .expect("list");
+
+    assert_eq!(rows.len(), 1);
+    let dto = summary(&rows[0]);
+    assert_eq!(dto.name, "Survival");
+    assert_eq!(dto.path, canonical.to_string_lossy());
+    assert!(!dto.path_missing);
+    assert_eq!(dto.minecraft_version.as_deref(), Some("1.21.1"));
+}
+
+#[test]
 fn spec_f019_provider_errors_map_to_codes() {
     use mm_core::providers::ProviderError;
     let cases: Vec<(ProviderError, ErrorCode)> = vec![
@@ -55,9 +215,13 @@ fn untrusted_paths_are_filtered_before_core() {
         "..".to_string(),
         "  ".to_string(),
     ];
-    let kept = filenames(&raw);
+    let mods = Path::new("M").join("mods");
+    let kept = filenames(&mods, &raw);
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].file_name().expect("n").to_string_lossy(), "ok.jar");
+    // Filtered, and still *inside* the folder rather than resolved against
+    // the process cwd — the join is what makes a surviving name addressable.
+    assert_eq!(kept[0], mods.join("ok.jar"));
 }
 
 #[test]
@@ -116,4 +280,71 @@ fn dto_camel_case_shape_is_stable() {
     assert!(json.get("versionNumber").is_some());
     assert!(json.get("dependencyType").is_some());
     assert!(json.get("project_id").is_none());
+}
+
+#[test]
+fn spec_f065_a_folder_that_is_not_there_holds_no_installed_mods() {
+    // It is an answer, not a failure. `existing_filenames` used canonicalize
+    // and returned io error, which made installing into an instance whose
+    // folder is not created yet impossible, and made a preview of a fresh
+    // folder refuse to look at all.
+    let dir = std::env::temp_dir().join(format!("mm-existing-{}", std::process::id()));
+    let missing = dir.join("not-created-yet");
+    assert!(!missing.exists(), "premise: the folder does not exist");
+
+    let got = super::existing_filenames(Some(missing.to_string_lossy().into_owned()))
+        .expect("a missing folder is not an error");
+    assert!(got.is_empty(), "nothing installed yet means an empty set");
+
+    // And a real folder still reports what is in it.
+    let real = dir.join("real");
+    std::fs::create_dir_all(real.join("mods")).expect("mkdir");
+    std::fs::write(real.join("mods").join("a.jar"), b"x").expect("write");
+    let got = super::existing_filenames(Some(real.to_string_lossy().into_owned())).expect("real");
+    assert!(got.contains("a.jar"), "the file must be reported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The toggle buttons are the first thing in this app whose whole value is
+/// that they change files. The webview can only send bare names — the scan
+/// reports filenames only, and absolute paths are refused at the door — so
+/// those names must resolve under `<root>/mods`. When they did not, the plan
+/// came back empty and `execute_toggle` renamed nothing, silently, behind a
+/// button that looked like it worked.
+#[test]
+fn spec_f065_bare_filenames_resolve_to_real_files_in_the_mods_folder() {
+    use mm_core::instances::toggle::{preview_toggle, ToggleAction};
+
+    let root = std::env::temp_dir().join(format!("mm-toggle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mods = root.join("mods");
+    std::fs::create_dir_all(&mods).expect("mkdir");
+    std::fs::write(mods.join("a.jar"), b"x").expect("write");
+
+    let names = vec![
+        "a.jar".to_string(),
+        "../escape.jar".to_string(),
+        "..\\escape.jar".to_string(),
+        "C:\\abs.jar".to_string(),
+        "   ".to_string(),
+    ];
+    let files = super::filenames(&mods, &names);
+
+    assert_eq!(files.len(), 1, "only the plain name survives: {files:?}");
+    assert!(
+        files[0].is_file(),
+        "the survivor must be an existing file, not a bare name resolved \
+         against the process cwd: {:?}",
+        files[0]
+    );
+
+    let plan = preview_toggle(&mods, ToggleAction::Disable, &files);
+    assert_eq!(plan.entries.len(), 1);
+    assert!(
+        plan.entries[0].allowed,
+        "core must agree it may touch it, said: {}",
+        plan.entries[0].reason
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }

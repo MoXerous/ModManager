@@ -1,9 +1,21 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
+import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
+import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
+import type { InstallEventDto } from '../bindings/InstallEventDto';
+import type { InstallRequest } from '../bindings/InstallRequest';
+import type { InstallResultDto } from '../bindings/InstallResultDto';
+import type { CreateInstanceRequest } from '../bindings/CreateInstanceRequest';
 import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
+import type { InstanceSummaryDto } from '../bindings/InstanceSummaryDto';
 import type { InstallPlanDto } from '../bindings/InstallPlanDto';
+import type { LinkInstanceRequest } from '../bindings/LinkInstanceRequest';
+import type { ModpackApplyResultDto } from '../bindings/ModpackApplyResultDto';
+import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
+import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
+import type { PackEventDto } from '../bindings/PackEventDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
@@ -20,10 +32,10 @@ export interface SearchQuery {
 }
 
 export interface PreviewToggleRequest {
-  /** مجلد mods. */
-  modsDir: string;
+  /** جذر النسخة، لا مجلد mods مباشرة. */
+  instanceRoot: string;
   action: 'disable' | 'enable';
-  /** أسماء ملفات داخل modsDir (لا مسارات مطلقة). */
+  /** أسماء ملفات داخل mods، يُحلّها Rust تحت <instanceRoot>/mods. المسارات المطلقة تُرفض هنا. */
   files: string[];
 }
 
@@ -66,7 +78,7 @@ export function scanInstance(instanceRoot: string): Promise<InstanceSnapshotDto>
 export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto> {
   return invoke<TogglePlanDto>('preview_toggle', {
     req: {
-      modsDir: req.modsDir,
+      instanceRoot: req.instanceRoot,
       action: req.action,
       files: req.files,
     },
@@ -77,14 +89,132 @@ export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto>
 export function executeToggle(req: PreviewToggleRequest): Promise<ToggleResultDto[]> {
   return invoke<ToggleResultDto[]>('execute_toggle', {
     req: {
-      modsDir: req.modsDir,
+      instanceRoot: req.instanceRoot,
       action: req.action,
       files: req.files,
     },
   });
 }
 
-/** يحوّل أي خطأ يرفضه invoke إلى IpcError (Tauri يرفض بالقيمة المُسلسَلة نفسها). */
+// --- Instances (F-101..F-104) -------------------------------------------
+//
+// Both create commands take the same intent. Rust rebuilds the plan, so a
+// folder taken between preview and confirm fails there rather than here.
+
+export function listInstances(): Promise<InstanceSummaryDto[]> {
+  return invoke<InstanceSummaryDto[]>('list_instances');
+}
+
+export function planCreateInstance(req: CreateInstanceRequest): Promise<CreateInstancePlanDto> {
+  return invoke<CreateInstancePlanDto>('plan_create_instance', { req });
+}
+
+export function executeCreateInstance(req: CreateInstanceRequest): Promise<InstanceSummaryDto> {
+  return invoke<InstanceSummaryDto>('execute_create_instance', { req });
+}
+
+export function linkInstance(req: LinkInstanceRequest): Promise<InstanceSummaryDto> {
+  return invoke<InstanceSummaryDto>('link_instance', { req });
+}
+
+/** Crashed instance creates awaiting a decision (F-146). */
+export function listPendingCreates(): Promise<CreateRecoveryDto[]> {
+  return invoke<CreateRecoveryDto[]>('list_pending_creates');
+}
+
+/** `operationId` only: core derives the folder from the record, never from the webview. */
+export function finishCreate(operationId: string): Promise<InstanceSummaryDto> {
+  return invoke<InstanceSummaryDto>('finish_create', { operationId });
+}
+
+/**
+ * Builds the progress channel a Command collects its stream through.
+ *
+ * Tauri deserializes this argument as a String in the `__CHANNEL__:<id>` form
+ * (`tauri/src/ipc/channel.rs`), and the payload is JSON-stringified, so a bare
+ * function arrives as nothing at all and the Command is rejected before it
+ * runs. A `Channel` is the counterpart that produces that id. Checking the
+ * wire form here turns the generic rejection into a message naming the cause.
+ */
+function progressChannel<T>(onEvent: (event: T) => void): Channel<T> {
+  const channel = new Channel<T>(onEvent);
+  const wire = channel.toJSON();
+  if (typeof wire !== 'string' || !wire.startsWith('__CHANNEL__:')) {
+    throw new Error(
+      `progress channel did not serialize to __CHANNEL__:<id> (got ${String(wire)})`,
+    );
+  }
+  return channel;
+}
+
+/**
+ * F-063. Runs the install plan and streams progress.
+ *
+ * The channel is the progress; the returned promise resolves when every item has
+ * settled. The handler is attached before invoking, since messages sent before
+ * a handler exists are not replayed.
+ *
+ * `async` on purpose: a channel that cannot be built is a rejection the screen
+ * already knows how to show, not a synchronous throw out of a click handler.
+ */
+export async function executeInstall(
+  req: InstallRequest,
+  onEvent: (e: InstallEventDto) => void,
+): Promise<InstallResultDto> {
+  const channel = progressChannel<InstallEventDto>(onEvent);
+  return invoke<InstallResultDto>('execute_install', {
+    req,
+    onEvent: channel,
+  });
+}
+
+// --- Modpacks (.mrpack) -------------------------------------------------
+//
+// Plan then apply, the same shape `preview_toggle` and `execute_toggle` use.
+// Both take the same paths: the apply re-reads the archive and rebuilds the
+// plan in Rust, so a plan shown on screen is never sent back as truth. One
+// token travels back with the confirm — the digest of the pack file the plan
+// was built from — so a file replaced in between is refused instead of applied.
+
+/** What a `.mrpack` would write into an instance. Writes nothing. */
+export function planModpackInstall(req: ModpackInstallRequest): Promise<ModpackPlanDto> {
+  return invoke<ModpackPlanDto>('plan_modpack_install', { req });
+}
+
+/**
+ * Applies the pack and streams one `PackEventDto` per phase change.
+ *
+ * `req.packSha512` must be the `packSha512` of the plan the user confirmed: the
+ * command recomputes the digest of the file it is about to read and refuses a
+ * mismatch, so the applied archive is always the one that was shown.
+ *
+ * `phase` is an i18n key (`pack.phase.*`), never a display word. The returned
+ * promise resolves once every write has settled; the channel ends on `done`
+ * or `failed`, so the screen follows the events rather than the promise.
+ */
+export async function executeModpackInstall(
+  req: ModpackInstallRequest,
+  onEvent: (e: PackEventDto) => void,
+): Promise<ModpackApplyResultDto> {
+  const channel = progressChannel<PackEventDto>(onEvent);
+  return invoke<ModpackApplyResultDto>('execute_modpack_install', {
+    req,
+    onEvent: channel,
+  });
+}
+
+/** Opens a registered instance folder. The path is checked in Rust against the
+ * registry; the webview cannot name an arbitrary folder. */
+export function openInstanceFolder(root: string): Promise<void> {
+  return invoke<void>('open_instance_folder', { root });
+}
+
+/** Removes the standard folders that are still empty and closes the record. */
+export function abandonCreate(operationId: string): Promise<number> {
+  return invoke<number>('abandon_create', { operationId });
+}
+
+/** Turn any error `invoke` rejects with into an IpcError (Tauri rejects with the serialized value itself). */
 export function toIpcError(e: unknown): IpcError {
   if (typeof e === 'object' && e !== null && 'code' in e && 'message' in e) {
     return e as IpcError;

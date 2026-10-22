@@ -36,6 +36,10 @@ impl From<mm_core::AppInfo> for AppInfo {
 pub enum ErrorCode {
     Internal,
     InvalidInput,
+    /// The archive is not the one the shown plan was built from: it changed on
+    /// disk between the preview and the confirm. A malformed request is
+    /// `InvalidInput`; this is a file the user must look at again.
+    PackChanged,
     NotFound,
     /// 404 من المزوّد.
     ProviderApi,
@@ -343,9 +347,12 @@ impl From<ToggleActionDto> for mm_core::instances::toggle::ToggleAction {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewToggleDto {
-    pub mods_dir: String,
+    /// The instance folder. The `mods` subfolder is derived here, not in the
+    /// webview: the UI never assembles a filesystem path (`AGENTS.md` §5.2),
+    /// and a separator guess would be wrong on one of the two platforms.
+    pub instance_root: String,
     pub action: ToggleActionDto,
-    /// Filenames inside `mods_dir`, not absolute paths.
+    /// Filenames inside `<instance_root>/mods`, not absolute paths.
     pub files: Vec<String>,
 }
 
@@ -377,4 +384,254 @@ pub struct ToggleResultDto {
     pub reason: String,
 }
 
+// --- Instances (F-101..F-104) -------------------------------------------
+//
+// The UI sends intent, never a plan: `execute_create_instance` rebuilds the
+// plan in Rust, so a folder taken between preview and confirm is refused by
+// `plan_create` rather than trusted from the webview.
+
+/// F-104 source as a real union, so the UI branches on a type instead of on
+/// string equality. `mm_core::db::instances::InstanceSource` cannot derive TS:
+/// core must not depend on ts-rs, so the DTO mirrors it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum InstanceSourceDto {
+    Managed,
+    Manual,
+    Adopted,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstanceSummaryDto {
+    pub id: String,
+    pub name: String,
+    /// Canonical instance root, as stored.
+    pub path: String,
+    pub minecraft_root: String,
+    /// Options here are required-but-nullable, matching `ProjectDto.slug`:
+    //  `#[ts(optional)]` is only for fields with `skip_serializing_if`.
+    pub minecraft_version: Option<String>,
+    pub loader: Option<String>,
+    pub source: InstanceSourceDto,
+    /// The registered folder is gone. The row is still listed: it is the
+    /// user's registration, and only the user may delete it.
+    pub path_missing: bool,
+    /// `number | null`, not `number`: ts-rs emits `bigint` for i64, and a bare
+    /// `type = "number"` would also drop the nullability — declaring a required
+    /// number while Rust sends null for a never-scanned instance.
+    #[ts(type = "number | null")]
+    pub scanned_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateInstanceRequest {
+    pub name: String,
+    pub root: String,
+    pub minecraft_version: Option<String>,
+    pub loader: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LinkInstanceRequest {
+    pub name: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateInstancePlanDto {
+    /// The folder that will hold the instance.
+    pub root: String,
+    pub name: String,
+    /// Absolute directories that will be created, root first.
+    pub directories: Vec<String>,
+    /// Relative folder names below the root, for display.
+    pub relative_directories: Vec<String>,
+}
+
+/// One crashed instance create awaiting a decision (F-146).
+///
+/// `action` and `reason` are i18n keys, not display strings: core decides
+/// what is true, the UI decides how to say it (AGENTS.md §5.9).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateRecoveryDto {
+    pub operation_id: String,
+    pub root: String,
+    pub instance_id: String,
+    /// `RecoveryAction::key()`.
+    pub action: String,
+    /// `RecoveryReason::key()`.
+    pub reason: String,
+}
+
 use serde::Deserialize;
+
+/// What the webview asks for, and what it learns (F-063).
+///
+/// Generated as a binding like every other request struct, so the webview
+/// cannot drift from the Rust shape (AGENTS.md §5.3).
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallRequest {
+    /// Absolute path of the instance the mods go into.
+    pub instance_root: String,
+    pub slugs: Vec<String>,
+    pub game_version: String,
+    pub loader: String,
+}
+
+/// One progress event on the install channel.
+///
+/// `phase` is an i18n key rather than a word, so core decides what is true and
+/// the UI decides how to say it. `Option` without `skip_serializing_if` is
+/// required-nullable in this house convention (ADR 0002).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallEventDto {
+    pub item_id: String,
+    pub phase: String,
+    pub done: Option<u64>,
+    pub total: Option<u64>,
+    pub path: Option<String>,
+    pub message: Option<String>,
+}
+
+/// What an install returned once every item had settled.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstallResultDto {
+    /// The journal operation, so a restart can find this batch.
+    pub operation_id: String,
+    pub installed: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+// --- Modpack (.mrpack) install ------------------------------------------
+
+/// What the webview asks for: a pack file and the instance it goes into.
+///
+/// Plan and apply take the same shape on purpose. Apply rebuilds the plan from
+/// these two paths and never accepts a plan body from the webview — the same
+/// rule `execute_toggle` and `execute_create_instance` follow (AGENTS.md §5.4).
+///
+/// `pack_sha512` is the exception to "the paths are the whole request": it is
+/// the digest [`ModpackPlanDto::pack_sha512`] handed back, and the apply
+/// recomputes it and refuses a mismatch. Without it a `.mrpack` replaced
+/// between the preview and the confirm would be applied unseen. Optional in
+/// the type because the plan call cannot send what it is about to receive; the
+/// apply treats an absent digest as a refusal, never as "whatever is there".
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackInstallRequest {
+    /// Absolute path of the `.mrpack` the user chose. Validated in Rust.
+    pub pack_path: String,
+    /// Absolute path of the instance the pack is installed into.
+    pub instance_root: String,
+    /// SHA-512 of the pack file, lowercase hex, exactly as the plan returned it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub pack_sha512: Option<String>,
+}
+
+/// How one planned write produces its bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PackWriteKindDto {
+    /// Fetched by hash from the pack's URL or from the provider.
+    Download,
+    /// Copied out of the archive's override layer.
+    Override,
+}
+
+/// One file the pack asks to be written.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackWriteDto {
+    /// Instance-relative and already validated by core; absolute paths never
+    /// cross IPC for a file inside an instance.
+    pub safe_path: String,
+    pub kind: PackWriteKindDto,
+    /// True when a file already sits at that destination and the apply will
+    /// replace it. False means the apply creates it.
+    pub overwrites: bool,
+    /// Size the pack's index declared for a download, when it declared one.
+    /// `number | null` for the same reason as `InstanceSummaryDto.scanned_at`:
+    /// a bare `type = "number"` would also drop the nullability.
+    #[ts(type = "number | null")]
+    pub size: Option<u64>,
+}
+
+/// What the pack would do to an instance, before any of it happens.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackPlanDto {
+    /// SHA-512 of the pack file these writes were read from, lowercase hex.
+    ///
+    /// The apply must send it back and is refused when the file no longer
+    /// hashes to it: the plan is a promise about one archive, and this is the
+    /// only thing that ties the two together once the webview holds it.
+    pub pack_sha512: String,
+    pub name: String,
+    pub version_id: String,
+    pub summary: Option<String>,
+    pub writes: Vec<PackWriteDto>,
+    /// Counts, so the screen can state the totals without walking the list.
+    #[ts(type = "number")]
+    pub download_count: usize,
+    #[ts(type = "number")]
+    pub override_count: usize,
+    /// Destinations that already hold a file and will be replaced.
+    #[ts(type = "number")]
+    pub replace_count: usize,
+}
+
+/// One progress event on the modpack channel.
+///
+/// `phase` is one of core's `pack::exec::phase` keys (`pack.phase.*`), never a
+/// display word: core says what is true, the UI says how to say it. Numbers
+/// are annotated as `number` because that is what JSON carries; ts-rs would
+/// otherwise emit `bigint` for `u64`.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackEventDto {
+    pub phase: String,
+    pub safe_path: Option<String>,
+    #[ts(type = "number")]
+    pub done: u64,
+    #[ts(type = "number | null")]
+    pub total: Option<u64>,
+}
+
+/// What applying a pack did, once every op settled.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackApplyResultDto {
+    /// Files this run wrote.
+    #[ts(type = "number")]
+    pub written: usize,
+    /// Destinations that already held the right bytes, so nothing was written.
+    #[ts(type = "number")]
+    pub skipped: usize,
+    /// Bytes written, as counted by core's apply report.
+    #[ts(type = "number")]
+    pub bytes: u64,
+}

@@ -45,6 +45,8 @@ pub enum ExtractError {
     TooLong(PathBuf),
     #[error("empty archive (F-049)")]
     Empty,
+    #[error("member `{0}` ends with the `.part` suffix reserved for atomic writes")]
+    ReservedPartSuffix(String),
 }
 
 /// A pre-existing symlink or reparse point (e.g. NTFS junction) inside the
@@ -114,6 +116,22 @@ pub fn extract_safely<R: Read + Seek>(
     if inventory.is_empty() {
         return Err(ExtractError::Empty);
     }
+    // The `.part` suffix is reserved by the atomic-write protocol
+    // (`safety::atomic`): a member named `<anything>.part` would land a real
+    // file at the path its sibling `<anything>` uses for in-flight bytes, and
+    // that sibling's commit would then take the path over. The whole
+    // inventory is checked before the first write, so a refused archive
+    // leaves the destination untouched no matter where the member sits.
+    // Directory entries are exempt: they are never written as files. The rule
+    // lives here — the extraction step — rather than in `inspect_zip`, so that
+    // `check_archive` keeps validating downloaded-but-never-extracted
+    // artifacts (mod jars that merely *ship* such members) exactly as before.
+    if let Some(member) = inventory
+        .iter()
+        .find(|m| !m.is_dir && m.name.to_ascii_lowercase().ends_with(".part"))
+    {
+        return Err(ExtractError::ReservedPartSuffix(member.name.clone()));
+    }
     std::fs::create_dir_all(dest).map_err(|e| io_err("create_dir", dest, e))?;
     let mut report = ExtractReport::default();
     for member in &inventory {
@@ -177,6 +195,24 @@ pub fn extract_safely<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Creates a directory symlink with whichever API the platform has.
+    ///
+    /// Calling `std::os::windows` directly meant this file did not compile on
+    /// Linux at all — the whole `check` job on ubuntu-22.04 had been failing with
+    /// `cannot find 'windows' in 'os'` since 2026-10-17. The rule under test is not
+    /// Windows-specific, so the test now runs on both systems rather than being
+    /// gated away on one.
+    #[cfg(windows)]
+    fn make_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(src, dest)
+    }
+
+    #[cfg(unix)]
+    fn make_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(src, dest)
+    }
+
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
@@ -236,6 +272,67 @@ mod tests {
             b"aaa"
         );
         no_parts_left(&dest);
+    }
+
+    #[test]
+    fn spec_f041_extract_refuses_part_suffix_members() {
+        // The `.part` suffix is reserved by the atomic-write protocol
+        // (`safety::atomic`): an archive member named `<anything>.part` would
+        // take over the in-flight path of the sibling `<anything>`.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("out");
+        let mut a = archive_of(&[
+            ("blob.part", b"x"),
+            ("blob2.PART", b"x"),
+            ("keep.jar", b"k"),
+        ]);
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        assert!(
+            matches!(r, Err(ExtractError::ReservedPartSuffix(ref n)) if n == "blob.part"),
+            "got {r:?}"
+        );
+        assert!(
+            !dest.join("blob.part").exists() && !dest.join("keep.jar").exists(),
+            "nothing was written from the refused archive"
+        );
+    }
+
+    #[test]
+    fn spec_f041_extract_refuses_a_member_that_would_eat_a_sibling() {
+        // Members `x.jar.part` and `x.jar`: extracting the first wrote a real
+        // file at the part path, and the second's commit then removed it and
+        // took its place — two promised files, one on disk, silently.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("out");
+        let mut a = archive_of(&[("x.jar.part", b"payload"), ("x.jar", b"mod")]);
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        assert!(
+            matches!(r, Err(ExtractError::ReservedPartSuffix(_))),
+            "got {r:?}"
+        );
+        assert!(
+            !dest.join("x.jar").exists() && !dest.join("x.jar.part").exists(),
+            "nothing was written from the refused archive"
+        );
+    }
+
+    #[test]
+    fn spec_f041_extract_refuses_part_suffix_before_any_write() {
+        // Member order must not matter: the reserved suffix is checked over
+        // the whole inventory before the first write, so an archive whose
+        // offending member comes last still leaves nothing behind.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("out");
+        let mut a = archive_of(&[("keep.jar", b"k"), ("sub/blob.part", b"x")]);
+        let r = extract_safely(&mut a, &dest, &ArchiveLimits::default(), &mut go);
+        assert!(
+            matches!(r, Err(ExtractError::ReservedPartSuffix(_))),
+            "got {r:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "the refused archive must not even create the destination"
+        );
     }
 
     #[test]
@@ -326,7 +423,7 @@ mod tests {
         let dest = dir.path().join("out");
         std::fs::create_dir_all(dest.join("sub")).expect("fixture");
         // Symlink creation needs privileges; skip honestly when unavailable.
-        if std::os::windows::fs::symlink_dir(dir.path(), dest.join("sub/link")).is_err() {
+        if make_symlink(dir.path(), &dest.join("sub/link")).is_err() {
             return;
         }
         let mut a = archive_of(&[("sub/link/evil.txt", b"x")]);

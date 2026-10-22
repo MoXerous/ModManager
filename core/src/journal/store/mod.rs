@@ -196,6 +196,10 @@ impl Journal {
 
     /// Fresh planned record. `operation_id` is regenerated while the
     /// filename already exists (spec §4-3).
+    ///
+    /// A pack apply cannot be started here: its record has to carry the pack
+    /// from the first write, and there is no pack to carry in this signature.
+    /// [`Journal::start_pack`] is the only way to start one.
     pub fn start(
         &self,
         kind: super::OperationKind,
@@ -203,8 +207,42 @@ impl Journal {
         target: &str,
         items: Vec<super::OperationItem>,
     ) -> Result<OperationRecord, JournalError> {
+        if kind == super::OperationKind::MrpackInstall {
+            return Err(JournalError::KindPackMismatch {
+                kind,
+                has_pack: false,
+            });
+        }
         ensure_root_for_write(&self.root)?;
         let mut record = super::OperationRecord::new(kind, profile_id, target, items);
+        while record_path(&self.root, &record.operation_id).exists() {
+            record.operation_id = uuid::Uuid::new_v4().to_string();
+        }
+        self.write_record(&record)?;
+        Ok(record)
+    }
+
+    /// F-076: a fresh planned record for a pack apply.
+    ///
+    /// The pack block is part of the record from the first write, not
+    /// attached later: a crash between the start and the attachment would
+    /// leave a record that names no archive, and a record that names no
+    /// archive cannot be resumed against one.
+    pub fn start_pack(
+        &self,
+        profile_id: &str,
+        target: &str,
+        items: Vec<super::OperationItem>,
+        pack: super::PackApplyMeta,
+    ) -> Result<OperationRecord, JournalError> {
+        ensure_root_for_write(&self.root)?;
+        let mut record = super::OperationRecord::new(
+            super::OperationKind::MrpackInstall,
+            profile_id,
+            target,
+            items,
+        )
+        .with_pack(pack);
         while record_path(&self.root, &record.operation_id).exists() {
             record.operation_id = uuid::Uuid::new_v4().to_string();
         }
@@ -233,6 +271,23 @@ impl Journal {
         expected: Option<u64>,
     ) -> Result<OperationRecord, JournalError> {
         self.mutate(id, expected, |r| r.transition_item(item_id, to))
+    }
+
+    /// Applies several item transitions in **one** atomic write.
+    ///
+    /// The edges are checked one after the other, exactly as
+    /// [`Journal::transition_item`] checks them; only the write is shared.
+    /// A record is a single document, so every write rewrites the whole file
+    /// and the file grows with the number of items: a pack apply that moved
+    /// four states per file wrote the record four times per file, and the
+    /// bytes written grew with the square of the file count.
+    pub fn transition_items(
+        &self,
+        id: &str,
+        transitions: &[(String, super::ItemState)],
+        expected: Option<u64>,
+    ) -> Result<OperationRecord, JournalError> {
+        self.mutate(id, expected, |r| r.transition_items(transitions))
     }
 
     pub fn replace_items(

@@ -1,6 +1,6 @@
 # behaviors/import-export.md — تصدير/استيراد البروفايل
 
-> **المرجع:** `app\services\profile_export.py` (572 سطراً) · `app\services\profile_folder_import.py` · `app\services\profile_metadata.py` · `app\services\profile_mod_export.py` · `app\services\profile_worlds.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\profile_export.py` (572 سطراً) · `app\services\profile_folder_import.py` · `app\services\profile_metadata.py` · `app\services\profile_mod_export.py` · `app\services\profile_worlds.py`
 
 ---
 
