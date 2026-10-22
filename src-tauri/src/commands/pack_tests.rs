@@ -167,17 +167,14 @@ fn canonical_root(instance_root: &Path) -> String {
 /// Every journal record that names this instance and this archive.
 ///
 /// The lookup is scoped by the instance root because the archive digest alone
-/// is not unique. Two things make it ambiguous:
+/// is not unique: the digest says which archive, not which instance. One pack
+/// applied to two instances writes two records that carry the same digest, and
+/// only the instance root tells them apart.
 ///
-/// - The journal store is shared by every test in this process. The test
-///   seam names its root after the process id, so one store holds the records
-///   of all the tests in the binary.
-/// - The packs two tests build can be byte-identical. Wiremock pools its
-///   servers and hands the same one to tests that run one after the other, so
-///   the same download URL — and so the same archive digest.
-///
-/// A lookup by the digest alone therefore finds whichever record sorts first
-/// — often another test's, pointing at another instance's folder.
+/// Each state owns its journal store now, so a record cannot come from
+/// another test's store. The digest is still not unique - wiremock pools its
+/// servers, so two tests can build byte-identical packs, and one pack applied
+/// twice carries one digest - so the scope stays.
 fn records_for(
     journal: &mm_core::journal::Journal,
     instance_root: &Path,
@@ -898,10 +895,10 @@ fn spec_f076_apply_writes_a_journal_record_that_names_the_pack_and_the_instance(
         let handle = state.journal_handle();
         let guard = handle.lock().expect("journal");
         let digest = sha512_hex(&pack);
-        // The lookup names THIS instance as well as THIS archive: the journal
-        // store is shared by every test in this process and two tests can
-        // build byte-identical packs, so the digest alone finds another
-        // test's record — one that points at another instance's folder.
+        // The lookup names THIS instance as well as THIS archive: the digest
+        // alone is ambiguous - the same pack applied to two instances writes
+        // two records with one digest - so only the instance root says which
+        // record this apply wrote.
         let records = records_for(&guard, &root, &digest);
         assert_eq!(
             records.len(),
@@ -945,17 +942,16 @@ fn spec_f076_apply_writes_a_journal_record_that_names_the_pack_and_the_instance(
 
 /// F-076: a test's journal lookup finds the record of its OWN instance.
 ///
-/// The journal store is shared by every test in this process, and two tests
-/// can build byte-identical packs: wiremock pools its servers and hands the
-/// same one to tests that run one after the other, so the same download URL —
-/// so the same archive digest. A lookup by that digest alone is therefore
-/// ambiguous: it finds whichever record sorts first, which is often another
-/// test's, naming another instance's folder. That is how the F-076 record
-/// test came to fail in CI with a record from another test's temp directory.
+/// A lookup by the archive digest alone is ambiguous: the digest says which
+/// archive, not which instance. One pack applied to two instances writes two
+/// records with the same digest, and only the instance root tells them apart.
+/// That stays true now that every state owns its journal store - the two
+/// records below live in the SAME store, because one state applied the same
+/// pack twice.
 ///
-/// Two applies of ONE pack into two instances pin the fix: both records
-/// carry the same digest, so only the instance root tells them apart, and
-/// each lookup must come back with its own record.
+/// Two applies of ONE pack into two instances pin it: both records carry the
+/// same digest, so only the instance root tells them apart, and each lookup
+/// must come back with its own record.
 #[test]
 fn spec_f076_journal_lookup_finds_the_record_of_its_own_instance() {
     tauri::async_runtime::block_on(async {
