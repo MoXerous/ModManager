@@ -157,7 +157,7 @@ else:
 | `app/services/mrpack_service.py:386` | `not file.url or not _valid_download_url(file.url)` |
 | `artifact_verifier.validate_download_url("")` | `urlsplit("").hostname is None` → `ValueError("Download URL must include a host.")` |
 
-> **الدلالة على CurseForge:** الحالة «`downloadUrl` فارغ لأن المؤلف منع التحميل الخارجي» **موصوفة في `foundations.md` §4.4 كسلوك معروف**، لكنها **غير مُنفَّذة في أي مكان** — لا اختبار، لا كود. **غير مُتحقَّق.**
+> **الدلالة على CurseForge:** الحالة هنا **مُتحقَّقة من الالتقاط الحيّ**، وتخالف مسار Modrinth أعلاه في التمثيل: المودّ الذي `allowModDistribution = false` يعيد `downloadUrl` = **`null` الصريح لا `""`** — **62 من 62** ملفاً في العيّنة للمودّ `448233`، مقابل **663 من 725** ملفاً برابط `https` حقيقي — والقرار على مستوى **المود** لا الملف، و**صفر** سجلّ بسلسلة فارغة (`docs/spec/fixtures.md` §7-7 ب؛ `core/tests/fixtures/json/curseforge/mod_448233_no_distribution.json:225` · `mod_files_no_distribution.json:26`). فهي **موصوفة في `foundations.md` §4.4** بالصيغة المصحَّحة، و**غير مُنفَّذة في أي مكان** في كودنا — لا اختبار، لا كود؛ لكن سلوك الـAPI **لم يبقَ غير مُتحقَّق**.
 
 ### 2-10. الخصوصية في الأخطاء
 
@@ -204,6 +204,6 @@ else:
 | البند |
 |---|
 | هل غياب معلومات التواصل في `User-Agent` مخالف لسياسة Modrinth فعلياً |
-| أي سلوك لـ CurseForge (غير موجود) |
+| سلوك CurseForge **خارج §7 من `docs/spec/fixtures.md`** — التطبيق القديم لا يحمل أي سلوك CurseForge |
 | هل `date_published` من Modrinth موحّد الصيغة دائماً |
 | نتائج التشغيل — لم أُشغّل أي اختبار (تكليف قراءة فقط) |
