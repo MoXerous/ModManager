@@ -16,6 +16,8 @@ import type { ModpackApplyResultDto } from '../bindings/ModpackApplyResultDto';
 import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
 import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
 import type { PackEventDto } from '../bindings/PackEventDto';
+import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
+import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
@@ -201,6 +203,48 @@ export async function executeModpackInstall(
     req,
     onEvent: channel,
   });
+}
+
+// --- Pack recovery (F-076/F-146) -----------------------------------------
+//
+// An interrupted apply is described by a journal record (`core/src/modpack/
+// recovery.rs`); this is what the UI sends back: one TOKEN, the operation id.
+// The root, the archive and the staging tree all come from the record, so the
+// webview can never name a folder for core to act on — the same rule
+// `finishCreate` follows. `pendingPackRecoveries` is read-only; a failed read
+// must never be reported as broken instances, so callers treat it as advisory.
+
+/** Interrupted pack applies still awaiting a decision. Nothing is written
+ * until one of the two commands below is chosen. */
+export function pendingPackRecoveries(): Promise<PackRecoveryDto[]> {
+  return invoke<PackRecoveryDto[]>('pending_pack_recoveries');
+}
+
+/**
+ * Finishes an interrupted apply, streaming the apply's own channel.
+ *
+ * `phase` is an i18n key (`pack.phase.*`), never a display word. The returned
+ * promise resolves once every write settled, but the DTO's `state` is what
+ * closes the case: `completed` means the record ended, and anything else — a
+ * failed file leaves the record `running` — keeps the instance half applied
+ * and the banner standing.
+ *
+ * `operationId` only, never a path.
+ */
+export async function recoverPackApply(
+  operationId: string,
+  onEvent: (e: PackEventDto) => void,
+): Promise<PackRecoveryResultDto> {
+  const channel = progressChannel<PackEventDto>(onEvent);
+  return invoke<PackRecoveryResultDto>('recover_pack_apply', {
+    operationId,
+    onEvent: channel,
+  });
+}
+
+/** Closes the case without touching the instance (journal-only, no channel). */
+export function dismissPackApply(operationId: string): Promise<void> {
+  return invoke<void>('dismiss_pack_apply', { operationId });
 }
 
 /** Opens a registered instance folder. The path is checked in Rust against the

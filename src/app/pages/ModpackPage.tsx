@@ -19,6 +19,7 @@ import {
   toIpcError,
 } from '../../lib/ipc';
 import { formatBytes, formatNumber } from '../../lib/format';
+import { PackRecoveryBanner } from './PackRecoveryBanner';
 
 /**
  * One file the apply has reported on, reduced from the channel.
@@ -253,6 +254,14 @@ export function ModpackPage() {
     return (
       <div className="flex flex-col">
         {header}
+        {/* An interrupted apply needs a decision while the page finds its
+            instances, not after — the same reason `InstancesPage` shows its
+            recovery banner during a load. The frame runs in every page state:
+            loading, empty and error, because a user with a half-applied pack
+            must never be staring at a spinner that hides the one choice. */}
+        <div className="px-5 pt-4">
+          <PackRecoveryBanner />
+        </div>
         {error ? (
           <div className="px-5 pt-4">
             <ErrorState error={error} onRetry={loadInstances} />
@@ -268,6 +277,9 @@ export function ModpackPage() {
     return (
       <div className="flex flex-col">
         {header}
+        <div className="px-5 pt-4">
+          <PackRecoveryBanner />
+        </div>
         <EmptyState
           title={t('pack.noInstancesTitle')}
           body={t('pack.noInstancesBody')}
@@ -281,6 +293,10 @@ export function ModpackPage() {
   return (
     <div className="flex flex-col">
       {header}
+
+      <div className="px-5 pt-4">
+        <PackRecoveryBanner />
+      </div>
 
       <div className="flex flex-col gap-2.5 px-5 pt-4">
         <div className="flex flex-col gap-1">
