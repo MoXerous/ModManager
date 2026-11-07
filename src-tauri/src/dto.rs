@@ -635,3 +635,66 @@ pub struct ModpackApplyResultDto {
     #[ts(type = "number")]
     pub bytes: u64,
 }
+
+// --- Pack recovery (F-076/F-146) -----------------------------------------
+//
+// A crashed or failed pack apply left the instance half applied. Core assesses
+// the record and the disk and offers the user a decision; the bridge carries
+// that decision as data. The operation id is the only token the UI may send
+// back: everything else — the root, the pack, the staging tree — comes from the
+// record, so the webview can never name a folder for core to act on.
+
+/// One interrupted pack apply awaiting a decision.
+///
+/// `action` and `reason` are i18n keys, not display strings: core decides what
+/// is true, the UI decides how to say it (AGENTS.md §5.9). No user-readable
+/// sentence may live in a DTO field.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackRecoveryDto {
+    /// The journal operation the UI sends back to resume or dismiss it.
+    pub operation_id: String,
+    /// The record's instance root, for display only — never sent back.
+    pub instance_root: String,
+    pub pack_name: String,
+    pub pack_version_id: String,
+    /// The digest of the archive the plan was built from, for display.
+    pub pack_sha512: String,
+    /// How many destinations the plan names.
+    #[ts(type = "number")]
+    pub planned_count: usize,
+    /// How many of them are in place — the evidence from the disk, not the
+    /// record's own counters.
+    #[ts(type = "number")]
+    pub done_count: usize,
+    /// `PackRecoveryAction::key()` — e.g. `recovery.pack.action.resume`.
+    pub action: String,
+    /// `PackRecoveryReason::key()` — e.g. `recovery.pack.partiallyApplied`.
+    pub reason: String,
+}
+
+/// What a recovery run did, once it ended.
+///
+/// `failed` and `state` are why a recovery reports itself separately from
+/// [`ModpackApplyResultDto`]: a failed recovery leaves the record `running` and
+/// the case open (F-076), and that is something the screen must be able to say.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PackRecoveryResultDto {
+    pub operation_id: String,
+    /// Files this run wrote.
+    #[ts(type = "number")]
+    pub written: usize,
+    /// Files that were already in place and were left alone.
+    #[ts(type = "number")]
+    pub skipped: usize,
+    /// Files that could not be written.
+    #[ts(type = "number")]
+    pub failed: usize,
+    /// `planned | running | completed | failed | cancelled` — the record's
+    /// state when the run ended. `running` means the case is still open: the
+    /// instance is half applied and the banner keeps offering the decision.
+    pub state: String,
+}

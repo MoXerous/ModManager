@@ -69,6 +69,16 @@ export function PackRecoveryBanner() {
 
   useEffect(load, [load]);
 
+  // A re-downloaded archive turns «dismiss» back into «resume», and core reads
+  // the disk to decide — so the moment the window is back in front is the
+  // moment to ask again. Focus is the only event that can change this answer
+  // without a user action here: no polling, and the listener goes away with
+  // the banner.
+  useEffect(() => {
+    window.addEventListener('focus', load);
+    return () => window.removeEventListener('focus', load);
+  }, [load]);
+
   const onEvent = useCallback((e: PackEventDto) => {
     // No path means the event is about the run, not a file: `done` and
     // `failed` end the narration, and core guarantees the last one is one of
@@ -106,7 +116,13 @@ export function PackRecoveryBanner() {
         action = recoverPackApply(item.operationId, onEvent);
         break;
       case 'recovery.pack.action.dismiss':
-        action = dismissPackApply(item.operationId);
+        // `dismiss` answers with no result: the record is closed by the write
+        // itself, so there is no `next` state for the branch below to read.
+        // The row leaves here, by id, without a reload — and the banner
+        // renders nothing if that was the last case.
+        action = dismissPackApply(item.operationId).then(() => {
+          setItems((prev) => prev?.filter((i) => i.operationId !== item.operationId) ?? null);
+        });
         break;
       default:
         return;

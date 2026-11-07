@@ -42,6 +42,9 @@ pub fn run() {
             // has to be the module that defines them.
             commands::pack::plan_modpack_install,
             commands::pack::execute_modpack_install,
+            commands::pack::pending_pack_recoveries,
+            commands::pack::recover_pack_apply,
+            commands::pack::dismiss_pack_apply,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

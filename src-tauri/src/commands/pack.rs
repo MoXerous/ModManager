@@ -54,16 +54,17 @@ use std::time::Instant;
 use tauri::ipc::Channel;
 use zip::ZipArchive;
 
-use mm_core::journal::{JournalError, JournalOp, OperationKind, OperationRecord};
+use mm_core::journal::{Journal, JournalError, JournalOp, OperationKind, OperationRecord};
 use mm_core::modpack::archive::{plan_install, read_pack, InstallPlan, PackError};
 use mm_core::modpack::exec::{self, ExecError, PackEvent, PackIdentity};
 use mm_core::modpack::mrpack::{Pack, STAGING_DIR};
+use mm_core::modpack::recovery as pack_recovery;
 use mm_core::safety::extract::{extract_safely, ExtractError};
 use mm_core::safety::inspect::{ArchiveLimits, InspectError};
 
 use crate::dto::{
     ErrorCode, IpcError, ModpackApplyResultDto, ModpackInstallRequest, ModpackPlanDto,
-    PackWriteDto, PackWriteKindDto,
+    PackRecoveryDto, PackRecoveryResultDto, PackWriteDto, PackWriteKindDto,
 };
 use crate::progress::{
     is_decisive_pack_phase, pack_event_to_dto, refused_pack_event, ProgressThrottle,
@@ -654,4 +655,401 @@ pub(super) async fn run_apply(
         skipped: report.skipped.len(),
         bytes: report.bytes,
     })
+}
+
+// --- Pack recovery (F-076/F-146) -----------------------------------------
+//
+// An interrupted pack apply is described by a record and by the disk. The
+// assessment and the resume are core's decisions (`modpack::recovery`); this
+// section is the bridge, under the exact rules the apply above already lives
+// by: the registry gate, the per-root apply lock, one throttle, one channel,
+// and refusals that map to codes, never raw strings across the boundary.
+//
+// One rule is stronger here than anywhere else: the UI sends an OPERATION ID
+// and nothing else. The root, the pack and the staging tree all come from the
+// record, so the webview can never name a folder for core to act on — the same
+// rule `instances::recovery::finish` follows.
+
+/// One `RecoveryError` in one place, so pending/recover/dismiss cannot
+/// disagree. `Exec` goes through [`exec_error`] because its variants are the
+/// executor's; `Pack` and `Extract` go through the apply's own mappers for the
+/// same reason.
+fn recovery_error(e: &pack_recovery::RecoveryError) -> IpcError {
+    use mm_core::modpack::recovery::RecoveryError as R;
+    match e {
+        R::Journal(j) => super::journal_error(j),
+        R::Exec(e) => exec_error(e),
+        R::Pack(e) => pack_error(e),
+        R::Extract(e) => extract_error(e),
+        // The id does not name a pack apply, or the case is already closed:
+        // the request cannot be satisfied as stated, which is this app's code
+        // for "the caller's mistake" (the same words a bad journal id get).
+        R::NotAPackApply(_) | R::AlreadyFinished(_) => IpcError::invalid_input(e),
+        // A folder or an archive that is not there is a real, specific answer
+        // for the user, not a failing disk — `notFound`, the way the install
+        // path's own file gates report a missing file the user pointed at.
+        R::InstanceMissing(_) | R::PackMissing(_) => IpcError::new(ErrorCode::NotFound, e),
+        // The dedicated code the install path already uses for "the archive is
+        // not the one the plan was built from" (F-080).
+        R::PackChanged => IpcError::new(ErrorCode::PackChanged, e),
+        R::Io { .. } => IpcError::io(e),
+        R::Join(_) => IpcError::internal(e),
+    }
+}
+
+/// One record's state, spelled.
+///
+/// A lowercase word, not a sentence: the UI branches on it like on `phase`.
+fn operation_state_word(state: mm_core::journal::OperationState) -> &'static str {
+    use mm_core::journal::OperationState as S;
+    match state {
+        S::Planned => "planned",
+        S::Running => "running",
+        S::Completed => "completed",
+        S::Failed => "failed",
+        S::Cancelled => "cancelled",
+    }
+}
+
+fn recovery_dto(r: pack_recovery::PackRecovery) -> PackRecoveryDto {
+    PackRecoveryDto {
+        operation_id: r.operation_id,
+        instance_root: r.instance_root.to_string_lossy().into_owned(),
+        pack_name: r.pack_name,
+        pack_version_id: r.pack_version_id,
+        pack_sha512: r.pack_sha512,
+        planned_count: r.planned_count,
+        done_count: r.done_count,
+        action: r.action.key().to_string(),
+        reason: r.reason.key().to_string(),
+    }
+}
+
+fn recovery_result_dto(report: pack_recovery::PackRecoveryReport) -> PackRecoveryResultDto {
+    PackRecoveryResultDto {
+        operation_id: report.operation_id,
+        written: report.written,
+        skipped: report.skipped,
+        failed: report.failed,
+        state: operation_state_word(report.state).to_string(),
+    }
+}
+
+/// The journal store, addressed without holding the state's mutex.
+///
+/// `Journal` is stateless by design — a root, and every call opens, reads and
+/// verifies the record it was asked for — so a short-lived alias over the same
+/// root can stand in for `&Journal` across a long await. Holding the actual
+/// handle for the length of a recovery would stall every other command that
+/// touches the journal, recovery reads included (the reason `state.rs` hands
+/// out the handle instead of a `with_*` helper); the records are still written
+/// only through the handle, one lock per write, which is why the recovery's
+/// `write` callback below is exactly the apply's, and reads stay per-call
+/// consistent the way they are for every other command.
+fn journal_store_of(state: &AppState) -> Result<Journal, IpcError> {
+    let handle = state.journal_handle();
+    let root = handle
+        .lock()
+        .map_err(|_| IpcError::internal("journal lock poisoned"))?
+        .root()
+        .to_path_buf();
+    Ok(Journal::new(root))
+}
+
+/// Interrupted pack applies that still need a decision (F-076/F-146).
+///
+/// Read-only, and never more than an assessment: nothing is written until the
+/// user chose an action, and the choice itself is a different command.
+#[tauri::command]
+pub async fn pending_pack_recoveries(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<PackRecoveryDto>, IpcError> {
+    pending_pack_recoveries_with(state.inner()).await
+}
+
+/// The body of [`pending_pack_recoveries`], with the state as a parameter.
+///
+/// The seam exists for the same reason `plan_modpack_install_with` does: a test
+/// can drive the command with an `AppState` built over a temp directory.
+pub async fn pending_pack_recoveries_with(
+    state: &AppState,
+) -> Result<Vec<PackRecoveryDto>, IpcError> {
+    let store = journal_store_of(state)?;
+    let found =
+        tauri::async_runtime::spawn_blocking(move || pack_recovery::pending_pack_applies(&store))
+            .await
+            .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?;
+    Ok(found.into_iter().map(recovery_dto).collect())
+}
+
+/// Reads a pack apply's record and refuses anything that is not one.
+///
+/// Both recovery commands send an operation id and nothing else, so the root
+/// they gate, lock and act on comes from the record. A download batch's id must
+/// never reach an instance, and a batch record has no pack block for the
+/// recovery to resume from: the kind check is the precondition for every
+/// decision taken below. One helper, so `recover` and `dismiss` cannot disagree
+/// about which ids are pack applies.
+///
+/// `core` refuses a non-pack id again (`require_pack`) when it reads the record
+/// itself; this read exists because the registry gate and the per-root lock
+/// both derive from the record, before core is called.
+fn read_pack_apply(state: &AppState, operation_id: &str) -> Result<OperationRecord, IpcError> {
+    let record = {
+        let handle = state.journal_handle();
+        let g = handle
+            .lock()
+            .map_err(|_| IpcError::internal("journal lock poisoned"))?;
+        g.read(operation_id).map_err(|e| super::journal_error(&e))?
+    };
+    if record.kind != OperationKind::MrpackInstall || record.pack.is_none() {
+        return Err(IpcError::invalid_input(format!(
+            "operation {operation_id} is not a pack apply"
+        )));
+    }
+    Ok(record)
+}
+
+/// Finishes an interrupted pack apply, streaming progress on a channel.
+///
+/// Production is https-only; the flag exists only so a test can serve wiremock
+/// on loopback, exactly as `execute_modpack_install` does.
+#[tauri::command]
+pub async fn recover_pack_apply(
+    state: tauri::State<'_, AppState>,
+    operation_id: String,
+    on_event: Channel<crate::dto::PackEventDto>,
+) -> Result<PackRecoveryResultDto, IpcError> {
+    use mm_core::downloader::Downloader;
+    use mm_core::providers::ModrinthClient;
+    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+    recover_pack_apply_with(
+        state.inner(),
+        &client,
+        operation_id,
+        on_event,
+        false,
+        Downloader::new(3),
+    )
+    .await
+}
+
+/// The body of `recover_pack_apply`, with the state, the provider and the
+/// downloader as parameters.
+///
+/// The seam exists so the whole recovery — read, gate, lock, plan, extract,
+/// download, rename and every `Channel` event — runs against a wiremock server
+/// in a test, exactly as `execute_modpack_install_with` does. Production
+/// passes exactly `Downloader::new(3)`, built in the command above; the
+/// parameter (not `Downloader::new(3)` inside) is the same seam `run_apply`
+/// takes, and exists for the same reason: a downloader that cannot be built
+/// must fail the run, not silence it.
+///
+/// The order runs from cheap refusals to expensive work, and each run either
+/// narrates itself or is refused before it could:
+///
+/// 1. The record is read and must be a pack apply. A download batch's id must
+///    not be able to make the recovery touch an instance — `core` refuses it
+///    again (`require_pack`), but the gate below and the lock both key off the
+///    record's root, so the bridge reads it first. Nothing has narrated yet,
+///    so these failures reject silently.
+/// 2. The registry gate, keyed from the RECORD's root, exactly as
+///    [`registered_root`] gates the install. One difference, deliberate: a
+///    folder that is GONE is not refused here — `resolve_dir` cannot resolve
+///    what is not there, and a refusal now would leave the record running
+///    forever, while `core`'s recovery settles the case (`InstanceMissing`,
+///    record closed, folder never recreated). The gate only runs while the
+///    folder exists; a folder this app never registered is refused as on the
+///    install path.
+/// 3. The same per-root apply lock, keyed from the same canonical root, so a
+///    recovery and an apply (or two recoveries) cannot share and delete each
+///    other's `.mm-staging`. A gone folder holds no staging tree, so it takes
+///    no lock; if it vanishes between the gate and this line, `core` settles
+///    the record on its own.
+/// 4. Beyond this point the run can narrate, so every failure must end the
+///    stream: the downloader's construction and everything `core` can refuse
+///    before its executor starts (a missing or changed archive, a missing
+///    instance) send the refusal event `abort_before_apply` sends in the same
+///    cases. The executor narrates its own ending, so an `Exec` failure sends
+///    nothing extra.
+pub async fn recover_pack_apply_with(
+    state: &AppState,
+    provider: &dyn mm_core::providers::Provider,
+    operation_id: String,
+    on_event: Channel<crate::dto::PackEventDto>,
+    allow_insecure_loopback: bool,
+    downloader: Result<mm_core::downloader::Downloader, mm_core::downloader::client::DownloadError>,
+) -> Result<PackRecoveryResultDto, IpcError> {
+    // 1. The record, read once under the handle. The read is per-call like
+    // every other command's, so no lock is held past it. The same helper the
+    // dismiss uses, so both commands agree on what a pack apply is.
+    let record = read_pack_apply(state, &operation_id)?;
+
+    // 2. The registry gate, from the record.
+    let record_root = PathBuf::from(&record.target_path);
+    let existing_root = match std::fs::canonicalize(&record_root) {
+        Ok(dir) if dir.is_dir() => Some(dir),
+        // Gone, not ours to judge: core settles this case itself.
+        _ => None,
+    };
+    if let Some(dir) = existing_root.clone() {
+        let _instance_id = state
+            .with_db(
+                move |db| match mm_core::db::instances::find_by_path(db, &dir) {
+                    Ok(Some(row)) => Ok(row.id),
+                    Ok(None) => Err(IpcError::invalid_input(
+                        "that folder is not a registered instance",
+                    )),
+                    Err(e) => Err(super::row_error(&e)),
+                },
+            )
+            .await?;
+    }
+
+    // 3. The per-root lock. Same table, same canonical key, so a recovery and
+    // an apply into one instance wait for each other like two applies do.
+    // `as_deref` gives `Option<&Path>`, which is exactly what the function
+    // takes: a `fn(&Path)` cannot be passed through `Option::map` over
+    // `&PathBuf` because no deref coercion happens in that position.
+    let apply_lock = existing_root.as_deref().map(apply_lock_for);
+    let _apply_guard = match &apply_lock {
+        Some(lock) => Some(lock.lock().await),
+        // No folder, no staging tree, no lock to hold.
+        None => None,
+    };
+
+    // 4. From here the run can narrate, so every failure ends the stream.
+    let downloader = match downloader {
+        Ok(downloader) => downloader,
+        Err(e) => {
+            return Err(fail_before_core(
+                &on_event,
+                IpcError::internal(format!("cannot build the downloader: {e}")),
+            ));
+        }
+    };
+
+    // The journal write, one lock per write: the same discipline the apply's
+    // callback follows, for the same reason. The operation id is fixed by the
+    // request — a recovery continues ITS record, it does not start one.
+    let journal = state.journal_handle();
+    let write_operation_id = operation_id.clone();
+    let mut write = move |op: JournalOp| -> Result<OperationRecord, JournalError> {
+        let g = journal
+            .lock()
+            .map_err(|_| JournalError::ItemMissing("journal lock poisoned".into()))?;
+        match op {
+            JournalOp::Operation(state) => g.transition_operation(&write_operation_id, state, None),
+            JournalOp::Item { item_id, state } => {
+                g.transition_item(&write_operation_id, &item_id, state, None)
+            }
+            JournalOp::Items { transitions } => {
+                g.transition_items(&write_operation_id, &transitions, None)
+            }
+            // The record already exists; core never asks for a fresh one, and
+            // writing through this callback would lose the operation id.
+            JournalOp::Start { .. } | JournalOp::PackStart { .. } => {
+                Err(JournalError::ItemMissing(
+                    "a recovery continues its record; it does not start one".into(),
+                ))
+            }
+        }
+    };
+
+    let mut throttle = ProgressThrottle::new();
+    let mut emit = |event: &PackEvent| {
+        if !throttle.allows(is_decisive_pack_phase(event.phase), Instant::now()) {
+            return;
+        }
+        // A closed channel means the window went away; the files are the point.
+        let _ = on_event.send(pack_event_to_dto(event));
+    };
+
+    // Core owns every decision from here: the staging reset it needs, the
+    // item repair, the parts it owns clearing, the executor. The store is the
+    // stateless alias over the same root (see [`journal_store_of`]).
+    let store = journal_store_of(state)?;
+    let report = pack_recovery::recover_with(
+        provider,
+        &downloader,
+        &store,
+        &operation_id,
+        &mut write,
+        &mut emit,
+        allow_insecure_loopback,
+    )
+    .await
+    .map_err(|e| {
+        // The executor emits its own terminal event on failure; everything
+        // before it (missing pack, changed pack, missing instance) ends
+        // here with no event of its own, and the stream would hang.
+        if !matches!(e, pack_recovery::RecoveryError::Exec(_)) {
+            let _ = on_event.send(refused_pack_event());
+        }
+        recovery_error(&e)
+    })?;
+
+    Ok(recovery_result_dto(report))
+}
+
+/// Ends a stream that core's recovery never got to narrate.
+fn fail_before_core(on_event: &Channel<crate::dto::PackEventDto>, e: IpcError) -> IpcError {
+    let _ = on_event.send(refused_pack_event());
+    e
+}
+
+/// Closes the case without touching the instance.
+///
+/// The record is read first, and only its root is kept: the caller names an
+/// operation, never a folder. Then the same per-root apply lock a recovery
+/// holds is taken, and held across the write — `dismiss` writes the record a
+/// running recovery also writes, so without the lock a dismiss can land
+/// between two of the recovery's writes and leave its next transition failing
+/// with `IllegalOperationTransition` after partial writes. A folder that is
+/// gone holds no staging tree and takes no lock, exactly as on the recover
+/// path; the record is still closed.
+#[tauri::command]
+pub async fn dismiss_pack_apply(
+    state: tauri::State<'_, AppState>,
+    operation_id: String,
+) -> Result<(), IpcError> {
+    dismiss_pack_apply_with(state.inner(), operation_id).await
+}
+
+/// The body of `dismiss_pack_apply`, with the state as a parameter.
+///
+/// Lock order is the same one the apply and the recovery follow: the apply lock
+/// first, then the journal lock, which is taken per write inside the blocking
+/// task. The record read happens before either, under a journal lock that is
+/// released before this function waits for the apply lock, so no writer can be
+/// waiting on a lock this task holds.
+pub async fn dismiss_pack_apply_with(
+    state: &AppState,
+    operation_id: String,
+) -> Result<(), IpcError> {
+    // The record, read once: the root and the "is this a pack apply" answer
+    // come from it. A read failure is the read's own typed error.
+    let record = read_pack_apply(state, &operation_id)?;
+    let record_root = PathBuf::from(&record.target_path);
+    let existing_root = match std::fs::canonicalize(&record_root) {
+        Ok(dir) if dir.is_dir() => Some(dir),
+        // Gone: nothing on the disk to serialize with, and core settles the
+        // record the same way it does on the recover path.
+        _ => None,
+    };
+    let apply_lock = existing_root.as_deref().map(apply_lock_for);
+    let _apply_guard = match &apply_lock {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
+
+    let handle = state.journal_handle();
+    tauri::async_runtime::spawn_blocking(move || {
+        let g = handle
+            .lock()
+            .map_err(|_| IpcError::internal("journal lock poisoned"))?;
+        pack_recovery::dismiss(&g, &operation_id).map_err(|e| recovery_error(&e))
+    })
+    .await
+    .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
 }

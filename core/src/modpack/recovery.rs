@@ -349,6 +349,12 @@ pub async fn recover_with(
     if !archive_path.is_file() {
         // Without the archive there are no bytes to resume with. The
         // recovery says so; it does not guess.
+        //
+        // A missing archive is not a finished case: the instance may be half
+        // applied and the archive is replaceable, so the record stays open and
+        // the assessment offers `dismiss`. Do not "fix" this to match
+        // `InstanceMissing`: there the instance itself is gone and nothing can
+        // be resumed.
         return Err(RecoveryError::PackMissing(
             archive_path.to_string_lossy().into_owned(),
         ));
