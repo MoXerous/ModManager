@@ -25,7 +25,10 @@ use serde_json::Value;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::pack::{execute_modpack_install_with, plan_modpack_install_with, run_apply};
+use super::pack::{
+    apply_lock_for, dismiss_pack_apply_with, execute_modpack_install_with,
+    pending_pack_recoveries_with, plan_modpack_install_with, recover_pack_apply_with, run_apply,
+};
 use crate::dto::{ErrorCode, ModpackInstallRequest, PackEventDto};
 use crate::state::AppState;
 
@@ -241,6 +244,82 @@ fn recording_channel(sink: &Sink) -> tauri::ipc::Channel<PackEventDto> {
 
 fn phase(e: &Value) -> &str {
     e["phase"].as_str().unwrap_or("<not a string>")
+}
+
+/// Every entry under `root`: directories by name, files with their bytes.
+///
+/// A recovery or a dismissal promises to leave the instance exactly as it
+/// found it, so the claim has to cover names AND content — an empty list, or
+/// a sorted list of paths, would pass while a file was rewritten in place.
+fn tree_snapshot(root: &Path) -> Vec<(String, Option<Vec<u8>>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(root)
+                .expect("an entry below the root")
+                .to_string_lossy()
+                .into_owned();
+            if path.is_dir() {
+                out.push((format!("{rel}/"), None));
+                stack.push(path);
+            } else {
+                out.push((rel, Some(std::fs::read(&path).expect("read a tree entry"))));
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The record a killed pack apply leaves behind, built by hand.
+///
+/// The bridge's recovery commands start from a record and the disk, and a real
+/// crash cannot be asked for on demand: every destination is `queued`, the
+/// archive the record names is the one on disk, and the operation is `running`,
+/// which is exactly what `exec` leaves when it dies mid-run.
+fn interrupted_pack_record(
+    state: &AppState,
+    instance_root: &Path,
+    pack_path: &Path,
+    destinations: &[&str],
+) -> String {
+    use mm_core::journal::{pack_item, OperationState, PackApplyMeta};
+
+    let canonical = std::fs::canonicalize(instance_root).expect("canonical instance root");
+    let items: Vec<_> = destinations
+        .iter()
+        .map(|safe_path| {
+            let dest = canonical.join(safe_path);
+            pack_item(
+                safe_path,
+                "Wiremock Pack",
+                &mm_core::safety::atomic::part_path(&dest).to_string_lossy(),
+                &dest.to_string_lossy(),
+            )
+        })
+        .collect();
+    let meta = PackApplyMeta {
+        pack_name: "Wiremock Pack".to_string(),
+        pack_version_id: "v1.2.3".to_string(),
+        archive_sha512: sha512_hex(&std::fs::read(pack_path).expect("read the pack")),
+        archive_path: pack_path.to_string_lossy().into_owned(),
+    };
+
+    let handle = state.journal_handle();
+    let guard = handle.lock().expect("journal");
+    let record = guard
+        .start_pack("i1", &canonical.to_string_lossy(), items, meta)
+        .expect("start the pack record");
+    guard
+        .transition_operation(&record.operation_id, OperationState::Running, None)
+        .expect("running");
+    record.operation_id
 }
 
 #[test]
@@ -1232,6 +1311,347 @@ fn pack_apply_serializes_two_runs_on_one_instance() {
         assert!(
             events.iter().any(|(_, p)| p == "pack.phase.done"),
             "a run never reported done: {events:?}"
+        );
+    });
+}
+
+/// F-146: the pending list is data, and the bridge is where a sentence would
+/// have to be invented.
+///
+/// AGENTS.md §5.9 puts the UI's words in the UI, but a DTO field is a place
+/// the bridge could still put English: `action` and `reason` cross the IPC
+/// boundary as strings, and a string that happens to read like a sentence
+/// would ship a phrase no locale file can translate. Core names keys; this
+/// pins that they arrive as keys.
+#[test]
+fn spec_f146_pending_list_carries_keys_and_never_a_sentence() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        let state = app_state(dir.path(), &root);
+
+        let pack = pack_bytes("https://cdn.example.com/x.jar", &jar_bytes());
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(&pack_path, &pack).expect("write pack");
+        let operation_id = interrupted_pack_record(
+            &state,
+            &root,
+            &pack_path,
+            &["mods/packfile.jar", "config/pack.toml"],
+        );
+
+        let pending = pending_pack_recoveries_with(&state)
+            .await
+            .expect("the pending list refused a valid state");
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        let dto = &pending[0];
+
+        assert_eq!(dto.operation_id, operation_id);
+        assert_eq!(dto.pack_sha512, sha512_hex(&pack));
+        assert_eq!(dto.planned_count, 2);
+        // Nothing was written, and the disk — not the record's counters — is
+        // what says so.
+        assert_eq!(dto.done_count, 0, "{dto:?}");
+        assert_eq!(dto.action, "recovery.pack.action.resume", "{dto:?}");
+        assert_eq!(dto.reason, "recovery.pack.nothingWritten", "{dto:?}");
+
+        // The shape, not just this fixture's spelling: every value is a key
+        // under the recovery namespace, and no value is prose.
+        assert!(
+            dto.action.starts_with("recovery.pack.action."),
+            "an action that is not a key: {}",
+            dto.action
+        );
+        assert!(
+            dto.reason.starts_with("recovery.pack."),
+            "a reason that is not a key: {}",
+            dto.reason
+        );
+        for key in [&dto.action, &dto.reason] {
+            assert!(
+                !key.chars().any(char::is_whitespace),
+                "a display sentence crossed the bridge: {key}"
+            );
+        }
+    });
+}
+
+/// F-076: both mutating commands take an operation ID, and only a pack apply's
+/// ID may reach an instance.
+///
+/// The batch below names THIS instance as its target, so a bridge that skipped
+/// its own kind check would be one registry lookup away from letting the
+/// recovery act on the folder. Core refuses it again (`require_pack`), but the
+/// refusal must happen before anything is touched, and it must be the typed
+/// `invalidInput` the UI already translates.
+#[test]
+fn spec_f076_recovery_refuses_an_id_that_is_not_a_pack_apply() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        std::fs::write(root.join("mods/packfile.jar"), b"user-owned").expect("seed jar");
+        let state = app_state(dir.path(), &root);
+
+        let canonical = std::fs::canonicalize(&root).expect("canonical instance root");
+        let batch_id = {
+            let handle = state.journal_handle();
+            let guard = handle.lock().expect("journal");
+            let record = guard
+                .start(
+                    mm_core::journal::OperationKind::DownloadBatch,
+                    "p1",
+                    &canonical.to_string_lossy(),
+                    vec![],
+                )
+                .expect("start the batch");
+            guard
+                .transition_operation(
+                    &record.operation_id,
+                    mm_core::journal::OperationState::Running,
+                    None,
+                )
+                .expect("running");
+            record.operation_id
+        };
+
+        let before = tree_snapshot(&root);
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base("http://127.0.0.1:1").expect("provider");
+        let out = recover_pack_apply_with(
+            &state,
+            &provider,
+            batch_id.clone(),
+            recording_channel(&sink),
+            true,
+            mm_core::downloader::Downloader::new(1),
+        )
+        .await;
+
+        let err = out.expect_err("a download batch's id must not be recovered as a pack");
+        assert_eq!(
+            err.code,
+            ErrorCode::InvalidInput,
+            "the caller named the wrong kind of operation: {err:?}"
+        );
+
+        assert_eq!(
+            tree_snapshot(&root),
+            before,
+            "the refused recovery touched the instance"
+        );
+        // The refusal lands before the run can narrate: there is no stream to
+        // end, so none may be opened.
+        let events = sink.lock().expect("events").clone();
+        assert!(
+            events.is_empty(),
+            "a refusal before the run starts must not open with progress: {events:?}"
+        );
+
+        // And the record the caller pointed at is untouched as well.
+        let handle = state.journal_handle();
+        let guard = handle.lock().expect("journal");
+        assert_eq!(
+            guard.read(&batch_id).expect("read").state,
+            mm_core::journal::OperationState::Running,
+            "the refusal closed a record it was not asked to close"
+        );
+    });
+}
+
+/// F-076: dismissing closes the case, not the instance.
+///
+/// Dismiss means "stop offering me this", and the half-applied files stay: a
+/// rollback would delete the user's own files. The record must end terminal —
+/// a dismissed case that still reads `running` is offered again on every
+/// launch — and the tree must be byte-for-byte what it was.
+#[test]
+fn spec_f076_dismiss_closes_without_touching_the_instance() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        // The destination a half-finished apply would have replaced, and an
+        // unrelated file: neither is dismiss's business.
+        std::fs::write(root.join("mods/packfile.jar"), b"pre-existing").expect("seed jar");
+        std::fs::write(root.join("options.txt"), b"user settings").expect("seed options");
+        let state = app_state(dir.path(), &root);
+
+        let pack = pack_bytes("https://cdn.example.com/x.jar", &jar_bytes());
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(&pack_path, &pack).expect("write pack");
+        let operation_id = interrupted_pack_record(
+            &state,
+            &root,
+            &pack_path,
+            &["mods/packfile.jar", "config/pack.toml"],
+        );
+
+        let before = tree_snapshot(&root);
+        dismiss_pack_apply_with(&state, operation_id.clone())
+            .await
+            .expect("dismiss failed");
+
+        let record = {
+            let handle = state.journal_handle();
+            let guard = handle.lock().expect("journal");
+            guard.read(&operation_id).expect("read")
+        };
+        assert_eq!(
+            record.state,
+            mm_core::journal::OperationState::Failed,
+            "a dismissed case must end terminal"
+        );
+        assert!(record.state.is_terminal());
+
+        assert_eq!(
+            tree_snapshot(&root),
+            before,
+            "dismiss touched the instance it was told not to touch"
+        );
+        assert!(
+            pending_pack_recoveries_with(&state)
+                .await
+                .expect("the pending list failed")
+                .is_empty(),
+            "a dismissed case is offered again"
+        );
+    });
+}
+
+/// F-076: dismiss must not flip a record a recovery is writing.
+///
+/// Both commands write the same record. Without the per-root apply lock a
+/// dismiss can land between two of a recovery's writes: the record goes
+/// terminal underneath it, and the recovery's next transition fails with
+/// `IllegalOperationTransition` after files have already moved.
+///
+/// The proof is ordering, not duration: one log records the recovery's events
+/// and the moment dismiss returned, and dismiss's marker must come after the
+/// recovery's terminal event. The delay in the wiremock response is only what
+/// keeps the recovery inside the lock long enough for this test to observe a
+/// dismiss that arrives mid-run; the assertions never sleep.
+#[test]
+fn spec_f076_dismiss_waits_for_a_running_recovery() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        Mock::given(method("GET"))
+            .and(path("/data/packfile.jar"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jar.clone())
+                    .set_delay(Duration::from_millis(800))
+                    .insert_header("content-type", "application/java-archive"),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir mods");
+        let state = app_state(dir.path(), &root);
+
+        let pack = pack_bytes(&format!("{}/data/packfile.jar", server.uri()), &jar);
+        let pack_path = dir.path().join("the-pack.mrpack");
+        std::fs::write(&pack_path, &pack).expect("write pack");
+        let operation_id = interrupted_pack_record(
+            &state,
+            &root,
+            &pack_path,
+            &["mods/packfile.jar", "config/pack.toml"],
+        );
+
+        // One log for both actors. Every channel event goes in, in order, and
+        // dismiss appends its own marker when it returns.
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+        let (first_event_tx, first_event_rx) = std::sync::mpsc::channel::<String>();
+        let channel_log = log.clone();
+        let on_event = tauri::ipc::Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(text) = body {
+                let value: Value = serde_json::from_str(&text).expect("event json");
+                let phase = phase(&value).to_string();
+                channel_log.lock().expect("log").push(phase.clone());
+                let _ = first_event_tx.send(phase);
+            }
+            Ok(())
+        });
+
+        let state_for_run = state.clone();
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let downloader = Ok(mm_core::downloader::Downloader::new(1).expect("downloader"));
+        let id_for_run = operation_id.clone();
+        let recovery = tauri::async_runtime::spawn(async move {
+            recover_pack_apply_with(
+                &state_for_run,
+                &provider,
+                id_for_run,
+                on_event,
+                true,
+                downloader,
+            )
+            .await
+        });
+
+        // Wait for the recovery to speak. Its first event is emitted from
+        // inside core's executor, i.e. after the bridge took the lock.
+        let first = tauri::async_runtime::spawn_blocking(move || {
+            first_event_rx.recv_timeout(Duration::from_secs(20))
+        })
+        .await
+        .expect("join the wait")
+        .expect("the recovery narrated nothing at all");
+        assert!(first.starts_with("pack.phase."), "not a key: {first}");
+
+        // The premise made checkable: while a recovery runs it holds the lock
+        // dismiss must also take. `try_lock` is how the test sees that without
+        // waiting for it.
+        let lock = apply_lock_for(&std::fs::canonicalize(&root).expect("canonical root"));
+        assert!(
+            lock.try_lock().is_err(),
+            "the in-flight recovery does not hold the instance lock"
+        );
+
+        // Dismiss arrives mid-run. It must not return until the recovery has
+        // ended, and by then the case it was asked to close is closed.
+        let dismissed = dismiss_pack_apply_with(&state, operation_id.clone()).await;
+        log.lock()
+            .expect("log")
+            .push("dismiss:returned".to_string());
+
+        let report = recovery
+            .await
+            .expect("join the recovery")
+            .expect("the recovery failed");
+        assert_eq!(report.state, "completed", "{report:?}");
+        assert_eq!(report.written, 2, "{report:?}");
+
+        let log = log.lock().expect("log").clone();
+        let done = log
+            .iter()
+            .rposition(|entry| entry == "pack.phase.done")
+            .expect("the recovery never reported done");
+        let dismiss_at = log
+            .iter()
+            .rposition(|entry| entry == "dismiss:returned")
+            .expect("dismiss left no marker");
+        assert!(
+            dismiss_at > done,
+            "dismiss returned under the running recovery: {log:?}"
+        );
+
+        let err = dismissed.expect_err("the recovery already closed the case");
+        assert_eq!(err.code, ErrorCode::InvalidInput, "{err:?}");
+
+        let handle = state.journal_handle();
+        let guard = handle.lock().expect("journal");
+        assert_eq!(
+            guard.read(&operation_id).expect("read").state,
+            mm_core::journal::OperationState::Completed,
+            "the record did not end where the recovery put it"
         );
     });
 }

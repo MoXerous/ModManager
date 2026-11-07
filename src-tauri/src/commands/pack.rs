@@ -368,7 +368,7 @@ async fn registered_root(state: &AppState, raw: &str) -> Result<(PathBuf, String
 static APPLY_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tauri::async_runtime::Mutex<()>>>>> =
     OnceLock::new();
 
-fn apply_lock_for(root: &Path) -> Arc<tauri::async_runtime::Mutex<()>> {
+pub(super) fn apply_lock_for(root: &Path) -> Arc<tauri::async_runtime::Mutex<()>> {
     let registry = APPLY_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     // A poisoned registry means a panic while holding this table; the table
     // itself is still consistent (the only work under the lock is an insert),
