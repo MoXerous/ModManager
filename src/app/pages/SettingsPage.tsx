@@ -7,6 +7,7 @@ import { Segmented } from '@/components/ui/Segmented';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '../../components/state';
 import { curseforgeKeyStatus, saveCurseforgeKey, toIpcError } from '../../lib/ipc';
+import { LegacyImportCard } from './LegacyImportCard';
 import {
   LOCALES,
   THEMES,
@@ -129,6 +130,8 @@ export function SettingsPage() {
         <p className="text-caption text-muted-foreground">{t('settings.providers.roaming')}</p>
         {error !== null && <ErrorState error={error} className="mt-1" />}
       </section>
+
+      <LegacyImportCard />
     </div>
   );
 }

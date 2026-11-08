@@ -767,3 +767,205 @@ pub struct PackRecoveryResultDto {
     /// instance is half applied and the banner keeps offering the decision.
     pub state: String,
 }
+
+// --- Legacy import (F-181) -----------------------------------------------
+//
+// A scan is a report, not a plan and not a promise. Every path here is for
+// display only: nothing in this DTO is ever accepted back as an instruction,
+// and the scan never writes into the old home. `source`, the warning `code`
+// and the JSON `detail` are stable codes; the UI owns the sentences.
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyScanDto {
+    pub roots: LegacyRootsDto,
+    pub database: Option<LegacyDatabaseDto>,
+    pub profiles: Vec<LegacyProfileDto>,
+    pub warnings: Vec<LegacyWarningDto>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyRootsDto {
+    /// `explicit | environment | legacy_dot_dir | platform | none`.
+    pub source: String,
+    pub data: String,
+    pub config: String,
+    pub cache: String,
+    pub logs: String,
+    pub db_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyDatabaseDto {
+    /// The original file, never the snapshot: the snapshot is gone by the time
+    /// this DTO exists.
+    pub path: String,
+    /// Bytes of the original file, for the diagnostic line.
+    #[ts(type = "number")]
+    pub bytes: u64,
+    pub user_version: u32,
+    pub supported: bool,
+    pub has_profiles_table: bool,
+    /// Discovered with `PRAGMA table_info`, so a v1 file lists 23 columns and
+    /// a v2 file 34. Displayed as evidence, not interpreted here.
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyProfileDto {
+    pub id: String,
+    pub name: String,
+    pub game_version: String,
+    pub loader: String,
+    /// `profile_kind` on a v2 database; empty on v1.
+    pub kind: String,
+    /// `ownership_policy` on a v2 database; empty on v1.
+    pub ownership: String,
+    pub root: String,
+    pub root_exists: bool,
+    pub profile_json: LegacyJsonFactDto,
+    pub installed_mods: LegacyInstalledModsFactDto,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyJsonFactDto {
+    pub present: bool,
+    pub schema: String,
+    pub ok: bool,
+    /// `missing | invalid_json | unsupported_schema | not_an_object | .` -
+    /// a code, never a sentence.
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyInstalledModsFactDto {
+    pub present: bool,
+    pub schema: String,
+    pub ok: bool,
+    /// Records an import would consider: managed status and both identities
+    /// present.
+    #[ts(type = "number")]
+    pub managed: usize,
+    /// Records that cannot be matched to a provider and would be left alone.
+    #[ts(type = "number")]
+    pub skipped: usize,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyWarningDto {
+    /// `root_not_found | database_missing | database_unreadable | .`.
+    pub code: String,
+    /// The profile the warning belongs to, when it belongs to one row.
+    pub profile: Option<String>,
+    /// Paths and parser reasons for the diagnostic line. Never translated and
+    /// never parsed by the UI.
+    pub detail: String,
+}
+
+impl From<&mm_core::legacy::LegacyScan> for LegacyScanDto {
+    fn from(scan: &mm_core::legacy::LegacyScan) -> Self {
+        Self {
+            roots: LegacyRootsDto::from(&scan.roots),
+            database: scan.database.as_ref().map(LegacyDatabaseDto::from),
+            profiles: scan.profiles.iter().map(LegacyProfileDto::from).collect(),
+            warnings: scan.warnings.iter().map(LegacyWarningDto::from).collect(),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::LegacyRoots> for LegacyRootsDto {
+    fn from(roots: &mm_core::legacy::LegacyRoots) -> Self {
+        Self {
+            source: roots.source.code().to_string(),
+            data: display(&roots.data),
+            config: display(&roots.config),
+            cache: display(&roots.cache),
+            logs: display(&roots.logs),
+            db_file: display(&roots.db_file),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::LegacyDbScan> for LegacyDatabaseDto {
+    fn from(db: &mm_core::legacy::LegacyDbScan) -> Self {
+        Self {
+            path: display(&db.path),
+            bytes: db.bytes,
+            user_version: db.user_version,
+            supported: db.supported,
+            has_profiles_table: db.has_profiles_table,
+            columns: db.columns.clone(),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::LegacyProfileScan> for LegacyProfileDto {
+    fn from(profile: &mm_core::legacy::LegacyProfileScan) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            game_version: profile.game_version.clone(),
+            loader: profile.loader.clone(),
+            kind: profile.kind.clone(),
+            ownership: profile.ownership.clone(),
+            root: display(&profile.root),
+            root_exists: profile.root_exists,
+            profile_json: LegacyJsonFactDto::from(&profile.profile_json),
+            installed_mods: LegacyInstalledModsFactDto::from(&profile.installed_mods),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::JsonFact> for LegacyJsonFactDto {
+    fn from(fact: &mm_core::legacy::JsonFact) -> Self {
+        Self {
+            present: fact.present,
+            schema: fact.schema.clone(),
+            ok: fact.ok,
+            detail: fact.detail.clone(),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::InstalledModsFact> for LegacyInstalledModsFactDto {
+    fn from(fact: &mm_core::legacy::InstalledModsFact) -> Self {
+        Self {
+            present: fact.present,
+            schema: fact.schema.clone(),
+            ok: fact.ok,
+            managed: fact.managed,
+            skipped: fact.skipped,
+            detail: fact.detail.clone(),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::LegacyWarning> for LegacyWarningDto {
+    fn from(warning: &mm_core::legacy::LegacyWarning) -> Self {
+        Self {
+            code: warning.code.to_string(),
+            profile: warning.profile.clone(),
+            detail: warning.detail.clone(),
+        }
+    }
+}
+
+/// Display only. A path that is not valid UTF-8 is shown lossily; nothing on
+/// this screen is ever sent back as a path.
+fn display(path: &std::path::Path) -> String {
+    path.display().to_string()
+}

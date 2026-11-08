@@ -2625,6 +2625,7 @@ name = "modmanager-tauri"
 version = "0.1.0"
 dependencies = [
  "mm-core",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha1",

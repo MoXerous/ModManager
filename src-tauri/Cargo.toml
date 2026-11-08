@@ -40,6 +40,11 @@ tempfile = "3.27.0"
 # person clicking anything. The Channel path was otherwise covered only by
 # reasoning.
 wiremock = "0.6.5"
+# Not a new download: mm-core already depends on this exact version with these
+# features, so the compiled library is reused. The legacy scan tests need to
+# create a real old-format database; fabricating one through another API would
+# prove the mapping against a shape the old application never wrote.
+rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
 # Already in the workspace through mm-core, so it downloads nothing. The
 # fixture has to be a real zip (the verifier checks ZIP magic on a .jar) and
 # its sha1 has to be computed, not guessed, or the download correctly fails

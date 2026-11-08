@@ -40,6 +40,7 @@ pub fn run() {
             commands::execute_install,
             commands::curseforge_key_status,
             commands::save_curseforge_key,
+            commands::legacy::scan_legacy_import,
             // The pack commands are the module's own: `generate_handler!`
             // resolves the macro support next to each function, so the path
             // has to be the module that defines them.

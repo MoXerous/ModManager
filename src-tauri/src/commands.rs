@@ -17,6 +17,9 @@ use mm_core::downloader::JournalOp;
 /// `.mrpack` install commands. The whole module is the bridge: the format's
 /// decisions live in `mm_core::modpack` (see the module's own docs).
 pub mod pack;
+
+/// F-181: the read-only preview of the old application's data.
+pub mod legacy;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
 use tauri_plugin_opener::OpenerExt;
 
@@ -774,6 +777,8 @@ pub fn save_curseforge_key(
 
 #[cfg(test)]
 pub(crate) mod channel_tests;
+#[cfg(test)]
+pub(crate) mod legacy_tests;
 #[cfg(test)]
 pub(crate) mod pack_tests;
 #[cfg(test)]

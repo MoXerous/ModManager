@@ -12,6 +12,7 @@ import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
 import type { InstanceSummaryDto } from '../bindings/InstanceSummaryDto';
 import type { InstallPlanDto } from '../bindings/InstallPlanDto';
+import type { LegacyScanDto } from '../bindings/LegacyScanDto';
 import type { LinkInstanceRequest } from '../bindings/LinkInstanceRequest';
 import type { ModpackApplyResultDto } from '../bindings/ModpackApplyResultDto';
 import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
@@ -190,6 +191,22 @@ export function curseforgeKeyStatus(): Promise<CurseForgeKeyDto> {
 /** Writes the key and answers with the status of the file it wrote. */
 export function saveCurseforgeKey(key: string): Promise<CurseForgeKeyDto> {
   return invoke<CurseForgeKeyDto>('save_curseforge_key', { key });
+}
+
+// --- Legacy import (F-181) ----------------------------------------------
+//
+// One explicit read. Nothing is imported and nothing is written into the old
+// home: the answer is a report. An absolute `overrideHome` is the escape hatch
+// for a portable old install the app cannot discover; a relative one is
+// refused in Rust rather than resolved against our own directory.
+
+/** Scans the old application's data and returns what a future import could
+ *  read. Read-only, on demand, never at startup. */
+export function scanLegacyImport(overrideHome?: string): Promise<LegacyScanDto> {
+  const value = overrideHome?.trim();
+  return invoke<LegacyScanDto>('scan_legacy_import', {
+    overrideHome: value ? value : null,
+  });
 }
 
 // --- Modpacks (.mrpack) -------------------------------------------------
