@@ -22,4 +22,4 @@ pub use plan::{
     build_batch_install_plan, build_safety_warnings, requires_confirmation, PlanEntry, PlanSummary,
     Warning,
 };
-pub use resolve::{resolve_dependency, resolve_project, PreferredPin, ResolveParams};
+pub use resolve::{resolve_dependency, resolve_project, PreferredPin, ResolveError, ResolveParams};

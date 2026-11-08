@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::providers::{
-    HashAlgo, LatestFilter, Project, ProjectFile, SearchPage, SearchQuery, Version,
+    HashAlgo, LatestFilter, Project, ProjectFile, ProviderError, SearchPage, SearchQuery, Version,
 };
 use crate::resolver::graph::tests::{file, resolved, version};
 use std::collections::{HashMap, HashSet};
@@ -21,6 +21,10 @@ struct FakeProvider {
     versions: HashMap<String, Vec<Version>>,
     hashes: HashMap<String, Version>,
     fail_projects: HashSet<String>,
+    fail_versions: bool,
+    fail_versions_for: HashSet<String>,
+    fail_hashes: bool,
+    unsupported_hashes: bool,
 }
 
 impl FakeProvider {
@@ -31,6 +35,10 @@ impl FakeProvider {
             versions: HashMap::new(),
             hashes: HashMap::new(),
             fail_projects: HashSet::new(),
+            fail_versions: false,
+            fail_versions_for: HashSet::new(),
+            fail_hashes: false,
+            unsupported_hashes: false,
         }
     }
 
@@ -113,6 +121,9 @@ impl Provider for FakeProvider {
                 loader.unwrap_or("")
             ),
         );
+        if self.fail_versions || self.fail_versions_for.contains(id_or_slug) {
+            return Err(ProviderError::Api { status: 500 });
+        }
         // Server-like: a project's listing only carries its own versions.
         Ok(self
             .versions
@@ -131,6 +142,14 @@ impl Provider for FakeProvider {
         _latest: Option<&LatestFilter>,
     ) -> Result<HashMap<String, Version>, crate::providers::ProviderError> {
         self.push("get_versions_by_hashes", hashes.join(","));
+        if self.fail_hashes {
+            return Err(ProviderError::Api { status: 500 });
+        }
+        if self.unsupported_hashes {
+            return Err(ProviderError::Unsupported {
+                capability: "get_versions_by_hashes",
+            });
+        }
         Ok(hashes
             .iter()
             .filter_map(|h| {
@@ -196,7 +215,7 @@ async fn spec_f056_preferred_id_skips_candidate_loop() {
     let mut c = cache();
     let mut ps = params(full_project("a"), "mod");
     ps.pin.version_id = Some("v2".to_string());
-    let r = resolve_project(&p, &mut c, &ps).await;
+    let r = resolve_project(&p, &mut c, &ps).await.expect("resolve");
     assert_eq!(r.status, "compatible");
     assert_eq!(r.version.as_ref().expect("v").id, "v2");
     // Single-version endpoint, no list scan, no per-candidate refetch.
@@ -210,7 +229,7 @@ async fn spec_f056_unknown_pin_falls_back_to_list_scan() {
     let mut c = cache();
     let mut ps = params(full_project("a"), "mod");
     ps.pin.version_id = Some("nope".to_string());
-    let r = resolve_project(&p, &mut c, &ps).await;
+    let r = resolve_project(&p, &mut c, &ps).await.expect("resolve");
     assert_eq!(r.status, "compatible");
     assert_eq!(r.version.as_ref().expect("v").id, "v1");
     assert_eq!(p.calls("get_version"), vec!["nope".to_string()]);
@@ -228,12 +247,108 @@ async fn spec_f056_sha1_fallback_uses_hash_lookup() {
     let mut c = cache();
     let mut ps = params(full_project("a"), "mod");
     ps.pin.file_sha1 = Some("ABC123".to_string());
-    let r = resolve_project(&p, &mut c, &ps).await;
+    let r = resolve_project(&p, &mut c, &ps).await.expect("resolve");
     assert_eq!(r.version.as_ref().expect("v").id, "v2");
     // The request carries the lowered hash (providers bite contract).
     assert_eq!(
         p.calls("get_versions_by_hashes"),
         vec!["abc123".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn spec_f056_rejects_a_provider_error_instead_of_picking_another_version() {
+    // A pinned SHA-1 is only honoured if the hash lookup answers. A 500 used
+    // to become an empty map, then the candidate loop selected a different
+    // version with no warning: the plan named a version the user never asked
+    // for. The answer must be the provider error, not a substitute.
+    let mut p = FakeProvider::new().with_project(
+        full_project("a"),
+        vec![version("v1", "a"), version("v2", "a")],
+    );
+    p.fail_hashes = true;
+    let mut c = cache();
+    let mut ps = params(full_project("a"), "mod");
+    ps.pin.file_sha1 = Some("abc123".to_string());
+
+    let err = resolve_project(&p, &mut c, &ps)
+        .await
+        .expect_err("a failed hash lookup must not turn into a plan");
+
+    assert_eq!(err.operation, "get_versions_by_hashes");
+    assert_eq!(err.target, "a");
+    assert!(matches!(err.source, ProviderError::Api { status: 500 }));
+    assert!(
+        p.calls("get_versions").is_empty(),
+        "resolution fell through to best-version selection: {:?}",
+        p.calls("get_versions")
+    );
+}
+
+#[tokio::test]
+async fn spec_f050_rejects_a_provider_error_instead_of_reporting_incompatible() {
+    // The candidate loader loop has the same swallow on another path: an
+    // empty version list turns a transport failure into "incompatible",
+    // which reads as "this mod has no matching version" rather than "the
+    // provider did not answer".
+    let mut p = FakeProvider::new().with_project(full_project("a"), vec![version("v1", "a")]);
+    p.fail_versions = true;
+    let mut c = cache();
+
+    let err = resolve_project(&p, &mut c, &params(full_project("a"), "mod"))
+        .await
+        .expect_err("a failed version listing must not become an incompatible verdict");
+
+    assert_eq!(err.operation, "get_versions");
+    assert_eq!(err.target, "a");
+    assert!(matches!(err.source, ProviderError::Api { status: 500 }));
+}
+
+#[tokio::test]
+async fn spec_f056_unsupported_hash_search_blocks_instead_of_substituting_a_version() {
+    // CurseForge has no hash-search endpoint. "I cannot answer" must not be
+    // flattened into "no version has this hash": the pinned entry is blocked
+    // with the provider's own error, and the plan shows a warning naming it.
+    let mut p = FakeProvider::new().with_project(full_project("a"), vec![version("v1", "a")]);
+    p.unsupported_hashes = true;
+    let mut c = cache();
+    let mut ps = params(full_project("a"), "mod");
+    ps.pin.file_sha1 = Some("abc123".to_string());
+
+    let r = resolve_project(&p, &mut c, &ps)
+        .await
+        .expect("an unsupported capability is a visible block, not an abort");
+
+    assert_eq!(r.status, "unsupported");
+    assert_eq!(r.version, None);
+    assert!(
+        r.reason.contains("get_versions_by_hashes"),
+        "reason did not carry the provider error: {}",
+        r.reason
+    );
+    assert!(
+        p.calls("get_versions").is_empty(),
+        "resolution silently picked another version: {:?}",
+        p.calls("get_versions")
+    );
+
+    let (entries, _) = crate::resolver::plan::build_batch_install_plan(
+        std::slice::from_ref(&r),
+        &[],
+        "1.21",
+        "fabric",
+    );
+    assert_eq!(entries[0].status, "blocked");
+    let warnings = crate::resolver::plan::build_safety_warnings(
+        &entries,
+        std::slice::from_ref(&r),
+        &HashSet::new(),
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.message.contains("get_versions_by_hashes")),
+        "the block was not visible as a warning: {warnings:?}"
     );
 }
 
@@ -245,7 +360,7 @@ async fn spec_f057_incompatible_pin_falls_back_to_latest() {
     let mut c = cache();
     let mut ps = params(full_project("a"), "mod");
     ps.pin.version_id = Some("pinned".to_string());
-    let r = resolve_project(&p, &mut c, &ps).await;
+    let r = resolve_project(&p, &mut c, &ps).await.expect("resolve");
     assert_eq!(r.status, "compatible");
     assert_eq!(r.version.as_ref().expect("v").id, "good");
 }
@@ -254,7 +369,9 @@ async fn spec_f057_incompatible_pin_falls_back_to_latest() {
 async fn spec_f051_no_forge_call_for_fabric_mod() {
     let p = FakeProvider::new().with_project(full_project("a"), vec![version("v1", "a")]);
     let mut c = cache();
-    let r = resolve_project(&p, &mut c, &params(full_project("a"), "mod")).await;
+    let r = resolve_project(&p, &mut c, &params(full_project("a"), "mod"))
+        .await
+        .expect("resolve");
     assert_eq!(r.status, "compatible");
     let calls = p.calls("get_versions");
     assert_eq!(calls.len(), 1);
@@ -272,15 +389,15 @@ async fn spec_f058_cache_reuses_duplicate_resolve() {
     let p = FakeProvider::new().with_project(full_project("a"), vec![alpha]);
     let mut c = cache();
     let ps = params(full_project("a"), "mod");
-    let r1 = resolve_project(&p, &mut c, &ps).await;
-    let r2 = resolve_project(&p, &mut c, &ps).await;
+    let r1 = resolve_project(&p, &mut c, &ps).await.expect("resolve");
+    let r2 = resolve_project(&p, &mut c, &ps).await.expect("resolve");
     assert_eq!(r1, r2);
     assert_eq!(r1.status, "incompatible");
     assert_eq!(p.calls("get_versions").len(), 1);
     // allow_alpha flips the resolved key: new verdict, same fetched list.
     let mut ps2 = ps.clone();
     ps2.allow_alpha = true;
-    let r3 = resolve_project(&p, &mut c, &ps2).await;
+    let r3 = resolve_project(&p, &mut c, &ps2).await.expect("resolve");
     assert_eq!(r3.status, "compatible");
     assert_eq!(p.calls("get_versions").len(), 1);
 }
@@ -294,7 +411,8 @@ async fn spec_f050_browse_only_yields_version_none() {
         &mut c,
         &params(full_project("s"), "minecraft_java_server"),
     )
-    .await;
+    .await
+    .expect("resolve");
     assert_eq!(r.status, "browse-only");
     assert_eq!(r.version, None);
     assert_eq!(p.calls("get_versions").len(), 0);
@@ -306,7 +424,9 @@ async fn spec_f050_hydrate_failure_returns_stub_silently() {
     let mut p = FakeProvider::new();
     p.fail_projects.insert("a".to_string());
     let mut c = cache();
-    let r = resolve_project(&p, &mut c, &params(stub_project("a"), "mod")).await;
+    let r = resolve_project(&p, &mut c, &params(stub_project("a"), "mod"))
+        .await
+        .expect("resolve");
     assert_eq!(r.project_id, "a");
     assert_eq!(r.status, "incompatible");
 }
@@ -348,6 +468,31 @@ async fn spec_f053_dep_fetch_failure_is_stub() {
     assert_eq!(r.status, "dependency-error");
     assert_eq!(r.title, "Dependency ghost");
     assert!(!r.reason.is_empty());
+}
+
+#[tokio::test]
+async fn spec_f053_dep_version_fetch_failure_is_a_named_stub() {
+    // One failing dependency must not abort the whole plan, but it also must
+    // not look like "no compatible version": the stub carries the provider
+    // error so the review row can say why.
+    let mut p = FakeProvider::new().with_project(full_project("dep"), vec![version("dv", "dep")]);
+    p.fail_versions = true;
+    let mut c = cache();
+    let dep = VersionDependency {
+        project_id: Some("dep".to_string()),
+        version_id: None,
+        file_name: None,
+        dependency_type: "required".to_string(),
+    };
+    let r = resolve_dependency(&p, &mut c, &dep, "1.21", "fabric", &HashMap::new())
+        .await
+        .expect("stub");
+    assert_eq!(r.status, "dependency-error");
+    assert!(
+        r.reason.contains("get_versions"),
+        "stub did not name the failed operation: {}",
+        r.reason
+    );
 }
 
 #[tokio::test]

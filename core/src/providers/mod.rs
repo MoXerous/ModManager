@@ -114,6 +114,10 @@ pub enum ProviderError {
     Transport,
     #[error("invalid response")]
     InvalidJson,
+    /// The provider has no endpoint for this capability at all. Distinct
+    /// from `Ok(empty)`: "I cannot answer" is not "there is no match".
+    #[error("provider does not support {capability}")]
+    Unsupported { capability: &'static str },
 }
 
 #[async_trait::async_trait]

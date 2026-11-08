@@ -5,7 +5,8 @@ use crate::providers::{ProjectFile, Version};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A project with its resolved version (`None` = incompatible/blocked).
-/// `status`: `compatible` | `incompatible` | `browse-only` | `dependency-error`.
+/// `status`: `compatible` | `incompatible` | `browse-only` | `dependency-error`
+/// | `unsupported` (the provider cannot answer the pin, e.g. no hash search).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedContent {
     pub project_id: String,

@@ -169,6 +169,12 @@ fn spec_f019_provider_errors_map_to_codes() {
     let cases: Vec<(ProviderError, ErrorCode)> = vec![
         (ProviderError::Api { status: 404 }, ErrorCode::NotFound),
         (ProviderError::Api { status: 503 }, ErrorCode::ProviderApi),
+        (
+            ProviderError::Unsupported {
+                capability: "get_versions_by_hashes",
+            },
+            ErrorCode::Unsupported,
+        ),
         (ProviderError::Timeout, ErrorCode::Timeout),
         (ProviderError::Transport, ErrorCode::Io),
         (ProviderError::InvalidJson, ErrorCode::Io),
@@ -180,6 +186,36 @@ fn spec_f019_provider_errors_map_to_codes() {
     assert_eq!(limited.code, ErrorCode::RateLimited);
     // The reset window crosses as data, never parsed from a message.
     assert_eq!(limited.retry_after_seconds, Some(90));
+}
+
+/// `Unsupported` is not `Internal`: the provider is telling the user that a
+/// capability does not exist (CurseForge has no hash search), and that answer
+/// needs its own sentence rather than "an unexpected error occurred". The UI
+/// resolves `error.<code>`, so the key has to exist in both locales — a
+/// missing key shows the raw key and no build catches it.
+#[test]
+fn spec_f019_unsupported_has_a_distinct_code_and_is_translated_in_both_locales() {
+    use mm_core::providers::ProviderError;
+
+    let err = IpcError::from_provider(&ProviderError::Unsupported {
+        capability: "get_versions_by_hashes",
+    });
+    assert_eq!(err.code, ErrorCode::Unsupported);
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("i18n");
+    for locale in ["ar.json", "en.json"] {
+        let text = std::fs::read_to_string(root.join(locale))
+            .unwrap_or_else(|e| panic!("cannot read {locale}: {e}"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{locale} is not JSON: {e}"));
+        assert!(
+            parsed.get("error.unsupported").is_some(),
+            "{locale} has no error.unsupported"
+        );
+    }
 }
 
 #[test]

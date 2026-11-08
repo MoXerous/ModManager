@@ -43,6 +43,8 @@ pub enum ErrorCode {
     NotFound,
     /// 404 من المزوّد.
     ProviderApi,
+    /// المزوّد لا يقدّم هذه القدرة أصلاً (مثل البحث بالهاش)، وليس خطأً داخليًا.
+    Unsupported,
     RateLimited,
     /// `retry_after_seconds` يحمل الأوقات؛ الواجهة لا تحلّل نصًا.
     Timeout,
@@ -92,6 +94,7 @@ impl IpcError {
                 ErrorCode::NotFound
             }
             mm_core::providers::ProviderError::Api { .. } => ErrorCode::ProviderApi,
+            mm_core::providers::ProviderError::Unsupported { .. } => ErrorCode::Unsupported,
             mm_core::providers::ProviderError::RateLimited { .. } => ErrorCode::RateLimited,
             mm_core::providers::ProviderError::Timeout => ErrorCode::Timeout,
             mm_core::providers::ProviderError::Transport
@@ -102,6 +105,12 @@ impl IpcError {
             err.retry_after_seconds = Some(*reset_seconds);
         }
         err
+    }
+
+    /// A resolver failure carries the provider failure that caused it; the
+    /// code is the provider's code, not a generic `Internal`.
+    pub fn from_resolve(e: &mm_core::resolver::ResolveError) -> Self {
+        Self::from_provider(e.provider_error())
     }
 
     pub fn from_lock(e: &mm_core::instances::LockError) -> Self {

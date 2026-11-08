@@ -170,7 +170,7 @@ pub async fn build_install_plan(
     let existing = existing_filenames(instance_root)?;
     let plan = resolve_and_plan(&client, &slugs, &game_version, &loader, &existing)
         .await
-        .map_err(|e| IpcError::from_provider(&e))?;
+        .map_err(|e| IpcError::from_resolve(&e))?;
     Ok(InstallPlanDto {
         entries: plan.entries.iter().map(PlanEntryDto::from_core).collect(),
         summary: PlanSummaryDto {
@@ -619,7 +619,7 @@ pub async fn execute_install_with(
         &existing_filenames(Some(req.instance_root.clone()))?,
     )
     .await
-    .map_err(|e| IpcError::new(ErrorCode::ProviderApi, e.to_string()))?;
+    .map_err(|e| IpcError::from_resolve(&e))?;
 
     // Entries carry the identity; `versions` carries the file. An entry with no
     // downloadable file is skipped rather than guessed at.
