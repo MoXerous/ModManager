@@ -148,3 +148,60 @@ fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
     std::fs::write(&p, r#"{"schema_version":99,"entries":[]}"#).expect("write");
     assert!(matches!(read_lock(&p), Err(LockError::NewerSchema { .. })));
 }
+
+/// F-128: the lock is rewritten in place on every install, so its writer must
+/// never depend on the `.part` namespace (a transfer that resumes owns it) and
+/// must never leave a temporary behind. A stale `.part` is somebody else's
+/// file: it neither blocks the write nor gets deleted.
+#[test]
+fn spec_f128_write_lock_is_atomic_and_survives_stale_temp() {
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    let entry = |name: &str| LockEntry {
+        provider: "modrinth".to_string(),
+        project_id: "proj".to_string(),
+        slug: "a-mod".to_string(),
+        version_id: "v1".to_string(),
+        filename: name.to_string(),
+        sha1: "00".to_string(),
+        sha512: "ff".to_string(),
+    };
+
+    write_lock(
+        &p,
+        &LockFile {
+            entries: vec![entry("a.jar")],
+        },
+    )
+    .expect("first write");
+    assert_eq!(read_lock(&p).expect("read").entries[0].filename, "a.jar");
+
+    let part = d.path().join("instance.lock.json.part");
+    std::fs::write(&part, b"foreign part").expect("fixture");
+
+    write_lock(
+        &p,
+        &LockFile {
+            entries: vec![entry("b.jar")],
+        },
+    )
+    .expect("overwrite");
+    assert_eq!(
+        read_lock(&p).expect("read").entries[0].filename,
+        "b.jar",
+        "the second write must replace the first, not append to it"
+    );
+    assert_eq!(
+        std::fs::read(&part).expect("read"),
+        b"foreign part",
+        "a `.part` this writer never created must survive untouched"
+    );
+
+    let leftovers: Vec<String> = std::fs::read_dir(d.path())
+        .expect("ls")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporaries left: {leftovers:?}");
+}

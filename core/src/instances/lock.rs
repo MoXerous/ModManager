@@ -1,6 +1,11 @@
 //! `instance.lock.json`: pinned install state. Newer schemas are
 //! refused, never migrated silently (mirrors AGENTS.md §5.10).
 
+use crate::safety::atomic::{write_atomic_unique, AtomicError};
+
+/// The file name inside an instance root.
+pub const LOCK_FILE_NAME: &str = "instance.lock.json";
+
 /// Current lock schema; writers always emit this.
 pub const LOCK_SCHEMA_VERSION: u32 = 1;
 
@@ -79,7 +84,12 @@ pub fn write_lock(path: &std::path::Path, lock: &LockFile) -> Result<(), LockErr
         entries: lock.entries.clone(),
     };
     let text = serde_json::to_string_pretty(&doc).map_err(|_| LockError::Invalid)?;
-    std::fs::write(path, text).map_err(LockError::Io)?;
+    // The lock is the only durable record of what was installed, so a crash
+    // mid-write must leave the previous file intact, never a truncated one.
+    // `write_atomic_unique` uses a fresh temp per attempt: a stale `.part` or
+    // a temp left by a killed run can never block the next write.
+    let mut bytes = text.as_bytes();
+    write_atomic_unique(path, &mut bytes)?;
     Ok(())
 }
 
@@ -87,6 +97,8 @@ pub fn write_lock(path: &std::path::Path, lock: &LockFile) -> Result<(), LockErr
 pub enum LockError {
     #[error("io error")]
     Io(std::io::Error),
+    #[error(transparent)]
+    Atomic(#[from] AtomicError),
     #[error("invalid lock file")]
     Invalid,
     #[error("unsupported lock schema {found}, supported {supported}")]

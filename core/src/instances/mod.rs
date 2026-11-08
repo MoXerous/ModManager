@@ -5,11 +5,13 @@
 
 pub mod lock;
 pub mod metadata;
+pub mod record;
 pub mod recovery;
 pub mod registry;
 pub mod toggle;
 
-pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile};
+pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile, LOCK_FILE_NAME};
+pub use record::{record_install, InstalledRecord, RecordError};
 
 use crate::jar_reader::{classify_local_resource_type, ResourceType};
 use std::path::{Path, PathBuf};

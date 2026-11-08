@@ -631,6 +631,25 @@ pub async fn execute_install_with(
         ));
     }
 
+    // An install must be recordable. Checking the registry before the network
+    // turns a folder that could never be recorded into one clear refusal;
+    // downloading first and failing afterwards would land files nobody owns.
+    let registered = {
+        let root = root.clone();
+        state
+            .with_db(move |db| {
+                mm_core::db::instances::find_by_path(db, &root)
+                    .map(|row| row.is_some())
+                    .map_err(|e| IpcError::internal(e.to_string()))
+            })
+            .await?
+    };
+    if !registered {
+        return Err(IpcError::invalid_input(
+            "the instance folder is not registered; create the instance first",
+        ));
+    }
+
     let plan = resolve_and_plan(
         provider,
         &req.projects,
@@ -748,6 +767,36 @@ pub async fn execute_install_with(
         .await
         .map_err(|e| IpcError::io(e.to_string()))?;
     }
+
+    // The journal narrates an unfinished batch; the lock and the table are the
+    // record of what the batch installed. Only a fully successful batch gets
+    // here, so every item is a file that landed (a skipped item already held
+    // the right bytes and is just as installed).
+    //
+    // shortcut: a batch that fails halfway leaves its landed items out of the
+    // lock. The journal still names them; recording the partial set belongs to
+    // the batch-recovery slice, where the resume consumer will live.
+    let record_root = root.clone();
+    let records: Vec<mm_core::instances::InstalledRecord> = items
+        .iter()
+        .map(|item| mm_core::instances::InstalledRecord {
+            provider: provider.provider_id().to_string(),
+            project_id: item.project_id.clone(),
+            version_id: item.item_id.clone(),
+            file_name: item.filename.clone(),
+            sha1: item.sha1_hex.clone().unwrap_or_default(),
+            sha512: item.sha512_hex.clone().unwrap_or_default(),
+        })
+        .collect();
+    state
+        .with_db(move |db| {
+            mm_core::instances::record_install(db, &record_root, &records).map_err(|e| {
+                IpcError::internal(format!(
+                    "the files were installed but could not be recorded: {e}"
+                ))
+            })
+        })
+        .await?;
 
     Ok(InstallResultDto {
         operation_id,

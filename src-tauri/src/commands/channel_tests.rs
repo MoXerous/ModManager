@@ -130,6 +130,27 @@ async fn mount_modrinth(server: &MockServer, jar: &[u8]) {
 
 type Sink = Arc<Mutex<Vec<Value>>>;
 
+/// The command records what it installed in the registry's table, so the
+/// folder must be a registered instance before an install can target it.
+fn register_instance(db: &mm_core::db::Db, root: &std::path::Path) {
+    use mm_core::db::instances::{InstanceRow, InstanceSource};
+    mm_core::db::instances::insert(
+        db,
+        &InstanceRow {
+            id: "inst-1".to_string(),
+            name: "Test instance".to_string(),
+            path: root.to_path_buf(),
+            minecraft_root: root.to_path_buf(),
+            minecraft_version: Some("1.21.1".to_string()),
+            loader: Some("fabric".to_string()),
+            source: InstanceSource::Managed,
+            created_at: 0,
+            scanned_at: None,
+        },
+    )
+    .expect("instance row");
+}
+
 fn recording_channel(sink: &Sink) -> tauri::ipc::Channel<InstallEvent> {
     let sink = sink.clone();
     tauri::ipc::Channel::new(move |body| {
@@ -162,6 +183,7 @@ fn install_emits_a_well_formed_event_sequence_over_a_real_channel() {
         let root = dir.path().join("instance");
         std::fs::create_dir_all(root.join("mods")).expect("mkdir");
         let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
         let state = AppState::from_db(db);
 
         let sink: Sink = Arc::new(Mutex::new(vec![]));
@@ -185,6 +207,25 @@ fn install_emits_a_well_formed_event_sequence_over_a_real_channel() {
         let landed = root.join("mods").join("sodium-0.5.8.jar");
         assert!(landed.is_file(), "the jar did not land");
         assert_eq!(std::fs::read(&landed).expect("read"), jar);
+
+        // The install left a record: the identity and both hashes in the
+        // instance lock. Without this, "check for updates" would have nothing
+        // to ask about.
+        let lock = mm_core::instances::read_lock(&root.join("instance.lock.json"))
+            .expect("the install left no lock");
+        assert_eq!(
+            lock.entries.len(),
+            1,
+            "one file must produce one entry: {:?}",
+            lock.entries
+        );
+        let entry = &lock.entries[0];
+        assert_eq!(entry.provider, "modrinth");
+        assert_eq!(entry.project_id, "AANobbMI");
+        assert_eq!(entry.version_id, "vvvv");
+        assert_eq!(entry.filename, "sodium-0.5.8.jar");
+        assert_eq!(entry.sha512, sha512_hex(&jar));
+        assert_eq!(entry.sha1, sha1_hex(&jar));
 
         let events = sink.lock().expect("events").clone();
         assert!(!events.is_empty(), "the channel carried nothing at all");

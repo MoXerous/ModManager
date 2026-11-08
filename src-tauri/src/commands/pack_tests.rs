@@ -600,6 +600,22 @@ fn pack_apply_installs_overrides_and_verified_downloads_over_a_real_channel() {
             "the override bytes lie"
         );
 
+        // The download is recorded; the override has no provider hash and has
+        // no business in the lock. `record_install` keys the table by a project
+        // id the index does not carry, so this entry is lock-only.
+        let lock = mm_core::instances::read_lock(&root.join("instance.lock.json"))
+            .expect("the apply left no lock");
+        assert_eq!(
+            lock.entries.len(),
+            1,
+            "only the downloaded file is recordable: {:?}",
+            lock.entries
+        );
+        assert_eq!(lock.entries[0].filename, "packfile.jar");
+        assert_eq!(lock.entries[0].provider, "modrinth");
+        assert_eq!(lock.entries[0].project_id, "");
+        assert_eq!(lock.entries[0].sha512, sha512_hex(&jar));
+
         // The staging tree is executor cleanup's contract: gone when the run
         // ended, success included.
         assert!(

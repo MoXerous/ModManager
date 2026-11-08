@@ -55,7 +55,7 @@ use tauri::ipc::Channel;
 use zip::ZipArchive;
 
 use mm_core::journal::{Journal, JournalError, JournalOp, OperationKind, OperationRecord};
-use mm_core::modpack::archive::{plan_install, read_pack, InstallPlan, PackError};
+use mm_core::modpack::archive::{plan_install, read_pack, InstallOp, InstallPlan, PackError};
 use mm_core::modpack::exec::{self, ExecError, PackEvent, PackIdentity};
 use mm_core::modpack::mrpack::{Pack, STAGING_DIR};
 use mm_core::modpack::recovery as pack_recovery;
@@ -650,11 +650,77 @@ pub(super) async fn run_apply(
         Err(e) => return Err(exec_error(&e)),
     };
 
+    // The lock is the record of what an apply wrote. The pack index carries no
+    // project ids, so these records live in the lock only: inventing an id for
+    // the table would break the (instance, provider, project) identity.
+    //
+    // shortcut: a recovered apply finishes one that already wrote this half, so
+    // it does not record again; repeating the record is idempotent, but the
+    // plan is not rebuilt there yet.
+    let record_root = root.clone();
+    let records = downloaded_records(&report, &plan);
+    if !records.is_empty() {
+        state
+            .with_db(move |db| {
+                mm_core::instances::record_install(db, &record_root, &records).map_err(|e| {
+                    IpcError::internal(format!(
+                        "the pack was applied but could not be recorded: {e}"
+                    ))
+                })
+            })
+            .await?;
+    }
+
     Ok(ModpackApplyResultDto {
         written: report.written.len(),
         skipped: report.skipped.len(),
         bytes: report.bytes,
     })
+}
+
+/// The records for the files an apply downloaded.
+///
+/// Only `Download` items are ours: an override came out of the archive and has
+/// no provider hash. The SHA-512 comes from the same plan the executor
+/// consumed, matched by the normalized path the report names.
+fn downloaded_records(
+    report: &exec::ApplyReport,
+    plan: &InstallPlan,
+) -> Vec<mm_core::instances::InstalledRecord> {
+    report
+        .written
+        .iter()
+        .filter(|w| w.source == exec::AppliedSource::Download)
+        .filter_map(|w| {
+            let sha512 = plan.ops.iter().find_map(|op| match op {
+                InstallOp::Download {
+                    safe_path, sha512, ..
+                } if same_safe_path(safe_path, &w.safe_path) => Some(sha512.clone()),
+                _ => None,
+            })?;
+            Some(mm_core::instances::InstalledRecord {
+                provider: mm_core::providers::modrinth::PROVIDER_ID.to_string(),
+                project_id: String::new(),
+                version_id: String::new(),
+                file_name: file_name_of(&w.safe_path),
+                sha1: String::new(),
+                sha512,
+            })
+        })
+        .collect()
+}
+
+/// The archive names paths with `/`; a member may have come in with `\`.
+fn same_safe_path(a: &str, b: &str) -> bool {
+    a.replace('\\', "/") == b.replace('\\', "/")
+}
+
+fn file_name_of(safe_path: &str) -> String {
+    safe_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(safe_path)
+        .to_string()
 }
 
 // --- Pack recovery (F-076/F-146) -----------------------------------------

@@ -126,7 +126,10 @@ impl IpcError {
         let code = match e {
             mm_core::instances::LockError::NewerSchema { .. } => ErrorCode::NewerSchema,
             mm_core::instances::LockError::Invalid => ErrorCode::InvalidInput,
-            mm_core::instances::LockError::Io(_) => ErrorCode::Io,
+            // Both the read and the atomic write are disk failures.
+            mm_core::instances::LockError::Io(_) | mm_core::instances::LockError::Atomic(_) => {
+                ErrorCode::Io
+            }
         };
         Self::new(code, e)
     }
