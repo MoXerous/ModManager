@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Current schema version (`MIGRATIONS.len()`).
-pub const CURRENT_VERSION: u32 = 3;
+pub const CURRENT_VERSION: u32 = 4;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -176,7 +176,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(v, 3);
+        assert_eq!(v, CURRENT_VERSION, "open() always lands on the latest");
         let (name, source, minecraft_root, scanned_at): (String, String, String, Option<i64>) = db
             .conn
             .query_row(
@@ -189,6 +189,119 @@ mod tests {
         assert_eq!(source, "managed", "pre-existing rows default to managed");
         assert_eq!(minecraft_root, "");
         assert_eq!(scanned_at, None, "never scanned is NULL, not 0");
+    }
+
+    #[test]
+    fn spec_f133_upgrades_v3_to_v4_preserving_rows() {
+        let dir = crate::test_tempdir();
+        let p = dir.path().join("t.db");
+        {
+            let mut conn = rusqlite::Connection::open(&p).expect("raw open");
+            schema::migrations()
+                .to_version(&mut conn, 3)
+                .expect("to v3");
+            conn.execute(
+                "INSERT INTO instances (id, name, path, minecraft_version, loader, created_at)
+                 VALUES ('i1', 'n', 'p', '1.21', 'fabric', 1)",
+                [],
+            )
+            .expect("seed instance");
+            conn.execute(
+                "INSERT INTO installed_mods
+                 (id, instance_id, slug, version_id, file_name, installed_at)
+                 VALUES ('m1', 'i1', 's', 'v', 'f.jar', 1)",
+                [],
+            )
+            .expect("seed mod");
+        }
+        let db = open(&p).expect("upgrade");
+        let v: u32 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("version");
+        assert_eq!(v, 4);
+        let (id, provider, project_id, sha1): (String, String, String, Option<String>) = db
+            .conn
+            .query_row(
+                "SELECT id, provider, project_id, sha1 FROM installed_mods WHERE id = 'm1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("row preserved");
+        assert_eq!(id, "m1");
+        assert_eq!(provider, "", "no backfill: provider stays empty");
+        assert_eq!(project_id, "", "no backfill: project_id stays empty");
+        assert_eq!(sha1, None, "no verified SHA-1 for a legacy row");
+    }
+
+    #[test]
+    fn spec_f133_v4_identity_is_per_instance_and_provider() {
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        for id in ["i1", "i2"] {
+            db.conn
+                .execute(
+                    "INSERT INTO instances (id, name, path, minecraft_version, loader, created_at)
+                     VALUES (?1, 'n', ?1, '1.21', 'fabric', 1)",
+                    rusqlite::params![id],
+                )
+                .expect("seed instance");
+        }
+        let insert = |id: &str, instance: &str, provider: &str, project: &str| {
+            db.conn.execute(
+                "INSERT INTO installed_mods
+                 (id, instance_id, slug, version_id, file_name, installed_at, provider, project_id)
+                 VALUES (?1, ?2, 's', 'v', 'f.jar', 1, ?3, ?4)",
+                rusqlite::params![id, instance, provider, project],
+            )
+        };
+        insert("m1", "i1", "modrinth", "P1").expect("first row");
+        let err = insert("m2", "i1", "modrinth", "P1").expect_err("same identity");
+        let text = err.to_string();
+        assert!(
+            text.contains("UNIQUE"),
+            "expected a UNIQUE failure, got: {text}"
+        );
+        insert("m3", "i1", "curseforge", "P1").expect("same project under another provider");
+        insert("m4", "i2", "modrinth", "P1").expect("same project in another instance");
+    }
+
+    #[test]
+    fn spec_f133_v4_legacy_empty_identity_rows_are_not_blocked() {
+        let dir = crate::test_tempdir();
+        let p = dir.path().join("t.db");
+        {
+            let mut conn = rusqlite::Connection::open(&p).expect("raw open");
+            schema::migrations()
+                .to_version(&mut conn, 3)
+                .expect("to v3");
+            conn.execute(
+                "INSERT INTO instances (id, name, path, minecraft_version, loader, created_at)
+                 VALUES ('i1', 'n', 'p', '1.21', 'fabric', 1)",
+                [],
+            )
+            .expect("seed instance");
+            for id in ["m1", "m2"] {
+                conn.execute(
+                    "INSERT INTO installed_mods
+                     (id, instance_id, slug, version_id, file_name, installed_at)
+                     VALUES (?1, 'i1', 's', 'v', 'f.jar', 1)",
+                    rusqlite::params![id],
+                )
+                .expect("seed legacy mod");
+            }
+        }
+        let db = open(&p).expect("the partial index must let legacy rows through");
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM installed_mods
+                 WHERE instance_id = 'i1' AND provider = '' AND project_id = ''",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(n, 2, "both empty-identity rows survive");
     }
 
     #[test]
@@ -266,6 +379,19 @@ mod tests {
         db.conn
             .execute_batch("PRAGMA foreign_key_check")
             .expect("fk clean");
+        // v4 provider identity, and `slug` kept (ADR 0004 §5-4).
+        let mut stmt = db
+            .conn
+            .prepare("PRAGMA table_info(installed_mods)")
+            .expect("table_info");
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .expect("rows")
+            .map(|r| r.expect("column"))
+            .collect();
+        for want in ["slug", "provider", "project_id", "sha1"] {
+            assert!(cols.contains(&want.to_string()), "missing column {want}");
+        }
     }
 
     #[test]
@@ -348,6 +474,28 @@ mod tests {
         assert!(
             baks.iter().any(|n| n.to_string_lossy().ends_with(".bak")),
             "expected a .bak next to {p:?}, found {baks:?}"
+        );
+    }
+
+    #[test]
+    fn spec_f135_backup_created_before_v4_upgrade() {
+        let dir = crate::test_tempdir();
+        let p = dir.path().join("t.db");
+        {
+            let mut conn = rusqlite::Connection::open(&p).expect("raw open");
+            schema::migrations()
+                .to_version(&mut conn, 3)
+                .expect("to v3");
+        }
+        open(&p).expect("upgrade");
+        let baks: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("ls")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert!(
+            baks.iter()
+                .any(|n| n.to_string_lossy().contains(".pre-v3-to-v4.")),
+            "expected a v3-to-v4 .bak next to {p:?}, found {baks:?}"
         );
     }
 
