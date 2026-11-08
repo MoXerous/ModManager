@@ -5,11 +5,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::dto::{
-    AppInfo, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto, CurseForgeKeyDto,
-    ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto,
-    InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto,
-    PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto, SearchQueryDto,
-    TogglePlanDto, ToggleResultDto, WarningDto,
+    AppInfo, CheckUpdatesRequest, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto,
+    CurseForgeKeyDto, ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto,
+    InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
+    LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
+    SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::downloader::JournalOp;
@@ -271,6 +271,42 @@ pub async fn scan_instance(instance_root: String) -> Result<InstanceSnapshotDto,
     })
     .await
     .map_err(IpcError::internal)?
+}
+
+/// Read-only update preview (F-120): no journal, no lock rewrite, no row.
+///
+/// The provider is built before the folder is resolved so a missing
+/// CurseForge key or an unknown provider id is the answer, independent of
+/// which folder the webview named.
+#[tauri::command]
+pub async fn check_instance_updates(
+    state: tauri::State<'_, AppState>,
+    req: CheckUpdatesRequest,
+) -> Result<UpdatePreviewDto, IpcError> {
+    let provider = crate::providers::build(state.inner(), &req.provider)?;
+    check_updates_with(provider.as_ref(), req).await
+}
+
+/// The body of `check_instance_updates` with the provider as a parameter.
+///
+/// The seam exists for the same reason `execute_install_with` does: the
+/// bridge's own job - resolving the folder and mapping `UpdateError` to the
+/// typed code the UI translates - can be exercised without a network.
+pub(crate) async fn check_updates_with(
+    provider: &dyn mm_core::providers::Provider,
+    req: CheckUpdatesRequest,
+) -> Result<UpdatePreviewDto, IpcError> {
+    let root = resolve_dir(&req.instance_root)?;
+    mm_core::updates::check_updates(provider, &root, &req.game_version, &req.loader)
+        .await
+        .map(Into::into)
+        .map_err(|e| match &e {
+            mm_core::updates::UpdateError::NeedsConcreteTarget => {
+                IpcError::invalid_input(e.to_string())
+            }
+            mm_core::updates::UpdateError::Provider(p) => IpcError::from_provider(p),
+            mm_core::updates::UpdateError::Lock(l) => IpcError::from_lock(l),
+        })
 }
 
 #[tauri::command]
@@ -832,3 +868,5 @@ pub(crate) mod legacy_tests;
 pub(crate) mod pack_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+pub(crate) mod updates_tests;

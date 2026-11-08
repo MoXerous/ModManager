@@ -27,6 +27,7 @@ pub fn run() {
             commands::search_projects,
             commands::build_install_plan,
             commands::scan_instance,
+            commands::check_instance_updates,
             commands::preview_toggle,
             commands::execute_toggle,
             commands::list_instances,

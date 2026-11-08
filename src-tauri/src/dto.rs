@@ -392,6 +392,115 @@ pub struct InstanceSnapshotDto {
     pub locked: Vec<LockEntryDto>,
 }
 
+// --- updates (F-120) -----------------------------------------------------
+
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CheckUpdatesRequest {
+    pub instance_root: String,
+    /// `Provider::provider_id()`; the bridge rejects anything else.
+    pub provider: String,
+    pub game_version: String,
+    pub loader: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum UpdateStatusDto {
+    Available,
+    UpToDate,
+    Unidentified,
+    Unsupported,
+}
+
+impl From<mm_core::updates::UpdateStatus> for UpdateStatusDto {
+    fn from(status: mm_core::updates::UpdateStatus) -> Self {
+        match status {
+            mm_core::updates::UpdateStatus::Available => Self::Available,
+            mm_core::updates::UpdateStatus::UpToDate => Self::UpToDate,
+            mm_core::updates::UpdateStatus::Unidentified => Self::Unidentified,
+            mm_core::updates::UpdateStatus::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum UpdateWarningDto {
+    Unsupported,
+    EmptyLock,
+    LockUnreadable,
+}
+
+impl From<mm_core::updates::UpdateWarning> for UpdateWarningDto {
+    fn from(warning: mm_core::updates::UpdateWarning) -> Self {
+        match warning {
+            mm_core::updates::UpdateWarning::Unsupported => Self::Unsupported,
+            mm_core::updates::UpdateWarning::EmptyLock => Self::EmptyLock,
+            mm_core::updates::UpdateWarning::LockUnreadable => Self::LockUnreadable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateCandidateDto {
+    pub filename: String,
+    pub provider: String,
+    pub project_id: String,
+    pub current_version_id: String,
+    pub current_sha1: String,
+    pub current_sha512: String,
+    pub latest_version_id: Option<String>,
+    pub latest_version_number: Option<String>,
+    pub latest_filename: Option<String>,
+    pub latest_sha1: Option<String>,
+    pub latest_sha512: Option<String>,
+    pub status: UpdateStatusDto,
+}
+
+impl From<mm_core::updates::UpdateCandidate> for UpdateCandidateDto {
+    fn from(c: mm_core::updates::UpdateCandidate) -> Self {
+        Self {
+            filename: c.filename,
+            provider: c.provider,
+            project_id: c.project_id,
+            current_version_id: c.current_version_id,
+            current_sha1: c.current_sha1,
+            current_sha512: c.current_sha512,
+            latest_version_id: c.latest_version_id,
+            latest_version_number: c.latest_version_number,
+            latest_filename: c.latest_filename,
+            latest_sha1: c.latest_sha1,
+            latest_sha512: c.latest_sha512,
+            status: c.status.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdatePreviewDto {
+    pub checked: usize,
+    pub candidates: Vec<UpdateCandidateDto>,
+    pub warnings: Vec<UpdateWarningDto>,
+}
+
+impl From<mm_core::updates::UpdatePreview> for UpdatePreviewDto {
+    fn from(p: mm_core::updates::UpdatePreview) -> Self {
+        Self {
+            checked: p.checked,
+            candidates: p.candidates.into_iter().map(Into::into).collect(),
+            warnings: p.warnings.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 // --- toggle -------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

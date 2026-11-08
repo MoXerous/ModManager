@@ -123,7 +123,14 @@ function Card({
       {/* Expansion, not a page: the content belongs to the card it came from,
           and a fourth nav entry for one folder's jar list would be a lie about
           what the app is. The scan only happens once the user asks for it. */}
-      {open && <InstanceDetails root={row.path} onChanged={onChanged} />}
+      {open && (
+        <InstanceDetails
+          root={row.path}
+          gameVersion={row.minecraftVersion}
+          loader={row.loader}
+          onChanged={onChanged}
+        />
+      )}
     </article>
   );
 }

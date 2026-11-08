@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
+import type { CheckUpdatesRequest } from '../bindings/CheckUpdatesRequest';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
 import type { InstallEventDto } from '../bindings/InstallEventDto';
@@ -23,6 +24,7 @@ import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
+import type { UpdatePreviewDto } from '../bindings/UpdatePreviewDto';
 
 // الواجهة تصل إلى النواة عبر هذا الملف فقط.
 
@@ -83,6 +85,14 @@ export function buildInstallPlan(
 
 export function scanInstance(instanceRoot: string): Promise<InstanceSnapshotDto> {
   return invoke<InstanceSnapshotDto>('scan_instance', { instanceRoot });
+}
+
+/**
+ * فحص تحديثات للقراءة فقط: يقرأ قفل النسخة ويسأل المزوّد، ولا يكتب شيئًا.
+ * التثبيت الفعلي للتحديث خارج هذه الشريحة.
+ */
+export function checkInstanceUpdates(req: CheckUpdatesRequest): Promise<UpdatePreviewDto> {
+  return invoke<UpdatePreviewDto>('check_instance_updates', { req });
 }
 
 export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto> {
