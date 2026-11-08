@@ -8,6 +8,7 @@ pub mod downloader;
 pub mod instances;
 pub mod jar_reader;
 pub mod journal;
+pub mod legacy;
 pub mod logging;
 pub mod modpack;
 pub mod paths;
