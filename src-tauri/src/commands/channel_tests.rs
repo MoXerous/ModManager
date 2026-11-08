@@ -170,7 +170,8 @@ fn install_emits_a_well_formed_event_sequence_over_a_real_channel() {
 
         let req = InstallRequest {
             instance_root: root.to_string_lossy().into_owned(),
-            slugs: vec!["sodium".to_string()],
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
             game_version: "1.21.1".to_string(),
             loader: "fabric".to_string(),
         };
@@ -282,7 +283,8 @@ fn install_refuses_an_empty_slug_list_without_emitting_anything() {
 
         let req = InstallRequest {
             instance_root: dir.path().join("instance").to_string_lossy().into_owned(),
-            slugs: vec![],
+            projects: vec![],
+            provider: "modrinth".to_string(),
             game_version: "1.21.1".to_string(),
             loader: "fabric".to_string(),
         };

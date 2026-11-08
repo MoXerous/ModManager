@@ -9,6 +9,7 @@
 //! The operation journal is held beside it for the same reason, and is opened
 //! once against the resolved platform directories.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use mm_core::db::Db;
@@ -23,6 +24,10 @@ use crate::dto::IpcError;
 pub struct AppState {
     db: Arc<Mutex<Db>>,
     journal: Arc<Mutex<Journal>>,
+    /// Where `settings.json` and `curseforge.secret.json` live (ADR 0004
+    /// §2-1-1). Kept here because the secret is read and written by the
+    /// provider selector, which has no `Paths` of its own.
+    config_dir: PathBuf,
     /// Test seam: the private journal store this state owns.
     ///
     /// `None` in production, where the journal is the app's own directory.
@@ -31,6 +36,11 @@ pub struct AppState {
     /// per-state directory.
     #[cfg(test)]
     owned_journal_root: Option<Arc<tempfile::TempDir>>,
+    /// Test seam: the private config directory this state owns, for the same
+    /// reason as the journal store — two tests must never see each other's
+    /// key.
+    #[cfg(test)]
+    owned_config_root: Option<Arc<tempfile::TempDir>>,
 }
 
 impl AppState {
@@ -52,10 +62,13 @@ impl AppState {
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(paths.operations_dir()))),
+            config_dir: paths.config_dir().to_path_buf(),
             // Production owns no private store: the journal is the app's own
             // directory, and it outlives the state.
             #[cfg(test)]
             owned_journal_root: None,
+            #[cfg(test)]
+            owned_config_root: None,
         })
     }
 
@@ -70,11 +83,37 @@ impl AppState {
     #[cfg(test)]
     pub fn from_db(db: Db) -> Self {
         let root = tempfile::TempDir::new().expect("a private journal store");
+        // A config directory of its own: a shared one let one test's key
+        // answer another's lookup.
+        let config_root = tempfile::TempDir::new().expect("a private config directory");
+        let config_dir = config_root.path().join("config");
+        // `save_key` writes a sibling temp and renames it over the target, so
+        // the parent must exist before the first write.
+        std::fs::create_dir_all(&config_dir).expect("create the private config directory");
         Self {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(root.path()))),
+            config_dir,
             owned_journal_root: Some(Arc::new(root)),
+            owned_config_root: Some(Arc::new(config_root)),
         }
+    }
+
+    /// The config directory this state reads and writes (ADR 0004 §2-1-1).
+    pub fn config_dir(&self) -> &std::path::Path {
+        &self.config_dir
+    }
+
+    /// The root of the private config directory a test state owns.
+    ///
+    /// Test seam: the isolation test reads it to prove the status path is
+    /// under a private temp root, not the machine's real profile.
+    #[cfg(test)]
+    pub(crate) fn config_root(&self) -> &std::path::Path {
+        self.owned_config_root
+            .as_ref()
+            .expect("a test state owns a private config directory")
+            .path()
     }
 
     /// The private journal store this state owns.

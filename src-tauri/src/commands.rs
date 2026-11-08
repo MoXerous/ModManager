@@ -5,11 +5,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::dto::{
-    AppInfo, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto, ErrorCode,
-    InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto, InstanceSummaryDto,
-    IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto, PlanSummaryDto,
-    PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto,
-    ToggleResultDto, WarningDto,
+    AppInfo, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto, CurseForgeKeyDto,
+    ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto,
+    InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto,
+    PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto, SearchQueryDto,
+    TogglePlanDto, ToggleResultDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::downloader::JournalOp;
@@ -135,10 +135,21 @@ pub fn app_info() -> AppInfo {
 }
 
 #[tauri::command]
-pub async fn search_projects(query: SearchQueryDto) -> Result<SearchPageDto, IpcError> {
-    use mm_core::providers::{ModrinthClient, Provider};
-    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
-    let page = client
+pub async fn search_projects(
+    state: tauri::State<'_, AppState>,
+    query: SearchQueryDto,
+) -> Result<SearchPageDto, IpcError> {
+    let provider = crate::providers::build(state.inner(), &query.provider)?;
+    search_with(provider.as_ref(), query).await
+}
+
+/// The body of `search_projects`, with the provider as a parameter so a test
+/// can point a real client at wiremock without the selector's environment.
+pub(crate) async fn search_with(
+    provider: &dyn mm_core::providers::Provider,
+    query: SearchQueryDto,
+) -> Result<SearchPageDto, IpcError> {
+    let page = provider
         .search(&query.to_core())
         .await
         .map_err(|e| IpcError::from_provider(&e))?;
@@ -146,7 +157,7 @@ pub async fn search_projects(query: SearchQueryDto) -> Result<SearchPageDto, Ipc
         hits: page
             .hits
             .iter()
-            .map(|p| ProjectDto::from_core(p, client.provider_id()))
+            .map(|p| ProjectDto::from_core(p, provider.provider_id()))
             .collect(),
         total: page.total,
     })
@@ -156,21 +167,28 @@ pub async fn search_projects(query: SearchQueryDto) -> Result<SearchPageDto, Ipc
 /// construction). `existing_files` feeds the F-065 info warning.
 #[tauri::command]
 pub async fn build_install_plan(
-    slugs: Vec<String>,
+    state: tauri::State<'_, AppState>,
+    provider: String,
+    projects: Vec<String>,
     game_version: String,
     loader: String,
     instance_root: Option<String>,
 ) -> Result<InstallPlanDto, IpcError> {
-    use mm_core::providers::ModrinthClient;
     use mm_core::resolver::resolve_and_plan;
-    if slugs.is_empty() {
+    let client = crate::providers::build(state.inner(), &provider)?;
+    if projects.is_empty() {
         return Err(IpcError::invalid_input("no projects given"));
     }
-    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
     let existing = existing_filenames(instance_root)?;
-    let plan = resolve_and_plan(&client, &slugs, &game_version, &loader, &existing)
-        .await
-        .map_err(|e| IpcError::from_resolve(&e))?;
+    let plan = resolve_and_plan(
+        client.as_ref(),
+        &projects,
+        &game_version,
+        &loader,
+        &existing,
+    )
+    .await
+    .map_err(|e| IpcError::from_resolve(&e))?;
     Ok(InstallPlanDto {
         entries: plan.entries.iter().map(PlanEntryDto::from_core).collect(),
         summary: PlanSummaryDto {
@@ -573,12 +591,11 @@ pub async fn execute_install(
     req: InstallRequest,
     on_event: tauri::ipc::Channel<crate::dto::InstallEventDto>,
 ) -> Result<InstallResultDto, IpcError> {
-    use mm_core::providers::ModrinthClient;
-    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+    let provider = crate::providers::build(state.inner(), &req.provider)?;
     // Production is https-only. The flag is a parameter only so a test can
     // serve wiremock on loopback, which is what the downloader's own tests
     // do; nothing in the app ever sets it true.
-    execute_install_with(state.inner(), &client, req, on_event, false).await
+    execute_install_with(state.inner(), provider.as_ref(), req, on_event, false).await
 }
 
 /// The body of `execute_install`, with the provider and the state as parameters.
@@ -599,7 +616,7 @@ pub async fn execute_install_with(
     use mm_core::downloader::{BatchItem, Downloader, ItemProgress};
     use mm_core::resolver::resolve_and_plan;
 
-    if req.slugs.is_empty() {
+    if req.projects.is_empty() {
         return Err(IpcError::invalid_input("no projects given"));
     }
     let root = PathBuf::from(&req.instance_root);
@@ -613,7 +630,7 @@ pub async fn execute_install_with(
 
     let plan = resolve_and_plan(
         provider,
-        &req.slugs,
+        &req.projects,
         &req.game_version,
         &req.loader,
         &existing_filenames(Some(req.instance_root.clone()))?,
@@ -734,6 +751,25 @@ pub async fn execute_install_with(
         installed,
         skipped,
     })
+}
+
+/// Where the live CurseForge key comes from, and where its file lives — never
+/// the key itself (ADR 0004 §2-1-4/§2-1-5).
+#[tauri::command]
+pub fn curseforge_key_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<CurseForgeKeyDto, IpcError> {
+    crate::providers::key_status(state.inner())
+}
+
+/// Writes the CurseForge key the user just typed. The value goes in; the
+/// answer is the status DTO, never the key back.
+#[tauri::command]
+pub fn save_curseforge_key(
+    state: tauri::State<'_, AppState>,
+    key: String,
+) -> Result<CurseForgeKeyDto, IpcError> {
+    crate::providers::save_key(state.inner(), &key)
 }
 
 #[cfg(test)]

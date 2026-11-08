@@ -334,6 +334,7 @@ fn search_limit_is_clamped() {
     use crate::dto::SearchQueryDto;
     let too_many = SearchQueryDto {
         query: "x".to_string(),
+        provider: "modrinth".to_string(),
         game_version: None,
         loader: None,
         project_type: String::new(),

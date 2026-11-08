@@ -5,9 +5,16 @@
  *
  * Generated as a binding like every other request struct, so the webview
  * cannot drift from the Rust shape (AGENTS.md §5.3).
+ *
+ * One provider per request: `projects` are slugs for Modrinth and numeric mod
+ * ids for CurseForge, so a mixed list has no meaning.
  */
 export type InstallRequest = { 
 /**
  * Absolute path of the instance the mods go into.
  */
-instanceRoot: string, slugs: Array<string>, gameVersion: string, loader: string, };
+instanceRoot: string, 
+/**
+ * Slugs (Modrinth) or numeric mod ids (CurseForge) for `provider`.
+ */
+projects: Array<string>, provider: string, gameVersion: string, loader: string, };

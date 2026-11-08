@@ -21,6 +21,11 @@ pub mod secret;
 
 pub const CURSEFORGE_BASE: &str = "https://api.curseforge.com";
 
+/// The provider's identity, and the only place its name is written. Every
+/// layer above matches on this constant instead of repeating the literal
+/// (ADR 0004 §2-3).
+pub const PROVIDER_ID: &str = "curseforge";
+
 /// `gameId = 432` is Minecraft, `classId = 6` is Minecraft Mods (fixtures
 /// §7-4). No other game or class id was captured; guessing one is forbidden.
 const GAME_ID: u32 = 432;
@@ -421,7 +426,7 @@ fn reset_seconds(headers: &reqwest::header::HeaderMap) -> u64 {
 #[async_trait::async_trait]
 impl Provider for CurseForgeClient {
     fn provider_id(&self) -> &'static str {
-        "curseforge"
+        PROVIDER_ID
     }
 
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, ProviderError> {

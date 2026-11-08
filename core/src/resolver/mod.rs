@@ -31,6 +31,11 @@ mod provider_literal_guard {
     //! dependency for one assertion.
     use std::path::{Path, PathBuf};
 
+    /// Every provider name that may only appear inside its own module. Both
+    /// are matched quoted, so prose and `CurseForge` in a message are not
+    /// offenders (ADR 0004 §2-3).
+    const FORBIDDEN: [&str; 2] = ["\"modrinth\"", "\"curseforge\""];
+
     fn scan(dir: &Path, offenders: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -52,8 +57,10 @@ mod provider_literal_guard {
             };
             // Inline test modules may name fixtures; production code may not.
             let production = text.split("#[cfg(test)]").next().unwrap_or("");
-            if production.contains("\"modrinth\"") {
-                offenders.push(path.display().to_string());
+            for literal in FORBIDDEN {
+                if production.contains(literal) {
+                    offenders.push(format!("{} contains {literal}", path.display()));
+                }
             }
         }
     }
@@ -67,7 +74,7 @@ mod provider_literal_guard {
         }
         assert!(
             offenders.is_empty(),
-            "hard-coded \"modrinth\" outside provider modules: {offenders:?}"
+            "hard-coded provider name outside its module: {offenders:?}"
         );
     }
 }

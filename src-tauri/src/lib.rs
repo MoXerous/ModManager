@@ -1,6 +1,7 @@
 mod commands;
 mod dto;
 mod progress;
+mod providers;
 mod state;
 
 use state::AppState;
@@ -37,6 +38,8 @@ pub fn run() {
             commands::abandon_create,
             commands::open_instance_folder,
             commands::execute_install,
+            commands::curseforge_key_status,
+            commands::save_curseforge_key,
             // The pack commands are the module's own: `generate_handler!`
             // resolves the macro support next to each function, so the path
             // has to be the module that defines them.

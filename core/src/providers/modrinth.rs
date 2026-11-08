@@ -12,6 +12,11 @@ use std::collections::HashMap;
 
 pub const MODRINTH_BASE: &str = "https://api.modrinth.com/v2";
 
+/// The provider's identity, and the only place its name is written. Every
+/// layer above matches on this constant instead of repeating the literal
+/// (ADR 0004 §2-3).
+pub const PROVIDER_ID: &str = "modrinth";
+
 pub struct ModrinthClient {
     client: reqwest::Client,
     base: String,
@@ -315,7 +320,7 @@ impl ModrinthClient {
 #[async_trait::async_trait]
 impl Provider for ModrinthClient {
     fn provider_id(&self) -> &'static str {
-        "modrinth"
+        PROVIDER_ID
     }
 
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, ProviderError> {

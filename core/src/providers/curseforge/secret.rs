@@ -75,7 +75,14 @@ struct SecretFile {
 }
 
 pub fn secret_path(paths: &Paths) -> PathBuf {
-    paths.config_dir().join(SECRET_FILE_NAME)
+    secret_path_in(paths.config_dir())
+}
+
+/// The same location, for a caller that holds only the config directory (the
+/// IPC bridge, which has no `Paths`). `secret_path` delegates here so the two
+/// cannot drift.
+pub fn secret_path_in(config_dir: &Path) -> PathBuf {
+    config_dir.join(SECRET_FILE_NAME)
 }
 
 /// Read the key from `path`, falling back to `env` only when the file is

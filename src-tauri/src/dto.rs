@@ -130,6 +130,13 @@ impl IpcError {
         };
         Self::new(code, e)
     }
+
+    /// A key-file failure (ADR 0004 §2-1-4). `SecretError`'s messages are fixed
+    /// strings and paths and never contain the key, so echoing its `Display` is
+    /// safe; it must stay that way — do not add a variant that quotes content.
+    pub fn from_secret(e: &mm_core::providers::curseforge::secret::SecretError) -> Self {
+        Self::new(ErrorCode::Internal, e)
+    }
 }
 
 // --- search -------------------------------------------------------------
@@ -138,6 +145,10 @@ impl IpcError {
 #[serde(rename_all = "camelCase")]
 pub struct SearchQueryDto {
     pub query: String,
+    /// Which provider answers. Defaulted so an older caller cannot silently
+    /// change meaning; the value is matched in `crate::providers`, never here.
+    #[serde(default = "default_provider")]
+    pub provider: String,
     #[serde(default)]
     pub game_version: Option<String>,
     #[serde(default)]
@@ -152,6 +163,10 @@ pub struct SearchQueryDto {
 
 fn default_project_type() -> String {
     "mod".to_string()
+}
+
+fn default_provider() -> String {
+    mm_core::providers::modrinth::PROVIDER_ID.to_string()
 }
 
 fn default_limit() -> u32 {
@@ -216,6 +231,33 @@ pub struct SearchPageDto {
     pub hits: Vec<ProjectDto>,
     #[ts(type = "number")]
     pub total: u64,
+}
+
+// --- provider key (F-014, ADR 0004 §2-1-4) ------------------------------
+//
+// Settings shows the *source* of the live key and the path of the file, never
+// the key itself (ADR 0004 §2-1-5). There is deliberately no key field on
+// `CurseForgeKeyDto`: adding one would be the leak the ADR forbids.
+
+/// Where the live CurseForge key came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum KeySourceDto {
+    File,
+    Environment,
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CurseForgeKeyDto {
+    pub source: KeySourceDto,
+    pub has_key: bool,
+    /// `config_dir/curseforge.secret.json` — a path is not a secret, and the
+    /// screen needs it to explain the roaming caveat (ADR 0004 §2-1-7).
+    pub path: String,
 }
 
 // --- plan ---------------------------------------------------------------
@@ -501,13 +543,19 @@ use serde::Deserialize;
 ///
 /// Generated as a binding like every other request struct, so the webview
 /// cannot drift from the Rust shape (AGENTS.md §5.3).
+///
+/// One provider per request: `projects` are slugs for Modrinth and numeric mod
+/// ids for CurseForge, so a mixed list has no meaning.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct InstallRequest {
     /// Absolute path of the instance the mods go into.
     pub instance_root: String,
-    pub slugs: Vec<String>,
+    /// Slugs (Modrinth) or numeric mod ids (CurseForge) for `provider`.
+    pub projects: Vec<String>,
+    #[serde(default = "default_provider")]
+    pub provider: String,
     pub game_version: String,
     pub loader: String,
 }
