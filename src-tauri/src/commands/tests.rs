@@ -168,6 +168,14 @@ fn spec_f019_provider_errors_map_to_codes() {
     use mm_core::providers::ProviderError;
     let cases: Vec<(ProviderError, ErrorCode)> = vec![
         (ProviderError::Api { status: 404 }, ErrorCode::NotFound),
+        (
+            ProviderError::Api { status: 401 },
+            ErrorCode::ProviderUnauthorized,
+        ),
+        (
+            ProviderError::Api { status: 403 },
+            ErrorCode::ProviderUnauthorized,
+        ),
         (ProviderError::Api { status: 503 }, ErrorCode::ProviderApi),
         (
             ProviderError::Unsupported {
@@ -215,6 +223,47 @@ fn spec_f019_unsupported_has_a_distinct_code_and_is_translated_in_both_locales()
             parsed.get("error.unsupported").is_some(),
             "{locale} has no error.unsupported"
         );
+    }
+}
+
+/// Every code the UI can receive must have `error.<code>` in both locales.
+/// The frontend renders `t('error.' + code)` with no fallback, so a missing key
+/// shows the key itself to the user.
+#[test]
+fn spec_f019_every_error_code_is_translated_in_both_locales() {
+    let codes = [
+        ErrorCode::Internal,
+        ErrorCode::InvalidInput,
+        ErrorCode::PackChanged,
+        ErrorCode::NotFound,
+        ErrorCode::ProviderApi,
+        ErrorCode::ProviderUnauthorized,
+        ErrorCode::Unsupported,
+        ErrorCode::RateLimited,
+        ErrorCode::Timeout,
+        ErrorCode::Io,
+        ErrorCode::NewerSchema,
+    ];
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("i18n");
+    for locale in ["ar.json", "en.json"] {
+        let text = std::fs::read_to_string(root.join(locale))
+            .unwrap_or_else(|e| panic!("cannot read {locale}: {e}"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{locale} is not JSON: {e}"));
+        for code in codes {
+            // The serialized name is exactly the suffix the UI interpolates.
+            let name = serde_json::to_value(code)
+                .expect("ErrorCode serializes")
+                .as_str()
+                .expect("ErrorCode is a string")
+                .to_owned();
+            let key = format!("error.{name}");
+            assert!(parsed.get(&key).is_some(), "{locale} has no {key}");
+        }
     }
 }
 

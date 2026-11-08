@@ -59,6 +59,7 @@
   "error.packChanged": "The pack file changed after the plan was shown. Show the plan again before installing.",
   "error.notFound": "The requested item was not found.",
   "error.providerApi": "The mod provider rejected the request.",
+  "error.providerUnauthorized": "A CurseForge API key is required or was rejected. Open Settings, add a valid key, and try again.",
   "error.unsupported": "The mod provider does not support this operation.",
   "error.rateLimited": "Too many requests. Try again later.",
   "error.timeout": "The request timed out.",

@@ -43,6 +43,8 @@ pub enum ErrorCode {
     NotFound,
     /// 404 من المزوّد.
     ProviderApi,
+    /// 401/403 من المزوّد: المفتاح مفقود أو مرفوض، والواجهة توجّه إلى الإعدادات.
+    ProviderUnauthorized,
     /// المزوّد لا يقدّم هذه القدرة أصلاً (مثل البحث بالهاش)، وليس خطأً داخليًا.
     Unsupported,
     RateLimited,
@@ -92,6 +94,13 @@ impl IpcError {
         let code = match e {
             mm_core::providers::ProviderError::Api { status } if *status == 404 => {
                 ErrorCode::NotFound
+            }
+            // Missing or rejected credentials are actionable by the user, not a
+            // generic provider refusal: the UI points at Settings.
+            mm_core::providers::ProviderError::Api { status }
+                if *status == 401 || *status == 403 =>
+            {
+                ErrorCode::ProviderUnauthorized
             }
             mm_core::providers::ProviderError::Api { .. } => ErrorCode::ProviderApi,
             mm_core::providers::ProviderError::Unsupported { .. } => ErrorCode::Unsupported,

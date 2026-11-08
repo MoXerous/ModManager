@@ -3,8 +3,10 @@
 //! Only provider-agnostic shapes cross the trait. CurseForge has zero
 //! behavioural reference and arrives in M3 as a second implementation.
 
+pub mod curseforge;
 pub mod modrinth;
 
+pub use curseforge::{CurseForgeClient, CURSEFORGE_BASE};
 pub use modrinth::{ModrinthClient, MODRINTH_BASE};
 
 use std::collections::HashMap;
@@ -126,6 +128,16 @@ pub trait Provider: Send + Sync {
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, ProviderError>;
     async fn get_project(&self, id_or_slug: &str) -> Result<Project, ProviderError>;
     async fn get_version(&self, id: &str) -> Result<Version, ProviderError>;
+    /// Fetch one version by id. Providers whose file ids are not globally
+    /// unique override this; the default keeps Modrinth's one-request path.
+    async fn get_version_in_project(
+        &self,
+        project_id: &str,
+        version_id: &str,
+    ) -> Result<Version, ProviderError> {
+        let _ = project_id;
+        self.get_version(version_id).await
+    }
     async fn get_versions(
         &self,
         id_or_slug: &str,

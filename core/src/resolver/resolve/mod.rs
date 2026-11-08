@@ -285,7 +285,7 @@ pub async fn resolve_project(
         || params.pin.version_number.is_some()
     {
         if let Some(id) = params.pin.version_id.as_deref() {
-            if let Ok(v) = provider.get_version(id).await {
+            if let Ok(v) = provider.get_version_in_project(&project.id, id).await {
                 if v.project_id == project.id
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(&v), &game, &candidates).is_none()
@@ -524,7 +524,7 @@ pub async fn resolve_dependency(
     // Method 1: pinned version id via the single-version endpoint; a
     // miss, mismatch, or incompatibility falls back to the list scan.
     if let Some(vid) = dep.version_id.as_deref() {
-        if let Ok(v) = provider.get_version(vid).await {
+        if let Ok(v) = provider.get_version_in_project(&dep_id, vid).await {
             if v.project_id == dep_id && compatibility_issue(Some(&v), &game, &candidates).is_none()
             {
                 let mut r = compatible(&project, &ptype, &v);
