@@ -23,3 +23,51 @@ pub use plan::{
     Warning,
 };
 pub use resolve::{resolve_dependency, resolve_project, PreferredPin, ResolveError, ResolveParams};
+
+#[cfg(test)]
+mod provider_literal_guard {
+    //! ADR 0004 §2-3: provider names are filled from `Provider::provider_id()`
+    //! only. This reads source text because a proc macro would be a new
+    //! dependency for one assertion.
+    use std::path::{Path, PathBuf};
+
+    fn scan(dir: &Path, offenders: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, offenders);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // Inline test modules may name fixtures; production code may not.
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            if production.contains("\"modrinth\"") {
+                offenders.push(path.display().to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn spec_f014_no_hardcoded_provider_name_outside_provider_modules() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut offenders = Vec::new();
+        for rel in ["src/resolver", "../cli/src", "../src-tauri/src"] {
+            scan(&root.join(rel), &mut offenders);
+        }
+        assert!(
+            offenders.is_empty(),
+            "hard-coded \"modrinth\" outside provider modules: {offenders:?}"
+        );
+    }
+}

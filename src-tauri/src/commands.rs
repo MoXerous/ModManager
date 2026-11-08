@@ -146,7 +146,7 @@ pub async fn search_projects(query: SearchQueryDto) -> Result<SearchPageDto, Ipc
         hits: page
             .hits
             .iter()
-            .map(|p| ProjectDto::from_core(p, "modrinth"))
+            .map(|p| ProjectDto::from_core(p, client.provider_id()))
             .collect(),
         total: page.total,
     })

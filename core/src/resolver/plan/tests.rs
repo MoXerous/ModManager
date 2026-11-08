@@ -1,6 +1,7 @@
 //! Plan tests: read-only preview + non-blocking warnings.
 
 use super::*;
+use crate::providers::VersionDependency;
 use crate::resolver::graph::tests::{file, resolved, version};
 use crate::resolver::graph::{ResolvedContent, ReviewCandidate};
 use std::collections::HashSet;
@@ -135,6 +136,73 @@ fn spec_f065_existing_destination_file_is_info() {
     let ws = build_safety_warnings(&entries, &[good], &existing);
     let info = ws.iter().find(|w| w.severity == "info").expect("info warn");
     assert!(info.message.contains("already exists"), "{}", info.message);
+}
+
+#[test]
+fn spec_f014_same_project_id_under_two_providers_is_not_merged() {
+    // `project_id` is provider-scoped. The old merge key was the bare id, so
+    // a Modrinth project and a CurseForge project with the same numeric id
+    // collapsed into one entry and one of them silently disappeared.
+    let mut modrinth = resolved("shared", Some(version("vm", "shared")));
+    modrinth.provider = "modrinth".to_string();
+    modrinth.title = "Modrinth Copy".to_string();
+    let mut curseforge = resolved("shared", Some(version("vc", "shared")));
+    curseforge.provider = "curseforge".to_string();
+    curseforge.title = "CurseForge Copy".to_string();
+    let (entries, summary) =
+        build_batch_install_plan(&[modrinth, curseforge], &[], "1.21", "fabric");
+    assert_eq!(entries.len(), 2, "provider is part of the merge key");
+    assert_eq!(summary.total_count, 2);
+    assert_eq!(entries[0].provider, "modrinth");
+    assert_eq!(entries[1].provider, "curseforge");
+}
+
+#[test]
+fn spec_f014_plan_entry_carries_the_content_provider() {
+    let mut good = resolved("a", Some(version("v1", "a")));
+    good.provider = "curseforge".to_string();
+    let mut blocked = resolved("b", None);
+    blocked.provider = "curseforge".to_string();
+    let (entries, _) = build_batch_install_plan(&[good, blocked], &[], "1.21", "fabric");
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|e| e.provider == "curseforge"));
+}
+
+#[test]
+fn spec_f014_unclassified_dependencies_emit_one_warning() {
+    // ADR 0004 §2-2-4: raw `unknown:<n>` relations are counted once, never
+    // guessed into required/optional, and never block the entry.
+    let mut v = version("v1", "a");
+    v.dependencies = (0..8)
+        .map(|i| VersionDependency {
+            project_id: Some(format!("dep{i}")),
+            version_id: None,
+            file_name: None,
+            dependency_type: format!("unknown:{}", if i % 2 == 0 { 2 } else { 3 }),
+        })
+        .collect();
+    let mut content = resolved("a", Some(v));
+    content.provider = "curseforge".to_string();
+    content.title = "Mystery Mod".to_string();
+    let (entries, _) =
+        build_batch_install_plan(std::slice::from_ref(&content), &[], "1.21", "fabric");
+    assert_eq!(entries[0].status, "downloadable");
+
+    let warnings = build_safety_warnings(&entries, std::slice::from_ref(&content), &HashSet::new());
+
+    assert_eq!(warnings.len(), 1, "one warning, not one per dependency");
+    assert_eq!(warnings[0].severity, "warning");
+    let msg = &warnings[0].message;
+    assert!(msg.contains("Mystery Mod"), "{msg}");
+    assert!(
+        msg.contains("declares 8 curseforge dependencies whose relation type is unclassified"),
+        "{msg}"
+    );
+    assert!(msg.contains("(2, 3, 2, 3, 2, 3 ...)"), "{msg}");
+    assert_eq!(
+        entries[0].status, "downloadable",
+        "the warning must not block the entry"
+    );
 }
 
 #[test]

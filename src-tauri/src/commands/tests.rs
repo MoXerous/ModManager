@@ -350,6 +350,7 @@ fn search_limit_is_clamped() {
 fn dto_camel_case_shape_is_stable() {
     let dto = crate::dto::PlanEntryDto {
         source: "selected".to_string(),
+        provider: "modrinth".to_string(),
         project_id: "p".to_string(),
         title: "t".to_string(),
         project_type: "mod".to_string(),

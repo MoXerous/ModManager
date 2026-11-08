@@ -189,7 +189,7 @@ pub struct ProjectDto {
     #[ts(type = "number")]
     pub downloads: u64,
     pub icon_url: Option<String>,
-    /// Provider identity from day one (only Modrinth today).
+    /// Provider identity from day one (`Provider::provider_id()`).
     pub provider_id: String,
 }
 
@@ -229,6 +229,8 @@ pub struct SearchPageDto {
 #[ts(export)]
 pub struct PlanEntryDto {
     pub source: String,
+    /// `Provider::provider_id()` of the content this entry came from.
+    pub provider: String,
     pub project_id: String,
     pub title: String,
     pub project_type: String,
@@ -245,6 +247,7 @@ impl PlanEntryDto {
     pub fn from_core(e: &mm_core::resolver::PlanEntry) -> Self {
         Self {
             source: e.source.clone(),
+            provider: e.provider.clone(),
             project_id: e.project_id.clone(),
             title: e.title.clone(),
             project_type: e.project_type.clone(),

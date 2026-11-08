@@ -1,7 +1,7 @@
-//! Content providers: trait + Modrinth (API v2).
+//! Content providers: trait + Modrinth (API v2) and CurseForge (v1).
 //!
-//! Only provider-agnostic shapes cross the trait. CurseForge has zero
-//! behavioural reference and arrives in M3 as a second implementation.
+//! Only provider-agnostic shapes cross the trait. CurseForge is the second
+//! implementation, built from captured fixtures and keyed by ADR 0004.
 
 pub mod curseforge;
 pub mod modrinth;

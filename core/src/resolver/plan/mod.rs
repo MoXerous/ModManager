@@ -14,6 +14,8 @@ use std::collections::{HashMap, HashSet};
 pub struct PlanEntry {
     /// `selected` | `dependency`.
     pub source: String,
+    /// `Provider::provider_id()` of the content this entry came from.
+    pub provider: String,
     pub project_id: String,
     pub title: String,
     pub project_type: String,
@@ -46,20 +48,27 @@ pub struct Warning {
     pub message: String,
 }
 
-fn project_key(r: &ResolvedContent) -> String {
+fn content_id(r: &ResolvedContent) -> &str {
     if !r.project_id.is_empty() {
-        r.project_id.clone()
+        &r.project_id
     } else if !r.slug.is_empty() {
-        r.slug.clone()
+        &r.slug
     } else {
-        r.title.clone()
+        &r.title
     }
+}
+
+/// Provider identity plus project identity: the same numeric id under two
+/// providers is two different projects (ADR 0004 §2-3).
+fn project_key(r: &ResolvedContent) -> (String, String) {
+    (r.provider.clone(), content_id(r).to_string())
 }
 
 fn entry_for(r: &ResolvedContent, source: &str, dependency_type: &str) -> PlanEntry {
     match &r.version {
         None => PlanEntry {
             source: source.to_string(),
+            provider: r.provider.clone(),
             project_id: r.project_id.clone(),
             title: r.title.clone(),
             project_type: r.project_type.clone(),
@@ -79,6 +88,7 @@ fn entry_for(r: &ResolvedContent, source: &str, dependency_type: &str) -> PlanEn
         Some(v) => match primary_file(v).filter(|f| !f.url.is_empty()) {
             None => PlanEntry {
                 source: source.to_string(),
+                provider: r.provider.clone(),
                 project_id: r.project_id.clone(),
                 title: r.title.clone(),
                 project_type: r.project_type.clone(),
@@ -92,6 +102,7 @@ fn entry_for(r: &ResolvedContent, source: &str, dependency_type: &str) -> PlanEn
             },
             Some(f) => PlanEntry {
                 source: source.to_string(),
+                provider: r.provider.clone(),
                 project_id: r.project_id.clone(),
                 title: r.title.clone(),
                 project_type: r.project_type.clone(),
@@ -116,7 +127,7 @@ pub fn build_batch_install_plan(
     loader: &str,
 ) -> (Vec<PlanEntry>, PlanSummary) {
     let mut entries: Vec<PlanEntry> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
     for r in selected {
         if seen.insert(project_key(r)) {
             entries.push(entry_for(r, "selected", ""));
@@ -163,22 +174,16 @@ pub fn build_safety_warnings(
 ) -> Vec<Warning> {
     let mut out: Vec<Warning> = Vec::new();
 
-    // 1. Same project key under two titles.
-    let mut titles: HashMap<&str, &str> = HashMap::new();
+    // 1. Same (provider, project) key under two titles.
+    let mut titles: HashMap<(&str, &str), &str> = HashMap::new();
     for r in resolved {
-        let key = if !r.project_id.is_empty() {
-            r.project_id.as_str()
-        } else if !r.slug.is_empty() {
-            r.slug.as_str()
-        } else {
-            r.title.as_str()
-        };
-        match titles.get(key) {
+        let key = (r.provider.as_str(), content_id(r));
+        match titles.get(&key) {
             Some(prev) if **prev != r.title => out.push(Warning {
                 severity: "warning".to_string(),
                 message: format!(
-                    "The same Modrinth project appears more than once: {prev} and {}.",
-                    r.title
+                    "The same {} project appears more than once: {prev} and {}.",
+                    r.provider, r.title
                 ),
             }),
             _ => {
@@ -261,7 +266,38 @@ pub fn build_safety_warnings(
         });
     }
 
-    // 7. Modrinth marks something incompatible.
+    // 6b. Unclassified dependency relations (ADR 0004 §2-2-4): kept raw as
+    // `unknown:<n>`, never guessed, and never silently dropped. One warning
+    // per content; the first six raw values are shown.
+    for r in resolved {
+        let Some(v) = &r.version else {
+            continue;
+        };
+        let raws: Vec<&str> = v
+            .dependencies
+            .iter()
+            .filter_map(|d| d.dependency_type.strip_prefix("unknown:"))
+            .collect();
+        if raws.is_empty() {
+            continue;
+        }
+        let shown: Vec<&str> = raws.iter().take(6).copied().collect();
+        let mut raw_text = shown.join(", ");
+        if raws.len() > 6 {
+            raw_text.push_str(" ...");
+        }
+        out.push(Warning {
+            severity: "warning".to_string(),
+            message: format!(
+                "{} declares {} {} dependencies whose relation type is unclassified ({raw_text}); they were not resolved.",
+                r.title,
+                raws.len(),
+                r.provider
+            ),
+        });
+    }
+
+    // 7. The provider marks something incompatible.
     for r in resolved {
         let flagged = r.status == "incompatible"
             || r.version
@@ -276,8 +312,8 @@ pub fn build_safety_warnings(
             out.push(Warning {
                 severity: "warning".to_string(),
                 message: format!(
-                    "Modrinth metadata marks one of the selected projects/versions as incompatible: {}.",
-                    r.title
+                    "{} metadata marks one of the selected projects/versions as incompatible: {}.",
+                    r.provider, r.title
                 ),
             });
         }
@@ -318,7 +354,9 @@ pub fn build_safety_warnings(
         };
         out.push(Warning {
             severity: "info".to_string(),
-            message: format!("This version lists {embedded} embedded {noun} in Modrinth metadata."),
+            message: format!(
+                "This version lists {embedded} embedded {noun} in the provider metadata."
+            ),
         });
     }
 

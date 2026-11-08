@@ -83,7 +83,7 @@ fn or_any(value: &str, fallback: &str) -> String {
     }
 }
 
-fn resolve_key(params: &ResolveParams) -> ResolveKey {
+fn resolve_key(params: &ResolveParams, provider: &str) -> ResolveKey {
     let sha = params
         .pin
         .file_sha1
@@ -91,6 +91,7 @@ fn resolve_key(params: &ResolveParams) -> ResolveKey {
         .unwrap_or_default()
         .to_lowercase();
     ResolveKey {
+        provider: provider.to_string(),
         project_id: params.project.id.clone(),
         slug: params.project.slug.clone().unwrap_or_default(),
         project_type: or_any(&params.project_type, "mod"),
@@ -162,8 +163,14 @@ async fn versions_cached(
     Ok(vs)
 }
 
-fn compatible(content: &Project, ptype: &str, version: &Version) -> ResolvedContent {
+fn compatible(
+    content: &Project,
+    ptype: &str,
+    version: &Version,
+    provider: &str,
+) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: content.id.clone(),
         slug: content.slug.clone().unwrap_or_default(),
         title: content.title.clone(),
@@ -174,8 +181,15 @@ fn compatible(content: &Project, ptype: &str, version: &Version) -> ResolvedCont
     }
 }
 
-fn blocked(content: &Project, ptype: &str, status: &str, reason: String) -> ResolvedContent {
+fn blocked(
+    content: &Project,
+    ptype: &str,
+    status: &str,
+    reason: String,
+    provider: &str,
+) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: content.id.clone(),
         slug: content.slug.clone().unwrap_or_default(),
         title: content.title.clone(),
@@ -203,6 +217,7 @@ fn unsupported_pin(
         format!(
             "{provider_id} cannot resolve a version by SHA-1: {error}. The pinned file {sha1} was not checked, and no other version was substituted."
         ),
+        provider_id,
     )
 }
 
@@ -243,7 +258,7 @@ pub async fn resolve_project(
     cache: &mut RunCache,
     params: &ResolveParams,
 ) -> Result<ResolvedContent, ResolveError> {
-    let key = resolve_key(params);
+    let key = resolve_key(params, provider.provider_id());
     if let Some(hit) = cache.resolved(&key) {
         return Ok(hit);
     }
@@ -266,6 +281,7 @@ pub async fn resolve_project(
             &ptype,
             "browse-only",
             "This project is browse-only and has no downloadable version.".to_string(),
+            provider.provider_id(),
         );
         cache.put_resolved(key, r.clone());
         return Ok(r);
@@ -290,7 +306,10 @@ pub async fn resolve_project(
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(&v), &game, &candidates).is_none()
                 {
-                    return Ok(finish(cache, compatible(&project, &ptype, &v)));
+                    return Ok(finish(
+                        cache,
+                        compatible(&project, &ptype, &v, provider.provider_id()),
+                    ));
                 }
             }
         }
@@ -309,12 +328,20 @@ pub async fn resolve_project(
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(v), &game, &candidates).is_none()
             }) {
-                return Ok(finish(cache, compatible(&project, &ptype, v)));
+                return Ok(finish(
+                    cache,
+                    compatible(&project, &ptype, v, provider.provider_id()),
+                ));
             }
         }
         if let Some(sha) = params.pin.file_sha1.as_deref() {
             match hash_lookup(provider, cache, &project.id, sha, &game, &candidates).await {
-                Ok(Some(v)) => return Ok(finish(cache, compatible(&project, &ptype, &v))),
+                Ok(Some(v)) => {
+                    return Ok(finish(
+                        cache,
+                        compatible(&project, &ptype, &v, provider.provider_id()),
+                    ))
+                }
                 // A real "no version has this hash" answer: the existing
                 // fallback may still resolve a compatible version.
                 Ok(None) => {}
@@ -340,7 +367,10 @@ pub async fn resolve_project(
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(v), &game, &candidates).is_none()
             }) {
-                return Ok(finish(cache, compatible(&project, &ptype, v)));
+                return Ok(finish(
+                    cache,
+                    compatible(&project, &ptype, v, provider.provider_id()),
+                ));
             }
         }
     }
@@ -352,6 +382,7 @@ pub async fn resolve_project(
             continue;
         }
         let bkey = BestKey {
+            provider: provider.provider_id().to_string(),
             project_id: project.id.clone(),
             game_version: game.clone(),
             loader: cand.clone(),
@@ -359,7 +390,10 @@ pub async fn resolve_project(
         };
         if let Some(hit) = cache.best(&bkey) {
             if let Some(v) = hit {
-                return Ok(finish(cache, compatible(&project, &ptype, &v)));
+                return Ok(finish(
+                    cache,
+                    compatible(&project, &ptype, &v, provider.provider_id()),
+                ));
             }
             continue;
         }
@@ -382,7 +416,10 @@ pub async fn resolve_project(
             .cloned();
         cache.put_best(bkey, pick.clone());
         if let Some(v) = pick {
-            return Ok(finish(cache, compatible(&project, &ptype, &v)));
+            return Ok(finish(
+                cache,
+                compatible(&project, &ptype, &v, provider.provider_id()),
+            ));
         }
     }
 
@@ -397,7 +434,10 @@ pub async fn resolve_project(
             .await
             .map_err(|source| ResolveError::provider("get_versions", project.id.clone(), source))?;
         if let Some(v) = select_best_version(&vs, &game, &["any".to_string()], params.allow_alpha) {
-            return Ok(finish(cache, compatible(&project, &ptype, v)));
+            return Ok(finish(
+                cache,
+                compatible(&project, &ptype, v, provider.provider_id()),
+            ));
         }
     }
 
@@ -405,6 +445,7 @@ pub async fn resolve_project(
     Ok(finish(
         cache,
         ResolvedContent {
+            provider: provider.provider_id().to_string(),
             project_id: project.id.clone(),
             slug: project.slug.clone().unwrap_or_default(),
             title: project.title.clone(),
@@ -429,7 +470,11 @@ async fn hash_lookup(
     candidates: &[String],
 ) -> Result<Option<Version>, ProviderError> {
     let want = sha1.to_lowercase();
-    let hkey = match HashKey::new(HashAlgo::Sha1, std::slice::from_ref(&want)) {
+    let hkey = match HashKey::new(
+        provider.provider_id(),
+        HashAlgo::Sha1,
+        std::slice::from_ref(&want),
+    ) {
         Some(key) => key,
         None => return Ok(None),
     };
@@ -451,8 +496,9 @@ async fn hash_lookup(
         .cloned())
 }
 
-fn stub_for(id: &str) -> ResolvedContent {
+fn stub_for(id: &str, provider: &str) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: id.to_string(),
         slug: id.to_string(),
         title: format!("Dependency {id}"),
@@ -466,8 +512,8 @@ fn stub_for(id: &str) -> ResolvedContent {
 /// A dependency failure stays visible in the review row: one broken dep must
 /// not abort the whole plan, but it must not masquerade as "no compatible
 /// version" either.
-fn dependency_stub(id: &str, reason: String) -> ResolvedContent {
-    let mut stub = stub_for(id);
+fn dependency_stub(id: &str, reason: String, provider: &str) -> ResolvedContent {
+    let mut stub = stub_for(id, provider);
     stub.reason = reason;
     stub
 }
@@ -505,6 +551,7 @@ pub async fn resolve_dependency(
                 return Some(dependency_stub(
                     &dep_id,
                     format!("Could not fetch dependency project metadata ({e})."),
+                    provider.provider_id(),
                 ));
             }
         },
@@ -517,8 +564,9 @@ pub async fn resolve_dependency(
     let candidates = candidate_loaders_for_project_type(&ptype, eff);
     let game = game_version.to_string();
     let pinned_reason = format!(
-        "Using {} dependency version pinned by Modrinth metadata.",
-        dep.dependency_type
+        "Using {} dependency version pinned by {} metadata.",
+        dep.dependency_type,
+        provider.provider_id()
     );
 
     // Method 1: pinned version id via the single-version endpoint; a
@@ -527,7 +575,7 @@ pub async fn resolve_dependency(
         if let Ok(v) = provider.get_version_in_project(&dep_id, vid).await {
             if v.project_id == dep_id && compatibility_issue(Some(&v), &game, &candidates).is_none()
             {
-                let mut r = compatible(&project, &ptype, &v);
+                let mut r = compatible(&project, &ptype, &v, provider.provider_id());
                 r.reason = pinned_reason.clone();
                 return Some(r);
             }
@@ -538,13 +586,14 @@ pub async fn resolve_dependency(
                 return Some(dependency_stub(
                     &dep_id,
                     format!("Could not fetch dependency versions ({e})."),
+                    provider.provider_id(),
                 ));
             }
         };
         if let Some(v) = full.iter().find(|v| v.id == vid) {
             if v.project_id == dep_id && compatibility_issue(Some(v), &game, &candidates).is_none()
             {
-                let mut r = compatible(&project, &ptype, v);
+                let mut r = compatible(&project, &ptype, v, provider.provider_id());
                 r.reason = pinned_reason.clone();
                 return Some(r);
             }
@@ -564,6 +613,7 @@ pub async fn resolve_dependency(
                 return Some(dependency_stub(
                     &dep_id,
                     format!("Could not fetch dependency versions ({e})."),
+                    provider.provider_id(),
                 ));
             }
         };
@@ -571,7 +621,7 @@ pub async fn resolve_dependency(
             primary_file(v).map(|f| f.filename == name).unwrap_or(false)
                 && compatibility_issue(Some(v), &game, &candidates).is_none()
         }) {
-            let mut r = compatible(&project, &ptype, v);
+            let mut r = compatible(&project, &ptype, v, provider.provider_id());
             r.reason = pinned_reason.clone();
             return Some(r);
         }
@@ -594,7 +644,11 @@ pub async fn resolve_dependency(
         .await
         {
             Ok(r) => r,
-            Err(e) => dependency_stub(&dep_id, format!("Could not resolve dependency ({e}).")),
+            Err(e) => dependency_stub(
+                &dep_id,
+                format!("Could not resolve dependency ({e})."),
+                provider.provider_id(),
+            ),
         },
     )
 }

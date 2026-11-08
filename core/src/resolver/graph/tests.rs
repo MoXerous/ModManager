@@ -47,6 +47,7 @@ pub(crate) fn resolved(project: &str, v: Option<Version>) -> ResolvedContent {
         "incompatible"
     };
     ResolvedContent {
+        provider: "fake".to_string(),
         project_id: project.to_string(),
         slug: project.to_string(),
         title: format!("Title {project}"),
@@ -345,6 +346,7 @@ fn spec_f055_selected_optional_pulls_required_chain() {
     vm.dependencies = vec![dep("n", "required")];
     let vn = version("vn", "n");
     let ro = ResolvedContent {
+        provider: "fake".to_string(),
         project_id: "o".to_string(),
         slug: "o".to_string(),
         title: "Title o".to_string(),

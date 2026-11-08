@@ -10,6 +10,7 @@ use std::collections::HashMap;
 /// Cache key for one candidate-loader pick, with its channel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BestKey {
+    pub provider: String,
     pub project_id: String,
     pub game_version: String,
     pub loader: String,
@@ -20,6 +21,7 @@ pub struct BestKey {
 /// change the outcome is part of the key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ResolveKey {
+    pub provider: String,
     pub project_id: String,
     pub slug: String,
     pub project_type: String,
@@ -37,12 +39,13 @@ pub struct ResolveKey {
 /// Normalised hash-lookup key: algorithm + sorted, lowered, non-empty.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HashKey {
+    pub provider: String,
     pub algo: String,
     pub hashes: Vec<String>,
 }
 
 impl HashKey {
-    pub fn new(algo: HashAlgo, hashes: &[String]) -> Option<Self> {
+    pub fn new(provider: &str, algo: HashAlgo, hashes: &[String]) -> Option<Self> {
         let mut hs: Vec<String> = hashes
             .iter()
             .map(|h| h.to_lowercase())
@@ -54,6 +57,7 @@ impl HashKey {
         hs.sort();
         hs.dedup();
         Some(Self {
+            provider: provider.to_string(),
             algo: algo.as_str().to_string(),
             hashes: hs,
         })
@@ -171,13 +175,22 @@ mod tests {
     #[test]
     fn hash_key_normalises_order_case_and_empties() {
         let a = HashKey::new(
+            "modrinth",
             HashAlgo::Sha1,
             &["BB".to_string(), "".to_string(), "aa".to_string()],
         )
         .expect("key");
-        let b = HashKey::new(HashAlgo::Sha1, &["aa".to_string(), "bb".to_string()]).expect("key");
+        let b = HashKey::new(
+            "modrinth",
+            HashAlgo::Sha1,
+            &["aa".to_string(), "bb".to_string()],
+        )
+        .expect("key");
         assert_eq!(a, b);
-        assert!(HashKey::new(HashAlgo::Sha1, &["".to_string()]).is_none());
+        assert!(HashKey::new("modrinth", HashAlgo::Sha1, &["".to_string()]).is_none());
+        // Provider identity is part of the key.
+        let other = HashKey::new("curseforge", HashAlgo::Sha1, &["aa".to_string()]).expect("key");
+        assert_ne!(a, other);
     }
 
     #[test]
@@ -189,6 +202,7 @@ mod tests {
         };
         c.put_best(
             BestKey {
+                provider: "modrinth".to_string(),
                 project_id: "a".to_string(),
                 game_version: "1.21".to_string(),
                 loader: "fabric".to_string(),

@@ -10,6 +10,7 @@ use mm_core::resolver::primary_file;
 use std::ops::ControlFlow;
 
 struct UpdateRow {
+    provider: String,
     project_id: String,
     old_version: String,
     new_number: String,
@@ -71,6 +72,7 @@ pub async fn update(
             if v.id != e.version_id {
                 if let Some(f) = primary_file(v).filter(|f| !f.url.is_empty()) {
                     rows.push(UpdateRow {
+                        provider: provider.provider_id().to_string(),
                         project_id: e.project_id.clone(),
                         old_version: e.version_id.clone(),
                         new_number: v.version_number.clone(),
@@ -131,7 +133,7 @@ pub async fn update(
         let old_file = lock
             .entries
             .iter()
-            .find(|e| e.project_id == r.project_id)
+            .find(|e| e.provider == r.provider && e.project_id == r.project_id)
             .map(|e| mods.join(&e.filename));
         if let Some(old) = old_file {
             if old.is_file() && old != outcome.path {
@@ -157,11 +159,11 @@ pub async fn update(
         let slug = lock
             .entries
             .iter()
-            .find(|e| e.project_id == r.project_id)
+            .find(|e| e.provider == r.provider && e.project_id == r.project_id)
             .map(|e| e.slug.clone())
             .unwrap_or_default();
         new_entries.push(LockEntry {
-            provider: "modrinth".to_string(),
+            provider: r.provider.clone(),
             project_id: r.project_id.clone(),
             slug,
             version_id: r.version_id.clone(),
@@ -176,7 +178,7 @@ pub async fn update(
         Err(_) => Vec::new(),
     };
     for new in new_entries {
-        merged.retain(|e| e.project_id != new.project_id);
+        merged.retain(|e| !(e.provider == new.provider && e.project_id == new.project_id));
         merged.push(new);
     }
     let _ = instance_dir(ctx)?;

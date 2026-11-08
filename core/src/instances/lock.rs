@@ -59,9 +59,18 @@ fn read_lock_str(text: &str) -> Result<LockFile, LockError> {
             supported: LOCK_SCHEMA_VERSION,
         });
     }
-    Ok(LockFile {
-        entries: doc.entries,
-    })
+    // Old schema-1 locks predate the provider field. Modrinth was the only
+    // provider then, so an empty value there has exactly one meaning
+    // (ADR 0004 §2-3 item 5). Writers always fill it.
+    let mut entries = doc.entries;
+    if doc.schema_version == 1 {
+        for entry in &mut entries {
+            if entry.provider.is_empty() {
+                entry.provider = "modrinth".to_string();
+            }
+        }
+    }
+    Ok(LockFile { entries })
 }
 
 pub fn write_lock(path: &std::path::Path, lock: &LockFile) -> Result<(), LockError> {

@@ -109,6 +109,26 @@ fn spec_f101_a_lock_written_before_sha512_existed_still_reads() {
 }
 
 #[test]
+fn spec_f101_schema_one_lock_empty_provider_reads_as_modrinth() {
+    // Before CurseForge, Modrinth was the only provider. An empty provider in
+    // a schema-1 lock therefore has exactly one meaning; a filled provider is
+    // left untouched (ADR 0004 §2-3 item 5).
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    std::fs::write(
+        &p,
+        r#"{"schema_version":1,"entries":[
+        {"project_id":"old","slug":"old","version_id":"v1","filename":"old.jar","sha1":"00"},
+        {"provider":"curseforge","project_id":"cf","slug":"cf","version_id":"v2","filename":"cf.jar","sha1":"11"}]}"#,
+    )
+    .expect("write lock");
+
+    let back = read_lock(&p).expect("read");
+    assert_eq!(back.entries[0].provider, "modrinth");
+    assert_eq!(back.entries[1].provider, "curseforge");
+}
+
+#[test]
 fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
     let d = crate::test_tempdir();
     let p = d.path().join("instance.lock.json");

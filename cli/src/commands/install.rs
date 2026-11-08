@@ -9,6 +9,7 @@ use super::{
 };
 use mm_core::downloader::{DownloadStatus, Downloader};
 use mm_core::instances::{read_lock, write_lock, LockEntry, LockFile};
+use mm_core::providers::Provider;
 use mm_core::resolver::primary_file;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
@@ -90,7 +91,7 @@ pub async fn install(
             .selected
             .iter()
             .chain(data.deps.iter().map(|d| &d.content))
-            .find(|r| r.project_id == e.project_id)
+            .find(|r| r.provider == e.provider && r.project_id == e.project_id)
             .and_then(|r| {
                 if r.slug.is_empty() {
                     None
@@ -100,7 +101,7 @@ pub async fn install(
             })
             .unwrap_or_default();
         lock_entries.push(LockEntry {
-            provider: "modrinth".to_string(),
+            provider: provider.provider_id().to_string(),
             project_id: e.project_id.clone(),
             slug,
             version_id: version.id.clone(),
@@ -117,7 +118,7 @@ pub async fn install(
         Err(_) => Vec::new(),
     };
     for new in lock_entries {
-        merged.retain(|e| e.project_id != new.project_id);
+        merged.retain(|e| !(e.provider == new.provider && e.project_id == new.project_id));
         merged.push(new);
     }
     let _ = instance_dir(ctx)?;

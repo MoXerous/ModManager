@@ -6,7 +6,11 @@
  * version, loader, counts), so a code alone cannot carry them; the UI shows
  * them verbatim inside a localized frame until Task 5 adds i18n.
  */
-export type PlanEntryDto = { source: string, projectId: string, title: string, projectType: string, versionId: string | null, versionNumber: string | null, filename: string | null, 
+export type PlanEntryDto = { source: string, 
+/**
+ * `Provider::provider_id()` of the content this entry came from.
+ */
+provider: string, projectId: string, title: string, projectType: string, versionId: string | null, versionNumber: string | null, filename: string | null, 
 /**
  * `downloadable` | `blocked`.
  */

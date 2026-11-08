@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// | `unsupported` (the provider cannot answer the pin, e.g. no hash search).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedContent {
+    /// `Provider::provider_id()` of the provider this content came from.
+    pub provider: String,
     pub project_id: String,
     pub slug: String,
     pub title: String,
@@ -222,8 +224,9 @@ pub fn select_preferred<'a>(
     select_best_version(versions, game_version, loader_candidates, allow_alpha)
 }
 
-fn stub_for(id: &str) -> ResolvedContent {
+fn stub_for(id: &str, provider: &str) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: id.to_string(),
         slug: id.to_string(),
         title: format!("Dependency {id}"),
@@ -268,7 +271,7 @@ pub fn collect_required(
                     queue.push_back(next.clone());
                     out.push(next.clone());
                 }
-                None => out.push(stub_for(&id)),
+                None => out.push(stub_for(&id, &cur.provider)),
             }
         }
     }
@@ -361,7 +364,7 @@ pub fn review_candidates(
     }
 
     // 2. Optional deps of roots + required closure, unchecked.
-    let mut optional_ids: Vec<(String, String)> = Vec::new();
+    let mut optional_ids: Vec<(String, String, String)> = Vec::new();
     for item in &closure {
         if let Some(v) = &item.version {
             for d in &v.dependencies {
@@ -370,13 +373,13 @@ pub fn review_candidates(
                 }
                 if let Some(id) = d.project_id.clone() {
                     if !id.is_empty() {
-                        optional_ids.push((id, item.project_id.clone()));
+                        optional_ids.push((id, item.project_id.clone(), item.provider.clone()));
                     }
                 }
             }
         }
     }
-    for (id, parent) in &optional_ids {
+    for (id, parent, provider) in &optional_ids {
         if index.contains_key(id) {
             if let Some(c) = out.iter_mut().find(|c| c.content.project_id == *id) {
                 if !c.parents.iter().any(|x| x == parent) {
@@ -385,7 +388,10 @@ pub fn review_candidates(
             }
             continue;
         }
-        let content = catalog.get(id).cloned().unwrap_or_else(|| stub_for(id));
+        let content = catalog
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| stub_for(id, provider));
         push(
             content,
             "optional",
