@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::db::instances::InstanceSource;
-use crate::safety::atomic::{write_atomic, AtomicError};
+use crate::safety::atomic::{write_atomic_unique, AtomicError};
 
 /// Bumped whenever the shape changes; a newer value is refused, never guessed.
 pub const PROFILE_SCHEMA: &str = "modmanager.profile.v1";
@@ -81,11 +81,15 @@ pub fn mirror_path(instance_root: &Path) -> PathBuf {
 
 /// Serializes to the mirror. Callers must already have the database row: this
 /// is the second half of a write, never the first.
+///
+/// A unique temp, not `write_atomic`: the mirror is rewritten in place and has
+/// no resume story, so a fixed `.part` left by a crash would refuse every
+/// later write. See `safety::atomic::write_atomic_unique`.
 pub fn write_mirror(instance_root: &Path, meta: &ProfileMetadata) -> Result<(), MetadataError> {
     let mut bytes =
         serde_json::to_vec_pretty(meta).map_err(|e| MetadataError::Parse(e.to_string()))?;
     bytes.push(b'\n');
-    write_atomic(&mirror_path(instance_root), &mut bytes.as_slice())?;
+    write_atomic_unique(&mirror_path(instance_root), &mut bytes.as_slice())?;
     Ok(())
 }
 
@@ -276,6 +280,35 @@ mod tests {
             .filter(|n| n != PROFILE_FILE_NAME)
             .collect();
         assert!(leftovers.is_empty(), "unexpected leftovers: {leftovers:?}");
+    }
+
+    #[test]
+    fn spec_f101_a_stale_part_does_not_block_the_next_profile_write() {
+        // The wedge this pins: a crash between write and rename left
+        // `profile.json.part`, and the fixed-part protocol refused every
+        // later write, so the mirror could never be updated again. The
+        // stale part is neither used nor deleted - it is not ours to
+        // attribute - and the write still lands.
+        let dir = temp();
+        let root = dir.path().join("Wedged");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let meta = sample(&root);
+        std::fs::write(root.join("profile.json.part"), b"interrupted").expect("fixture");
+
+        write_mirror(&root, &meta).expect("a stale .part must not block the mirror");
+
+        assert_eq!(read_mirror(&mirror_path(&root)).expect("read"), meta);
+        assert_eq!(
+            std::fs::read(root.join("profile.json.part")).expect("read"),
+            b"interrupted",
+            "the part was not written by this call, so it survives"
+        );
+        let temps: Vec<String> = std::fs::read_dir(&root)
+            .expect("ls")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(temps.is_empty(), "temporaries left: {temps:?}");
     }
 
     #[test]
