@@ -44,7 +44,10 @@ export default function App() {
       {page === 'instances' ? (
         <InstancesPage />
       ) : page === 'browse' ? (
-        <BrowsePage onInstalled={() => setPage('downloads')} />
+        <BrowsePage
+          onInstalled={() => setPage('downloads')}
+          onOpenSettings={() => setPage('settings')}
+        />
       ) : page === 'modpack' ? (
         <ModpackPage />
       ) : page === 'downloads' ? (

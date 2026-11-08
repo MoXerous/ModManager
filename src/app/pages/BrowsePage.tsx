@@ -5,13 +5,23 @@ import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
 import type { ProjectDto } from '../../bindings/ProjectDto';
 import type { SearchPageDto } from '../../bindings/SearchPageDto';
 import type { IpcError } from '../../bindings/IpcError';
+import type { CurseForgeKeyDto } from '../../bindings/CurseForgeKeyDto';
 import { Combobox } from '@/components/ui/Combobox';
+import { Segmented } from '@/components/ui/Segmented';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
-import { executeInstall, listInstances, searchProjects, toIpcError } from '../../lib/ipc';
 import {
+  curseforgeKeyStatus,
+  executeInstall,
+  listInstances,
+  searchProjects,
+  toIpcError,
+} from '../../lib/ipc';
+import {
+  type ProviderId,
   GAME_VERSIONS,
   LOADERS,
+  PROVIDERS,
   getGameTarget,
   setGameTarget,
   setTargetInstance,
@@ -22,20 +32,33 @@ interface Props {
   /** Where to send the user once a download starts: the queue is the only
    *  thing that can show progress. */
   onInstalled: () => void;
+  /** CurseForge cannot answer without a key, and that key is entered in
+   *  Settings; the hint here is the shortest path there. */
+  onOpenSettings: () => void;
 }
 
-export function BrowsePage({ onInstalled }: Props) {
+export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
-  // The version and the loader are shared with the queue: what is filtered
-  // here is what gets installed there.
-  const { gameVersion, loader } = useGameTarget();
+  // The version, the loader and the provider are shared with the queue: what
+  // is filtered here is what gets installed there.
+  const { gameVersion, loader, provider } = useGameTarget();
   const [page, setPage] = useState<SearchPageDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
   const [searching, setSearching] = useState(false);
   const [installing, setInstalling] = useState<string | null>(null);
   const [instances, setInstances] = useState<InstanceSummaryDto[]>([]);
   const [target, setTarget] = useState('');
+  // Advisory: a failed read must not stop a search, so this only gates the
+  // hint. The real refusal happens in the command and renders through
+  // ErrorState.
+  const [keyStatus, setKeyStatus] = useState<CurseForgeKeyDto | null>(null);
+
+  useEffect(() => {
+    void curseforgeKeyStatus()
+      .then(setKeyStatus)
+      .catch(() => setKeyStatus(null));
+  }, []);
 
   // The install has to land somewhere, and execute_install refuses an empty
   // root. The instances are already in the database; asking for one here is
@@ -74,12 +97,31 @@ export function BrowsePage({ onInstalled }: Props) {
     [instances],
   );
 
+  /** A different provider answers from a different catalogue, so the rows on
+   *  screen are not answers to the new question: they go. The key hint
+   *  re-reads with the rest of the page. */
+  const selectProvider = useCallback(
+    (next: ProviderId) => {
+      setGameTarget({ provider: next });
+      setPage(null);
+      setError(null);
+      void curseforgeKeyStatus()
+        .then(setKeyStatus)
+        .catch(() => setKeyStatus(null));
+    },
+    [],
+  );
+
   const targetPath = instances.find((i) => i.id === target)?.path ?? '';
   // Nothing to install into is not a state the button can be pressed in. An
   // empty version or loader is not either: core reads an empty version as
   // "any version" and installs the newest build of the fallback loader,
-  // which may not match the instance at all.
+  // which may not match the instance at all. CurseForge without a key is the
+  // same: the command refuses, so the button says so up front. A status that
+  // could not be read is not evidence of a missing key, so it does not gate.
+  const keyReady = provider !== 'curseforge' || keyStatus === null || keyStatus.hasKey;
   const canInstall =
+    keyReady &&
     targetPath.length > 0 &&
     gameVersion.trim().length > 0 &&
     loader.trim().length > 0;
@@ -93,6 +135,7 @@ export function BrowsePage({ onInstalled }: Props) {
     setError(null);
     searchProjects({
       query: text,
+      provider,
       // The facets are identifiers, not prose: an empty field means "no
       // filter", and "Fabric" typed with a capital is still the fabric facet.
       gameVersion: gameVersion.trim() || undefined,
@@ -102,16 +145,20 @@ export function BrowsePage({ onInstalled }: Props) {
       .then(setPage)
       .catch((e) => setError(toIpcError(e)))
       .finally(() => setSearching(false));
-  }, [gameVersion, loader, query]);
+  }, [gameVersion, loader, provider, query]);
 
   const install = useCallback(
-    (slug: string) => {
-      setInstalling(slug);
+    (project: ProjectDto) => {
+      // The id, not the slug: CurseForge resolves a project by its numeric id
+      // only, and Modrinth accepts either. The provider comes from the row
+      // itself, so a switch after the search cannot send the wrong one.
+      setInstalling(project.id);
       setError(null);
       executeInstall(
         {
           instanceRoot: targetPath,
-          slugs: [slug],
+          projects: [project.id],
+          provider: project.providerId,
           gameVersion: gameVersion.trim(),
           loader: loader.trim().toLowerCase(),
         },
@@ -150,6 +197,12 @@ export function BrowsePage({ onInstalled }: Props) {
         </Button>
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted-foreground">
+        <Segmented<ProviderId>
+          label={t('browse.provider')}
+          value={provider}
+          options={PROVIDERS.map((id) => ({ value: id, label: t(`provider.${id}`) }))}
+          onChange={selectProvider}
+        />
         <div className="flex items-center gap-2">
           <label htmlFor="browse-version">{t('browse.fieldVersion')}</label>
           <Combobox
@@ -189,6 +242,17 @@ export function BrowsePage({ onInstalled }: Props) {
             ))}
           </select>
         </label>
+      )}
+      {provider === 'curseforge' && keyStatus !== null && !keyStatus.hasKey && (
+        <p
+          role="status"
+          className="mt-2.5 flex flex-wrap items-center gap-2 text-small text-muted-foreground"
+        >
+          {t('browse.curseforgeKeyMissing')}
+          <Button type="button" variant="outline" size="sm" onClick={onOpenSettings}>
+            {t('browse.openSettings')}
+          </Button>
+        </p>
       )}
     </div>
   );
@@ -252,10 +316,9 @@ function Card({
   project: ProjectDto;
   installing: string | null;
   canInstall: boolean;
-  onInstall: (slug: string) => void;
+  onInstall: (project: ProjectDto) => void;
 }) {
   const { t } = useTranslation();
-  const slug = project.slug ?? project.id;
   return (
     <article className="flex flex-col gap-2 rounded-card border border-border bg-card p-3.5">
       <div className="flex items-start gap-2.5">
@@ -285,7 +348,7 @@ function Card({
           variant="outline"
           className="ms-auto"
           disabled={installing !== null || !canInstall}
-          onClick={() => onInstall(slug)}
+          onClick={() => onInstall(project)}
         >
           {t('install.start')}
         </Button>

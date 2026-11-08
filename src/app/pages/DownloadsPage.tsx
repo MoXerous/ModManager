@@ -30,11 +30,11 @@ export function DownloadsPage() {
   const [error, setError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState('');
-  const [slugs, setSlugs] = useState('');
-  // The same version and loader Browse resolved with. They used to be
-  // hard-coded here, so a search for 1.20.4 followed by a manual install
+  const [projects, setProjects] = useState('');
+  // The same version, loader and provider Browse resolved with. They used to
+  // be hard-coded here, so a search for 1.20.4 followed by a manual install
   // quietly pulled the 1.21.1 build.
-  const { gameVersion, loader } = useGameTarget();
+  const { gameVersion, loader, provider } = useGameTarget();
 
   const onEvent = useCallback((e: InstallEventDto) => {
     setRows((prev) => {
@@ -52,10 +52,13 @@ export function DownloadsPage() {
   const start = useCallback(() => {
     const req: InstallRequest = {
       instanceRoot: target.trim(),
-      slugs: slugs
+      projects: projects
         .split(/[\s,]+/)
         .map((s) => s.trim())
         .filter(Boolean),
+      // One provider answers the whole request, like a search: the ids in the
+      // field mean nothing to the other catalogue.
+      provider,
       // The version and the loader come from the same place Browse reads
       // them, so the queue installs what the screen asked for.
       gameVersion: gameVersion.trim(),
@@ -65,7 +68,7 @@ export function DownloadsPage() {
     // "any version" and would install the newest build of the fallback
     // loader, which may not match the instance at all.
     if (
-      req.slugs.length === 0 ||
+      req.projects.length === 0 ||
       req.instanceRoot.length === 0 ||
       req.gameVersion.length === 0 ||
       req.loader.length === 0
@@ -78,7 +81,7 @@ export function DownloadsPage() {
     executeInstall(req, onEvent)
       .catch((e) => setError(toIpcError(e)))
       .finally(() => setBusy(false));
-  }, [gameVersion, loader, target, slugs, onEvent]);
+  }, [gameVersion, loader, provider, target, projects, onEvent]);
 
   // Explicit membership, not a suffix test: `install.phase.unlanded` would match
   // `endsWith('landed')`, and a renamed key would stop being terminal without
@@ -100,6 +103,7 @@ export function DownloadsPage() {
         {hasVersion && (
           <p className="text-small text-muted-foreground">
             {t('install.gameTarget', {
+              provider: t(`provider.${provider}`),
               version: gameVersion.trim(),
               loader: loader.trim().toLowerCase(),
             })}
@@ -117,11 +121,11 @@ export function DownloadsPage() {
         </div>
         <div className="flex items-center gap-2">
           <input
-            value={slugs}
-            onChange={(e) => setSlugs(e.target.value)}
+            value={projects}
+            onChange={(e) => setProjects(e.target.value)}
             dir="ltr"
-            placeholder={t('install.slugs')}
-            aria-label={t('install.slugs')}
+            placeholder={t('install.projects')}
+            aria-label={t('install.projects')}
             className="h-8 min-w-0 flex-1 rounded-control border border-input bg-surface-sunken px-2.5 text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
           <Button type="button" onClick={start} disabled={busy || !hasVersion}>

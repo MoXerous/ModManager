@@ -7,6 +7,7 @@ import type { InstallEventDto } from '../bindings/InstallEventDto';
 import type { InstallRequest } from '../bindings/InstallRequest';
 import type { InstallResultDto } from '../bindings/InstallResultDto';
 import type { CreateInstanceRequest } from '../bindings/CreateInstanceRequest';
+import type { CurseForgeKeyDto } from '../bindings/CurseForgeKeyDto';
 import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
 import type { InstanceSummaryDto } from '../bindings/InstanceSummaryDto';
@@ -26,6 +27,8 @@ import type { ToggleResultDto } from '../bindings/ToggleResultDto';
 
 export interface SearchQuery {
   query: string;
+  /** `Provider::provider_id()`: the only values the bridge accepts. */
+  provider: string;
   gameVersion?: string;
   loader?: string;
   projectType?: string;
@@ -49,6 +52,7 @@ export function searchProjects(query: SearchQuery): Promise<SearchPageDto> {
   return invoke<SearchPageDto>('search_projects', {
     query: {
       query: query.query,
+      provider: query.provider,
       gameVersion: query.gameVersion ?? null,
       loader: query.loader ?? null,
       projectType: query.projectType ?? 'mod',
@@ -58,15 +62,18 @@ export function searchProjects(query: SearchQuery): Promise<SearchPageDto> {
   });
 }
 
-/** معاينة فقط: لا تكتب ولا تنزّل. */
+/** معاينة فقط: لا تكتب ولا تنزّل. `projects` أسماءٌ لـModrinth ومعرّفات رقمية لـCurseForge؛
+ *  مزوّد واحد يجيب الطلب كله. */
 export function buildInstallPlan(
-  slugs: string[],
+  projects: string[],
+  provider: string,
   gameVersion: string,
   loader: string,
   instanceRoot?: string,
 ): Promise<InstallPlanDto> {
   return invoke<InstallPlanDto>('build_install_plan', {
-    slugs,
+    projects,
+    provider,
     gameVersion,
     loader,
     instanceRoot: instanceRoot ?? null,
@@ -168,6 +175,21 @@ export async function executeInstall(
     req,
     onEvent: channel,
   });
+}
+
+// --- CurseForge API key (ADR 0004 2-1) -----------------------------------
+//
+// The value goes in only. Both answers carry the source and the path, never
+// the key: there is deliberately no command that returns it.
+
+/** Where the live key came from, and the file the screen may point at. */
+export function curseforgeKeyStatus(): Promise<CurseForgeKeyDto> {
+  return invoke<CurseForgeKeyDto>('curseforge_key_status');
+}
+
+/** Writes the key and answers with the status of the file it wrote. */
+export function saveCurseforgeKey(key: string): Promise<CurseForgeKeyDto> {
+  return invoke<CurseForgeKeyDto>('save_curseforge_key', { key });
 }
 
 // --- Modpacks (.mrpack) -------------------------------------------------
