@@ -28,6 +28,26 @@ impl From<mm_core::AppInfo> for AppInfo {
     }
 }
 
+/// F-151: the roots this process resolved, and the state of its database.
+///
+/// Paths cross IPC because the screen's job is to show them; they are not
+/// secrets, and the open actions never take a path back from the webview.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AppPathsDto {
+    pub data: String,
+    pub config: String,
+    pub cache: String,
+    pub logs: String,
+    pub db_file: String,
+    /// Size of the main database file; WAL pages sit next to it.
+    #[ts(type = "number")]
+    pub db_bytes: u64,
+    pub db_version: u32,
+    pub app_version: String,
+}
+
 /// رمز الخطأ المرسل للواجهة؛ تترجمه الواجهة إلى نص حسب لغة المستخدم.
 /// `message` للتشخيص فقط (سجلّ) ولا يُعرض أبدًا.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

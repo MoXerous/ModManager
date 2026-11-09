@@ -38,6 +38,8 @@ pub fn run() {
             commands::finish_create,
             commands::abandon_create,
             commands::open_instance_folder,
+            commands::app_paths,
+            commands::open_app_folder,
             commands::execute_install,
             commands::curseforge_key_status,
             commands::save_curseforge_key,

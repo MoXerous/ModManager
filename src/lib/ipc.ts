@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
+import type { AppPathsDto } from '../bindings/AppPathsDto';
 import type { CheckUpdatesRequest } from '../bindings/CheckUpdatesRequest';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
@@ -201,6 +202,25 @@ export function curseforgeKeyStatus(): Promise<CurseForgeKeyDto> {
 /** Writes the key and answers with the status of the file it wrote. */
 export function saveCurseforgeKey(key: string): Promise<CurseForgeKeyDto> {
   return invoke<CurseForgeKeyDto>('save_curseforge_key', { key });
+}
+
+// --- App paths and diagnostics (F-151) ----------------------------------
+//
+// The roots are resolved once in Rust and only read here. The open action
+// takes a kind, never a path: the webview cannot name a folder for the
+// process to reveal.
+
+/** The four roots `openAppFolder` accepts. */
+export type AppFolderKind = 'data' | 'config' | 'cache' | 'logs';
+
+/** The resolved roots, the open database file, its size and its schema. */
+export function appPaths(): Promise<AppPathsDto> {
+  return invoke<AppPathsDto>('app_paths');
+}
+
+/** Opens one of the app's own folders in the system file manager. */
+export function openAppFolder(kind: AppFolderKind): Promise<void> {
+  return invoke<void>('open_app_folder', { kind });
 }
 
 // --- Legacy import (F-181) ----------------------------------------------

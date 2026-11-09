@@ -9,7 +9,6 @@
 //! The operation journal is held beside it for the same reason, and is opened
 //! once against the resolved platform directories.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use mm_core::db::Db;
@@ -24,10 +23,9 @@ use crate::dto::IpcError;
 pub struct AppState {
     db: Arc<Mutex<Db>>,
     journal: Arc<Mutex<Journal>>,
-    /// Where `settings.json` and `curseforge.secret.json` live (ADR 0004
-    /// §2-1-1). Kept here because the secret is read and written by the
-    /// provider selector, which has no `Paths` of its own.
-    config_dir: PathBuf,
+    /// Resolved platform roots. Every command that needs a directory asks here
+    /// instead of trusting a path from the webview (§5.2).
+    paths: Paths,
     /// Test seam: the private journal store this state owns.
     ///
     /// `None` in production, where the journal is the app's own directory.
@@ -62,7 +60,7 @@ impl AppState {
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(paths.operations_dir()))),
-            config_dir: paths.config_dir().to_path_buf(),
+            paths,
             // Production owns no private store: the journal is the app's own
             // directory, and it outlives the state.
             #[cfg(test)]
@@ -86,22 +84,29 @@ impl AppState {
         // A config directory of its own: a shared one let one test's key
         // answer another's lookup.
         let config_root = tempfile::TempDir::new().expect("a private config directory");
-        let config_dir = config_root.path().join("config");
+        // Same layout production uses: `<root>/config` is the config dir, so
+        // `config_root()` and the reported paths stay in agreement.
+        let paths = Paths::from_root(config_root.path());
         // `save_key` writes a sibling temp and renames it over the target, so
         // the parent must exist before the first write.
-        std::fs::create_dir_all(&config_dir).expect("create the private config directory");
+        std::fs::create_dir_all(paths.config_dir()).expect("create the private config directory");
         Self {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(root.path()))),
-            config_dir,
+            paths,
             owned_journal_root: Some(Arc::new(root)),
             owned_config_root: Some(Arc::new(config_root)),
         }
     }
 
+    /// The resolved platform roots (storage layout §1-8).
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
     /// The config directory this state reads and writes (ADR 0004 §2-1-1).
     pub fn config_dir(&self) -> &std::path::Path {
-        &self.config_dir
+        self.paths.config_dir()
     }
 
     /// The root of the private config directory a test state owns.

@@ -5,11 +5,12 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::dto::{
-    AppInfo, CheckUpdatesRequest, CreateInstancePlanDto, CreateInstanceRequest, CreateRecoveryDto,
-    CurseForgeKeyDto, ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto,
-    InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
-    LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
-    SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
+    AppInfo, AppPathsDto, CheckUpdatesRequest, CreateInstancePlanDto, CreateInstanceRequest,
+    CreateRecoveryDto, CurseForgeKeyDto, ErrorCode, InstallPlanDto, InstallRequest,
+    InstallResultDto, InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest,
+    LocalFactDto, LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto,
+    ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, UpdatePreviewDto,
+    WarningDto,
 };
 use crate::state::AppState;
 use mm_core::downloader::JournalOp;
@@ -135,6 +136,82 @@ fn epoch_now() -> i64 {
 #[tauri::command]
 pub fn app_info() -> AppInfo {
     mm_core::app_info().into()
+}
+
+/// F-151: the roots this process resolved and the state of its database.
+///
+/// One command, not four: the screen shows one card, and a half-read set of
+/// paths would be worse than none.
+#[tauri::command]
+pub async fn app_paths(state: tauri::State<'_, AppState>) -> Result<AppPathsDto, IpcError> {
+    app_paths_with(state.inner()).await
+}
+
+/// The body of `app_paths` with the state as a parameter.
+///
+/// The database path is the file this process actually opened, not a path
+/// rebuilt from the roots: in production they are the same, and in a test they
+/// are allowed to differ.
+pub(crate) async fn app_paths_with(state: &AppState) -> Result<AppPathsDto, IpcError> {
+    let (db_file, db_version) = state
+        .with_db(|db| {
+            let version = db.user_version().map_err(|e| db_error(&e))?;
+            Ok((db.path().to_path_buf(), version))
+        })
+        .await?;
+    let paths = state.paths();
+    Ok(AppPathsDto {
+        data: paths.data_dir().to_string_lossy().into_owned(),
+        config: paths.config_dir().to_string_lossy().into_owned(),
+        cache: paths.cache_dir().to_string_lossy().into_owned(),
+        logs: paths.logs_dir().to_string_lossy().into_owned(),
+        db_file: db_file.to_string_lossy().into_owned(),
+        // A missing file is 0, not an error: the database can be removed
+        // between calls, and the screen still has a card to show.
+        db_bytes: std::fs::metadata(&db_file).map(|m| m.len()).unwrap_or(0),
+        db_version,
+        app_version: mm_core::app_info().version.to_string(),
+    })
+}
+
+/// F-151: opens one of the app's own roots in the system file manager.
+///
+/// `kind` selects a root; the path itself is resolved here and never comes
+/// from the webview (§5.2). Anything else is a typed refusal, not a silent
+/// no-op.
+#[tauri::command]
+pub async fn open_app_folder(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    kind: String,
+) -> Result<(), IpcError> {
+    let folder = app_folder_path(state.paths(), &kind)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.opener()
+            .open_path(folder.to_string_lossy().into_owned(), None::<&str>)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+    .map_err(IpcError::io)
+}
+
+/// The four roots the open action is allowed to reach, resolved from `Paths`.
+pub(crate) fn app_folder_path(
+    paths: &mm_core::paths::Paths,
+    kind: &str,
+) -> Result<PathBuf, IpcError> {
+    let folder = match kind {
+        "data" => paths.data_dir(),
+        "config" => paths.config_dir(),
+        "cache" => paths.cache_dir(),
+        "logs" => paths.logs_dir(),
+        other => {
+            return Err(IpcError::invalid_input(format!(
+                "unknown folder kind: {other}"
+            )))
+        }
+    };
+    Ok(folder.to_path_buf())
 }
 
 #[tauri::command]
@@ -862,6 +939,8 @@ pub fn save_curseforge_key(
 
 #[cfg(test)]
 pub(crate) mod channel_tests;
+#[cfg(test)]
+pub(crate) mod diagnostics_tests;
 #[cfg(test)]
 pub(crate) mod legacy_tests;
 #[cfg(test)]

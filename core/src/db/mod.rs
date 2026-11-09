@@ -37,6 +37,17 @@ impl Db {
         &self.path
     }
 
+    /// Schema version the file carries (`PRAGMA user_version`).
+    ///
+    /// `open()` refuses a newer file, so this is always `<= CURRENT_VERSION`;
+    /// the settings screen shows it so a user can tell an upgraded profile
+    /// from a fresh one when reporting a problem.
+    pub fn user_version(&self) -> Result<u32, DbError> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?)
+    }
+
     /// Read/write access for the row modules in this crate.
     pub(crate) fn conn(&self) -> &rusqlite::Connection {
         &self.conn
@@ -153,6 +164,17 @@ mod tests {
             .expect("rows")
             .map(|r| r.expect("name"))
             .collect()
+    }
+
+    #[test]
+    fn spec_f151_user_version_reports_the_schema_the_file_carries() {
+        let dir = crate::test_tempdir();
+        let db = open(&dir.path().join("t.db")).expect("open");
+        assert_eq!(
+            db.user_version().expect("version"),
+            CURRENT_VERSION,
+            "the file and the constant must agree or the settings screen lies"
+        );
     }
 
     #[test]
