@@ -10,8 +10,44 @@ use super::graph::{
     candidate_loaders_for_project_type, compatibility_issue, primary_file, select_best_version,
     ResolvedContent,
 };
-use crate::providers::{HashAlgo, Project, Provider, Version, VersionDependency};
+use crate::providers::{HashAlgo, Project, Provider, ProviderError, Version, VersionDependency};
 use std::collections::{HashMap, HashSet};
+use thiserror::Error;
+
+/// A resolution that could not produce a verdict.
+///
+/// A provider failure is not a version verdict. Turning it into an empty map
+/// or list makes the resolver answer "no match" and then substitute a
+/// different version, which is exactly what a pin must prevent. The failing
+/// operation and target stay attached so the caller can name what broke
+/// instead of returning a generic error.
+#[derive(Debug, Error)]
+#[error("{operation} failed for {target}: {source}")]
+pub struct ResolveError {
+    pub operation: &'static str,
+    pub target: String,
+    #[source]
+    pub source: ProviderError,
+}
+
+impl ResolveError {
+    pub fn provider(
+        operation: &'static str,
+        target: impl Into<String>,
+        source: ProviderError,
+    ) -> Self {
+        Self {
+            operation,
+            target: target.into(),
+            source,
+        }
+    }
+
+    /// The provider failure as the IPC layer knows it (`F-019`).
+    pub fn provider_error(&self) -> &ProviderError {
+        &self.source
+    }
+}
 
 /// Project types with no downloadable versions (spec §4-1 step 2).
 const BROWSE_ONLY: &[&str] = &["minecraft_java_server"];
@@ -47,7 +83,7 @@ fn or_any(value: &str, fallback: &str) -> String {
     }
 }
 
-fn resolve_key(params: &ResolveParams) -> ResolveKey {
+fn resolve_key(params: &ResolveParams, provider: &str) -> ResolveKey {
     let sha = params
         .pin
         .file_sha1
@@ -55,6 +91,7 @@ fn resolve_key(params: &ResolveParams) -> ResolveKey {
         .unwrap_or_default()
         .to_lowercase();
     ResolveKey {
+        provider: provider.to_string(),
         project_id: params.project.id.clone(),
         slug: params.project.slug.clone().unwrap_or_default(),
         project_type: or_any(&params.project_type, "mod"),
@@ -107,29 +144,33 @@ async fn hydrate_project(
     project.clone()
 }
 
-/// Cached `get_versions`; transport failures become an empty list —
-/// resolution degrades to `incompatible`, it never raises.
+/// Cached `get_versions`. A provider failure is returned, never cached: it is
+/// not "this project has no versions" and must not become an `incompatible`
+/// verdict.
 async fn versions_cached(
     provider: &dyn Provider,
     cache: &mut RunCache,
     id: &str,
     game: Option<&str>,
     loader: Option<&str>,
-) -> Vec<Version> {
+) -> Result<Vec<Version>, ProviderError> {
     let (g, l) = (game.unwrap_or(""), loader.unwrap_or(""));
     if let Some(hit) = cache.project_versions(id, g, l) {
-        return hit;
+        return Ok(hit);
     }
-    let vs = provider
-        .get_versions(id, game, loader)
-        .await
-        .unwrap_or_default();
+    let vs = provider.get_versions(id, game, loader).await?;
     cache.put_project_versions(id, g, l, vs.clone());
-    vs
+    Ok(vs)
 }
 
-fn compatible(content: &Project, ptype: &str, version: &Version) -> ResolvedContent {
+fn compatible(
+    content: &Project,
+    ptype: &str,
+    version: &Version,
+    provider: &str,
+) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: content.id.clone(),
         slug: content.slug.clone().unwrap_or_default(),
         title: content.title.clone(),
@@ -140,8 +181,15 @@ fn compatible(content: &Project, ptype: &str, version: &Version) -> ResolvedCont
     }
 }
 
-fn blocked(content: &Project, ptype: &str, status: &str, reason: String) -> ResolvedContent {
+fn blocked(
+    content: &Project,
+    ptype: &str,
+    status: &str,
+    reason: String,
+    provider: &str,
+) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: content.id.clone(),
         slug: content.slug.clone().unwrap_or_default(),
         title: content.title.clone(),
@@ -150,6 +198,27 @@ fn blocked(content: &Project, ptype: &str, status: &str, reason: String) -> Reso
         status: status.to_string(),
         reason,
     }
+}
+
+/// A hash pin the provider cannot answer. This stays a visible block, with the
+/// provider's own error in the reason: the plan will show it as a warning, and
+/// no substitute version is chosen.
+fn unsupported_pin(
+    content: &Project,
+    ptype: &str,
+    sha1: &str,
+    provider_id: &str,
+    error: &ProviderError,
+) -> ResolvedContent {
+    blocked(
+        content,
+        ptype,
+        "unsupported",
+        format!(
+            "{provider_id} cannot resolve a version by SHA-1: {error}. The pinned file {sha1} was not checked, and no other version was substituted."
+        ),
+        provider_id,
+    )
 }
 
 /// Type-specific no-result reason (spec §4-2). Shader/resource-pack
@@ -180,15 +249,18 @@ pub fn not_found_reason(
 }
 
 /// Seven-step project resolution (spec §4-1). Pure coordination around
-/// [`Provider`] + [`RunCache`]; never raises.
+/// [`Provider`] + [`RunCache`]. A provider failure on a required fetch is
+/// returned as [`ResolveError`]; an unsupported hash search is a visible
+/// `unsupported` block carrying the provider's error; only a real "no
+/// compatible version" answer becomes an `incompatible` verdict.
 pub async fn resolve_project(
     provider: &dyn Provider,
     cache: &mut RunCache,
     params: &ResolveParams,
-) -> ResolvedContent {
-    let key = resolve_key(params);
+) -> Result<ResolvedContent, ResolveError> {
+    let key = resolve_key(params, provider.provider_id());
     if let Some(hit) = cache.resolved(&key) {
-        return hit;
+        return Ok(hit);
     }
     let project = hydrate_project(provider, cache, &params.project).await;
     let ptype = or_any(
@@ -209,9 +281,10 @@ pub async fn resolve_project(
             &ptype,
             "browse-only",
             "This project is browse-only and has no downloadable version.".to_string(),
+            provider.provider_id(),
         );
         cache.put_resolved(key, r.clone());
-        return r;
+        return Ok(r);
     }
 
     let candidates = candidate_loaders_for_project_type(&ptype, &loader);
@@ -228,17 +301,24 @@ pub async fn resolve_project(
         || params.pin.version_number.is_some()
     {
         if let Some(id) = params.pin.version_id.as_deref() {
-            if let Ok(v) = provider.get_version(id).await {
+            if let Ok(v) = provider.get_version_in_project(&project.id, id).await {
                 if v.project_id == project.id
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(&v), &game, &candidates).is_none()
                 {
-                    return finish(cache, compatible(&project, &ptype, &v));
+                    return Ok(finish(
+                        cache,
+                        compatible(&project, &ptype, &v, provider.provider_id()),
+                    ));
                 }
             }
         }
         let full = if params.pin.version_id.is_some() || params.pin.version_number.is_some() {
-            versions_cached(provider, cache, &project.id, None, None).await
+            versions_cached(provider, cache, &project.id, None, None)
+                .await
+                .map_err(|source| {
+                    ResolveError::provider("get_versions", project.id.clone(), source)
+                })?
         } else {
             Vec::new()
         };
@@ -248,14 +328,37 @@ pub async fn resolve_project(
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(v), &game, &candidates).is_none()
             }) {
-                return finish(cache, compatible(&project, &ptype, v));
+                return Ok(finish(
+                    cache,
+                    compatible(&project, &ptype, v, provider.provider_id()),
+                ));
             }
         }
         if let Some(sha) = params.pin.file_sha1.as_deref() {
-            if let Some(v) =
-                hash_lookup(provider, cache, &project.id, sha, &game, &candidates).await
-            {
-                return finish(cache, compatible(&project, &ptype, &v));
+            match hash_lookup(provider, cache, &project.id, sha, &game, &candidates).await {
+                Ok(Some(v)) => {
+                    return Ok(finish(
+                        cache,
+                        compatible(&project, &ptype, &v, provider.provider_id()),
+                    ))
+                }
+                // A real "no version has this hash" answer: the existing
+                // fallback may still resolve a compatible version.
+                Ok(None) => {}
+                // The provider cannot answer at all. That is not "no match":
+                // block the entry and carry the provider's error into the
+                // plan warning instead of substituting another version.
+                Err(source @ ProviderError::Unsupported { .. }) => {
+                    let r = unsupported_pin(&project, &ptype, sha, provider.provider_id(), &source);
+                    return Ok(finish(cache, r));
+                }
+                Err(source) => {
+                    return Err(ResolveError::provider(
+                        "get_versions_by_hashes",
+                        project.id.clone(),
+                        source,
+                    ));
+                }
             }
         }
         if let Some(num) = params.pin.version_number.as_deref() {
@@ -264,7 +367,10 @@ pub async fn resolve_project(
                     && (params.allow_alpha || v.version_type.to_lowercase() != "alpha")
                     && compatibility_issue(Some(v), &game, &candidates).is_none()
             }) {
-                return finish(cache, compatible(&project, &ptype, v));
+                return Ok(finish(
+                    cache,
+                    compatible(&project, &ptype, v, provider.provider_id()),
+                ));
             }
         }
     }
@@ -276,6 +382,7 @@ pub async fn resolve_project(
             continue;
         }
         let bkey = BestKey {
+            provider: provider.provider_id().to_string(),
             project_id: project.id.clone(),
             game_version: game.clone(),
             loader: cand.clone(),
@@ -283,7 +390,10 @@ pub async fn resolve_project(
         };
         if let Some(hit) = cache.best(&bkey) {
             if let Some(v) = hit {
-                return finish(cache, compatible(&project, &ptype, &v));
+                return Ok(finish(
+                    cache,
+                    compatible(&project, &ptype, &v, provider.provider_id()),
+                ));
             }
             continue;
         }
@@ -299,12 +409,17 @@ pub async fn resolve_project(
                 Some(cand.as_str())
             },
         );
-        let vs = versions_cached(provider, cache, &project.id, g, l).await;
+        let vs = versions_cached(provider, cache, &project.id, g, l)
+            .await
+            .map_err(|source| ResolveError::provider("get_versions", project.id.clone(), source))?;
         let pick = select_best_version(&vs, &game, std::slice::from_ref(cand), params.allow_alpha)
             .cloned();
         cache.put_best(bkey, pick.clone());
         if let Some(v) = pick {
-            return finish(cache, compatible(&project, &ptype, &v));
+            return Ok(finish(
+                cache,
+                compatible(&project, &ptype, &v, provider.provider_id()),
+            ));
         }
     }
 
@@ -315,16 +430,22 @@ pub async fn resolve_project(
         } else {
             Some(game.as_str())
         };
-        let vs = versions_cached(provider, cache, &project.id, g, None).await;
+        let vs = versions_cached(provider, cache, &project.id, g, None)
+            .await
+            .map_err(|source| ResolveError::provider("get_versions", project.id.clone(), source))?;
         if let Some(v) = select_best_version(&vs, &game, &["any".to_string()], params.allow_alpha) {
-            return finish(cache, compatible(&project, &ptype, v));
+            return Ok(finish(
+                cache,
+                compatible(&project, &ptype, v, provider.provider_id()),
+            ));
         }
     }
 
     // Step 6: incompatible with a type-specific reason.
-    finish(
+    Ok(finish(
         cache,
         ResolvedContent {
+            provider: provider.provider_id().to_string(),
             project_id: project.id.clone(),
             slug: project.slug.clone().unwrap_or_default(),
             title: project.title.clone(),
@@ -333,11 +454,13 @@ pub async fn resolve_project(
             status: "incompatible".to_string(),
             reason: not_found_reason(&ptype, &game, &loader, &candidates),
         },
-    )
+    ))
 }
 
 /// SHA-1 pin via `get_versions_by_hashes` (spec §4-1 step 3b): the mapped
-/// version must belong to the requesting project and be compatible.
+/// version must belong to the requesting project and be compatible. A
+/// provider failure is returned, never turned into an empty map: `None` here
+/// means the provider answered and no version matched.
 async fn hash_lookup(
     provider: &dyn Provider,
     cache: &mut RunCache,
@@ -345,29 +468,37 @@ async fn hash_lookup(
     sha1: &str,
     game: &str,
     candidates: &[String],
-) -> Option<Version> {
+) -> Result<Option<Version>, ProviderError> {
     let want = sha1.to_lowercase();
-    let hkey = HashKey::new(HashAlgo::Sha1, std::slice::from_ref(&want))?;
+    let hkey = match HashKey::new(
+        provider.provider_id(),
+        HashAlgo::Sha1,
+        std::slice::from_ref(&want),
+    ) {
+        Some(key) => key,
+        None => return Ok(None),
+    };
     let map = match cache.hash_versions(&hkey) {
         Some(m) => m,
         None => {
             let m = provider
                 .get_versions_by_hashes(std::slice::from_ref(&want), HashAlgo::Sha1, None)
-                .await
-                .unwrap_or_default();
+                .await?;
             cache.put_hash_versions(hkey, m.clone());
             m
         }
     };
-    map.get(&want)
+    Ok(map
+        .get(&want)
         .filter(|v| {
             v.project_id == project_id && compatibility_issue(Some(v), game, candidates).is_none()
         })
-        .cloned()
+        .cloned())
 }
 
-fn stub_for(id: &str) -> ResolvedContent {
+fn stub_for(id: &str, provider: &str) -> ResolvedContent {
     ResolvedContent {
+        provider: provider.to_string(),
         project_id: id.to_string(),
         slug: id.to_string(),
         title: format!("Dependency {id}"),
@@ -378,10 +509,20 @@ fn stub_for(id: &str) -> ResolvedContent {
     }
 }
 
+/// A dependency failure stays visible in the review row: one broken dep must
+/// not abort the whole plan, but it must not masquerade as "no compatible
+/// version" either.
+fn dependency_stub(id: &str, reason: String, provider: &str) -> ResolvedContent {
+    let mut stub = stub_for(id, provider);
+    stub.reason = reason;
+    stub
+}
+
 /// Single-dependency resolution (spec §5-1): pinned `version_id` →
 /// pinned `file_name` → full resolve **without** `allow_alpha`.
-/// `None` = skipped dep without a `project_id` (spec §5-2); fetch
-/// failures become `dependency-error` stubs, never errors.
+/// `None` = skipped dep without a `project_id` (spec §5-2); provider
+/// failures become `dependency-error` stubs carrying the typed error in
+/// their reason, never a substitute version and never a whole-plan abort.
 pub async fn resolve_dependency(
     provider: &dyn Provider,
     cache: &mut RunCache,
@@ -407,9 +548,11 @@ pub async fn resolve_dependency(
             }
             // Typed error text only — response bodies never cross (F-019).
             Err(e) => {
-                let mut s = stub_for(&dep_id);
-                s.reason = format!("Could not fetch dependency project metadata ({e}).");
-                return Some(s);
+                return Some(dependency_stub(
+                    &dep_id,
+                    format!("Could not fetch dependency project metadata ({e})."),
+                    provider.provider_id(),
+                ));
             }
         },
     };
@@ -421,26 +564,36 @@ pub async fn resolve_dependency(
     let candidates = candidate_loaders_for_project_type(&ptype, eff);
     let game = game_version.to_string();
     let pinned_reason = format!(
-        "Using {} dependency version pinned by Modrinth metadata.",
-        dep.dependency_type
+        "Using {} dependency version pinned by {} metadata.",
+        dep.dependency_type,
+        provider.provider_id()
     );
 
     // Method 1: pinned version id via the single-version endpoint; a
     // miss, mismatch, or incompatibility falls back to the list scan.
     if let Some(vid) = dep.version_id.as_deref() {
-        if let Ok(v) = provider.get_version(vid).await {
+        if let Ok(v) = provider.get_version_in_project(&dep_id, vid).await {
             if v.project_id == dep_id && compatibility_issue(Some(&v), &game, &candidates).is_none()
             {
-                let mut r = compatible(&project, &ptype, &v);
+                let mut r = compatible(&project, &ptype, &v, provider.provider_id());
                 r.reason = pinned_reason.clone();
                 return Some(r);
             }
         }
-        let full = versions_cached(provider, cache, &dep_id, None, None).await;
+        let full = match versions_cached(provider, cache, &dep_id, None, None).await {
+            Ok(vs) => vs,
+            Err(e) => {
+                return Some(dependency_stub(
+                    &dep_id,
+                    format!("Could not fetch dependency versions ({e})."),
+                    provider.provider_id(),
+                ));
+            }
+        };
         if let Some(v) = full.iter().find(|v| v.id == vid) {
             if v.project_id == dep_id && compatibility_issue(Some(v), &game, &candidates).is_none()
             {
-                let mut r = compatible(&project, &ptype, v);
+                let mut r = compatible(&project, &ptype, v, provider.provider_id());
                 r.reason = pinned_reason.clone();
                 return Some(r);
             }
@@ -454,12 +607,21 @@ pub async fn resolve_dependency(
         } else {
             Some(game.as_str())
         };
-        let vs = versions_cached(provider, cache, &dep_id, g, Some("any")).await;
+        let vs = match versions_cached(provider, cache, &dep_id, g, Some("any")).await {
+            Ok(vs) => vs,
+            Err(e) => {
+                return Some(dependency_stub(
+                    &dep_id,
+                    format!("Could not fetch dependency versions ({e})."),
+                    provider.provider_id(),
+                ));
+            }
+        };
         if let Some(v) = vs.iter().find(|v| {
             primary_file(v).map(|f| f.filename == name).unwrap_or(false)
                 && compatibility_issue(Some(v), &game, &candidates).is_none()
         }) {
-            let mut r = compatible(&project, &ptype, v);
+            let mut r = compatible(&project, &ptype, v, provider.provider_id());
             r.reason = pinned_reason.clone();
             return Some(r);
         }
@@ -467,7 +629,7 @@ pub async fn resolve_dependency(
 
     // Method 3: full resolve, stable channel only.
     Some(
-        resolve_project(
+        match resolve_project(
             provider,
             cache,
             &ResolveParams {
@@ -479,7 +641,15 @@ pub async fn resolve_dependency(
                 pin: PreferredPin::default(),
             },
         )
-        .await,
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => dependency_stub(
+                &dep_id,
+                format!("Could not resolve dependency ({e})."),
+                provider.provider_id(),
+            ),
+        },
     )
 }
 

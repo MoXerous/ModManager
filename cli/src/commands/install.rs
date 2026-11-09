@@ -4,11 +4,12 @@
 //! the lock is left untouched (landed `.part` files allow resume).
 
 use super::{
-    allow_insecure, client, confirm, instance_dir, io_err, lock_path, mods_dir, print_plan,
+    build_download_request, client, confirm, instance_dir, io_err, lock_path, mods_dir, print_plan,
     resolve_slugs, CliError, Ctx,
 };
-use mm_core::downloader::{DownloadRequest, Downloader};
+use mm_core::downloader::{DownloadStatus, Downloader};
 use mm_core::instances::{read_lock, write_lock, LockEntry, LockFile};
+use mm_core::providers::Provider;
 use mm_core::resolver::primary_file;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
@@ -56,14 +57,14 @@ pub async fn install(
             CliError::Download(format!("version {version_id} has no downloadable file"))
         })?;
         let dest = mods.join(&file.filename);
-        let req = DownloadRequest {
-            url: file.url.clone(),
-            dest: dest.clone(),
-            expected_size: Some(file.size),
-            sha1_hex: file.sha1.clone(),
-            sha512_hex: file.sha512.clone(),
-            allow_insecure_loopback: allow_insecure(&file.url),
-        };
+        let req = build_download_request(
+            ctx,
+            file.url.clone(),
+            dest.clone(),
+            Some(file.size),
+            file.sha1.clone(),
+            file.sha512.clone(),
+        );
         let go = || ControlFlow::Continue(());
         let outcome = downloader
             .download(&req, &mut |_| go(), &|| false)
@@ -75,12 +76,22 @@ pub async fn install(
             .and_then(|n| n.to_str())
             .unwrap_or(&file.filename)
             .to_string();
-        println!("downloaded {landed}");
+        // The status is the downloader's, not an assumption. `download` skips a
+        // file already on disk whose hash matches, and printing "downloaded"
+        // for a file nothing touched told the user a transfer happened that did
+        // not — the CLI form of an error the caller cannot see.
+        println!(
+            "{} {landed}",
+            match outcome.status {
+                DownloadStatus::Skipped => "already present:",
+                _ => "downloaded",
+            }
+        );
         let slug = data
             .selected
             .iter()
             .chain(data.deps.iter().map(|d| &d.content))
-            .find(|r| r.project_id == e.project_id)
+            .find(|r| r.provider == e.provider && r.project_id == e.project_id)
             .and_then(|r| {
                 if r.slug.is_empty() {
                     None
@@ -90,12 +101,13 @@ pub async fn install(
             })
             .unwrap_or_default();
         lock_entries.push(LockEntry {
-            provider: "modrinth".to_string(),
+            provider: provider.provider_id().to_string(),
             project_id: e.project_id.clone(),
             slug,
             version_id: version.id.clone(),
             filename: landed,
             sha1: file.sha1.clone().unwrap_or_default(),
+            sha512: file.sha512.clone().unwrap_or_default(),
         });
     }
     // Lock last: crash before this leaves jars without claims, never the
@@ -106,7 +118,7 @@ pub async fn install(
         Err(_) => Vec::new(),
     };
     for new in lock_entries {
-        merged.retain(|e| e.project_id != new.project_id);
+        merged.retain(|e| !(e.provider == new.provider && e.project_id == new.project_id));
         merged.push(new);
     }
     let _ = instance_dir(ctx)?;

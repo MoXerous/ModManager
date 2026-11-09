@@ -19,6 +19,15 @@ fn record(items: Vec<OperationItem>) -> OperationRecord {
     OperationRecord::new(OperationKind::DownloadBatch, "prof", "/target", items)
 }
 
+fn pack_meta() -> PackApplyMeta {
+    PackApplyMeta {
+        pack_name: "Test pack".to_string(),
+        pack_version_id: "ver-1".to_string(),
+        archive_sha512: "ab".repeat(64),
+        archive_path: "C:/packs/test.mrpack".to_string(),
+    }
+}
+
 #[test]
 fn spec_f141_new_record_starts_at_revision_one() {
     let r = record(vec![item("a", ItemState::Queued)]);
@@ -211,4 +220,160 @@ fn spec_f143_unfinished_classification() {
     assert!(!unfinished(OperationState::Completed));
     assert!(!unfinished(OperationState::Failed));
     assert!(!unfinished(OperationState::Cancelled));
+}
+
+#[test]
+fn spec_f141_a_v1_record_is_still_read() {
+    // A record this app wrote before the pack block existed: it says so in
+    // its schema and it has no `pack` key. Refusing it would turn every
+    // record already on disk into a corrupt file.
+    let mut r = record(vec![item("a", ItemState::Queued)]);
+    r.schema = SCHEMA_V1.to_string();
+    let mut json = serde_json::to_value(&r).expect("json");
+    json.as_object_mut().expect("obj").remove("pack");
+    let back: OperationRecord = serde_json::from_value(json).expect("a v1 record still decodes");
+    assert_eq!(back.schema, SCHEMA_V1);
+    assert!(back.pack.is_none());
+    assert!(back.verify().is_ok(), "a v1 record is not corrupt");
+    // And a v1 record of a kind that is not a pack apply is still consistent.
+    assert!(back.verify_pack().is_ok());
+}
+
+#[test]
+fn spec_f141_an_unknown_schema_is_refused() {
+    // A record written by a newer build may carry keys this one would read
+    // as something else. The honest answer to "I do not know this file" is
+    // to refuse it, not to interpret it.
+    let mut r = record(vec![item("a", ItemState::Queued)]);
+    r.schema = "modmanager.operation_journal.v99".to_string();
+    let err = r.verify().expect_err("a newer schema must be refused");
+    assert!(
+        matches!(err, JournalError::UnsupportedSchema { .. }),
+        "got {err:?}"
+    );
+    assert!(ACCEPTED_SCHEMAS.contains(&SCHEMA));
+    assert!(ACCEPTED_SCHEMAS.contains(&SCHEMA_V1));
+}
+
+#[test]
+fn spec_f076_a_pack_apply_record_carries_its_pack() {
+    let pack = pack_meta();
+    let r = OperationRecord::new(
+        OperationKind::MrpackInstall,
+        "prof",
+        "/target",
+        vec![item("a", ItemState::Queued)],
+    )
+    .with_pack(pack.clone());
+    assert!(r.verify().is_ok());
+    let json = serde_json::to_value(&r).expect("json");
+    assert_eq!(
+        json.as_object().expect("obj").len(),
+        19,
+        "the pack block is the nineteenth top-level key"
+    );
+    let back: OperationRecord = serde_json::from_value(json).expect("round trip");
+    assert_eq!(back.pack, Some(pack));
+    assert_eq!(back.kind, OperationKind::MrpackInstall);
+}
+
+#[test]
+fn spec_f076_a_pack_apply_without_its_pack_is_refused() {
+    // A record that names no archive cannot be resumed: there is no "what"
+    // to resume against.
+    let mut r = record(vec![item("a", ItemState::Queued)]);
+    r.kind = OperationKind::MrpackInstall;
+    assert!(matches!(
+        r.verify(),
+        Err(JournalError::KindPackMismatch {
+            kind: OperationKind::MrpackInstall,
+            has_pack: false
+        })
+    ));
+}
+
+#[test]
+fn spec_f076_a_record_that_is_not_a_pack_apply_carries_no_pack() {
+    // The other direction: a pack block on an operation that is not a pack
+    // apply is a field that kind has no meaning for.
+    let r = OperationRecord::new(
+        OperationKind::DownloadBatch,
+        "prof",
+        "/target",
+        vec![item("a", ItemState::Queued)],
+    )
+    .with_pack(pack_meta());
+    assert!(matches!(
+        r.verify(),
+        Err(JournalError::KindPackMismatch {
+            kind: OperationKind::DownloadBatch,
+            has_pack: true
+        })
+    ));
+}
+
+#[test]
+fn spec_f141_transition_items_walks_several_transitions_in_one_revision() {
+    // A record is one document: every write rewrites the whole file. So the
+    // several transitions a file needs are applied in one write, and the
+    // revision moves once for the whole batch.
+    let mut r = record(vec![
+        item("a", ItemState::Queued),
+        item("b", ItemState::Queued),
+    ]);
+    let before = r.revision;
+    r.transition_items(&[
+        ("a".to_string(), ItemState::Downloading),
+        ("a".to_string(), ItemState::Verifying),
+        ("a".to_string(), ItemState::Committing),
+        ("b".to_string(), ItemState::Downloading),
+    ])
+    .expect("transitions");
+    assert_eq!(r.revision, before + 1, "one write, one revision");
+    assert_eq!(r.items[0].state, ItemState::Committing);
+    assert_eq!(r.items[1].state, ItemState::Downloading);
+    assert_eq!(r.completed_count, 0);
+    assert_eq!(r.planned_count, 2);
+}
+
+#[test]
+fn spec_f141_transition_items_still_gates_every_edge() {
+    let mut r = record(vec![item("a", ItemState::Queued)]);
+    assert!(
+        r.transition_items(&[("a".to_string(), ItemState::Completed)])
+            .is_err(),
+        "queued may not jump to completed"
+    );
+    assert!(r
+        .transition_items(&[("ghost".to_string(), ItemState::Downloading)])
+        .is_err());
+    // The commit edge is still uncancellable.
+    let mut r = record(vec![item("a", ItemState::Committing)]);
+    assert!(r
+        .transition_items(&[("a".to_string(), ItemState::Cancelled)])
+        .is_err());
+}
+
+#[test]
+fn spec_f076_pack_item_uses_the_eight_key_encoding() {
+    let item = pack_item(
+        "mods/a.jar",
+        "Test pack",
+        "/inst/mods/a.jar.part",
+        "/inst/mods/a.jar",
+    );
+    let json = serde_json::to_value(&item).expect("json");
+    assert_eq!(
+        json.as_object().expect("obj").len(),
+        8,
+        "items carry exactly eight keys"
+    );
+    assert_eq!(item.item_id, "mods/a.jar");
+    assert_eq!(item.project_id, "", "a pack file belongs to no project");
+    assert_eq!(item.title, "Test pack");
+    assert_eq!(item.filename, "a.jar");
+    assert_eq!(item.state, ItemState::Queued);
+    assert_eq!(item.partial_path, "/inst/mods/a.jar.part");
+    assert_eq!(item.final_path, "/inst/mods/a.jar");
+    assert_eq!(item.message, "");
 }

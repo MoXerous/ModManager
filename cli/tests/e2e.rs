@@ -10,6 +10,11 @@ fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_modmanager"))
 }
 
+/// The wiremock CDN serves plain `http` on 127.0.0.1, so every CLI run here
+/// names the loopback seam explicitly. Nothing else enables it: a loopback
+/// `--api-base` alone must not (see `e2e_install_refuses_plain_http_without_flag`).
+const INSECURE_LOOPBACK: &str = "--insecure-loopback";
+
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = std::process::Command::new(bin())
         .args(args)
@@ -151,7 +156,15 @@ async fn e2e_search_lists_slug() {
     let api = Api::setup().await;
     let dir = tmp_instance();
     let (inst, base) = api_arg(&api, &dir);
-    let (code, out, _) = run(&["--instance", &inst, "--api-base", &base, "search", "test"]);
+    let (code, out, _) = run(&[
+        "--instance",
+        &inst,
+        "--api-base",
+        &base,
+        INSECURE_LOOPBACK,
+        "search",
+        "test",
+    ]);
     assert_eq!(code, 0);
     assert!(out.contains("testmod"), "{out}");
 }
@@ -166,6 +179,7 @@ async fn e2e_plan_writes_nothing() {
         &inst,
         "--api-base",
         &base,
+        INSECURE_LOOPBACK,
         "plan",
         "testmod",
         "--game",
@@ -184,7 +198,13 @@ async fn e2e_install_then_list_then_remove() {
     let api = Api::setup().await;
     let dir = tmp_instance();
     let (inst, base) = api_arg(&api, &dir);
-    let shared = ["--instance", inst.as_str(), "--api-base", base.as_str()];
+    let shared = [
+        "--instance",
+        inst.as_str(),
+        "--api-base",
+        base.as_str(),
+        INSECURE_LOOPBACK,
+    ];
     let mut install = shared.to_vec();
     install.extend([
         "install", "testmod", "--game", "1.21", "--loader", "fabric", "--yes",
@@ -225,6 +245,39 @@ async fn e2e_install_then_list_then_remove() {
     assert!(backup.is_dir());
 }
 
+/// The transport rule at the operator's boundary: pointing `--api-base` at a
+/// plain-HTTP loopback server is a routing choice, not permission to fetch
+/// over HTTP. Without the explicit flag the download is refused before a
+/// single byte is requested.
+#[tokio::test]
+async fn e2e_install_refuses_plain_http_without_flag() {
+    let api = Api::setup().await;
+    let dir = tmp_instance();
+    let (inst, base) = api_arg(&api, &dir);
+    let (code, _, err) = run(&[
+        "--instance",
+        &inst,
+        "--api-base",
+        &base,
+        "install",
+        "testmod",
+        "--game",
+        "1.21",
+        "--loader",
+        "fabric",
+        "--yes",
+    ]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("invalid url"), "{err}");
+    assert!(!dir.path().join("mods").join("x.jar").exists());
+    assert!(!dir.path().join("instance.lock.json").exists());
+    let hits = api.server.received_requests().await.expect("count");
+    assert!(
+        !hits.iter().any(|r| r.url.path() == "/cdn/x.jar"),
+        "plain http must be refused before the CDN is contacted"
+    );
+}
+
 #[tokio::test]
 async fn e2e_update_bumps_version() {
     let api = Api::setup().await;
@@ -236,6 +289,7 @@ async fn e2e_update_bumps_version() {
         &inst,
         "--api-base",
         &base,
+        INSECURE_LOOPBACK,
         "install",
         "testmod",
         "--game",
@@ -278,6 +332,7 @@ async fn e2e_update_bumps_version() {
         &inst,
         "--api-base",
         &base,
+        INSECURE_LOOPBACK,
         "update",
         "--game",
         "1.21",
@@ -304,6 +359,7 @@ async fn e2e_confirmation_required_without_yes() {
         &inst,
         "--api-base",
         &base,
+        INSECURE_LOOPBACK,
         "install",
         "testmod",
         "--game",
@@ -318,6 +374,7 @@ async fn e2e_confirmation_required_without_yes() {
         &inst,
         "--api-base",
         &base,
+        INSECURE_LOOPBACK,
         "remove",
         "testmod",
     ]);

@@ -68,6 +68,15 @@ impl Paths {
         &self.logs
     }
 
+    /// Operation journal root (journal.md §4-1).
+    ///
+    /// Pure, like `db_file`: `Journal`'s writer owns root creation, including
+    /// the before/after symlink check, so pre-creating it here in `ensure`
+    /// would bypass that guard.
+    pub fn operations_dir(&self) -> PathBuf {
+        self.data.join("operations")
+    }
+
     /// Database file: always under machine-local data, never config/cache.
     pub fn db_file(&self) -> PathBuf {
         self.data.join("app.sqlite3")

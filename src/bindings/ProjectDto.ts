@@ -2,6 +2,6 @@
 
 export type ProjectDto = { id: string, slug: string | null, title: string, description: string, author: string, projectType: string, downloads: number, iconUrl: string | null, 
 /**
- * Provider identity from day one (only Modrinth today).
+ * Provider identity from day one (`Provider::provider_id()`).
  */
 providerId: string, };

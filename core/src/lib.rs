@@ -8,11 +8,14 @@ pub mod downloader;
 pub mod instances;
 pub mod jar_reader;
 pub mod journal;
+pub mod legacy;
 pub mod logging;
+pub mod modpack;
 pub mod paths;
 pub mod providers;
 pub mod resolver;
 pub mod safety;
+pub mod updates;
 
 /// اسم التطبيق كما يظهر للمستخدم.
 pub const APP_NAME: &str = "ModManager";

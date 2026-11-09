@@ -22,4 +22,59 @@ pub use plan::{
     build_batch_install_plan, build_safety_warnings, requires_confirmation, PlanEntry, PlanSummary,
     Warning,
 };
-pub use resolve::{resolve_dependency, resolve_project, PreferredPin, ResolveParams};
+pub use resolve::{resolve_dependency, resolve_project, PreferredPin, ResolveError, ResolveParams};
+
+#[cfg(test)]
+mod provider_literal_guard {
+    //! ADR 0004 §2-3: provider names are filled from `Provider::provider_id()`
+    //! only. This reads source text because a proc macro would be a new
+    //! dependency for one assertion.
+    use std::path::{Path, PathBuf};
+
+    /// Every provider name that may only appear inside its own module. Both
+    /// are matched quoted, so prose and `CurseForge` in a message are not
+    /// offenders (ADR 0004 §2-3).
+    const FORBIDDEN: [&str; 2] = ["\"modrinth\"", "\"curseforge\""];
+
+    fn scan(dir: &Path, offenders: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, offenders);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // Inline test modules may name fixtures; production code may not.
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            for literal in FORBIDDEN {
+                if production.contains(literal) {
+                    offenders.push(format!("{} contains {literal}", path.display()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spec_f014_no_hardcoded_provider_name_outside_provider_modules() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut offenders = Vec::new();
+        for rel in ["src/resolver", "../cli/src", "../src-tauri/src"] {
+            scan(&root.join(rel), &mut offenders);
+        }
+        assert!(
+            offenders.is_empty(),
+            "hard-coded provider name outside its module: {offenders:?}"
+        );
+    }
+}

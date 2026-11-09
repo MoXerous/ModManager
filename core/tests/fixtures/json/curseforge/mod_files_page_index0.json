@@ -1,0 +1,186 @@
+{
+  "data": [
+    {
+      "id": 9277601,
+      "gameId": 432,
+      "modId": 238222,
+      "isAvailable": true,
+      "displayName": "15.74.0.228 for Fabric 1.20.1",
+      "fileName": "jei-1.20.1-fabric-15.74.0.228.jar",
+      "releaseType": 2,
+      "fileStatus": 4,
+      "hashes": [
+        {
+          "value": "85d8e1ebf0be1c83cd21f97afe89903c8643b2c3",
+          "algo": 1
+        },
+        {
+          "value": "2ad09ee79478711d3edce131504c1b06",
+          "algo": 2
+        }
+      ],
+      "fileDate": "2026-10-21T14:31:24.613Z",
+      "fileLength": 6929002,
+      "downloadCount": 1,
+      "fileSizeOnDisk": 14774554,
+      "downloadUrl": "https://edge.forgecdn.net/files/9277/601/jei-1.20.1-fabric-15.74.0.228.jar",
+      "gameVersions": [
+        "Client",
+        "Fabric",
+        "1.20.1",
+        "Server"
+      ],
+      "sortableGameVersions": [
+        {
+          "gameVersionName": "Client",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+          "gameVersionTypeId": 75208
+        },
+        {
+          "gameVersionName": "Fabric",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2022-09-01T00:00:00Z",
+          "gameVersionTypeId": 68441
+        },
+        {
+          "gameVersionName": "1.20.1",
+          "gameVersionPadded": "0000000001.0000000020.0000000001",
+          "gameVersion": "1.20.1",
+          "gameVersionReleaseDate": "2023-06-12T14:26:38.477Z",
+          "gameVersionTypeId": 75125
+        },
+        {
+          "gameVersionName": "Server",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+          "gameVersionTypeId": 75208
+        }
+      ],
+      "dependencies": [
+        {
+          "modId": 1700987,
+          "relationType": 2
+        },
+        {
+          "modId": 1689768,
+          "relationType": 3
+        }
+      ],
+      "alternateFileId": 0,
+      "isServerPack": false,
+      "fileFingerprint": 1929556446,
+      "modules": [
+        {
+          "name": "META-INF",
+          "fingerprint": 1584636826
+        },
+        {
+          "name": "module-info.class",
+          "fingerprint": 2624416969
+        },
+        {
+          "name": "example-author-0",
+          "fingerprint": 1516886532
+        }
+      ]
+    },
+    {
+      "id": 9277600,
+      "gameId": 432,
+      "modId": 238222,
+      "isAvailable": true,
+      "displayName": "15.74.0.228 for Forge 1.20.1",
+      "fileName": "jei-1.20.1-forge-15.74.0.228.jar",
+      "releaseType": 2,
+      "fileStatus": 4,
+      "hashes": [
+        {
+          "value": "dba3a2c15376062fde07f77fb5ae97f9890d5c72",
+          "algo": 1
+        },
+        {
+          "value": "4533ea85ba4249a04ef57c6a3c19c6e3",
+          "algo": 2
+        }
+      ],
+      "fileDate": "2026-10-21T14:31:20.84Z",
+      "fileLength": 6892778,
+      "downloadCount": 1,
+      "fileSizeOnDisk": 14803436,
+      "downloadUrl": "https://edge.forgecdn.net/files/9277/600/jei-1.20.1-forge-15.74.0.228.jar",
+      "gameVersions": [
+        "Client",
+        "1.20.1",
+        "Forge",
+        "Server"
+      ],
+      "sortableGameVersions": [
+        {
+          "gameVersionName": "Client",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+          "gameVersionTypeId": 75208
+        },
+        {
+          "gameVersionName": "1.20.1",
+          "gameVersionPadded": "0000000001.0000000020.0000000001",
+          "gameVersion": "1.20.1",
+          "gameVersionReleaseDate": "2023-06-12T14:26:38.477Z",
+          "gameVersionTypeId": 75125
+        },
+        {
+          "gameVersionName": "Forge",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2022-10-01T00:00:00Z",
+          "gameVersionTypeId": 68441
+        },
+        {
+          "gameVersionName": "Server",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+          "gameVersionTypeId": 75208
+        }
+      ],
+      "dependencies": [
+        {
+          "modId": 1689768,
+          "relationType": 3
+        },
+        {
+          "modId": 1700987,
+          "relationType": 2
+        }
+      ],
+      "alternateFileId": 0,
+      "isServerPack": false,
+      "fileFingerprint": 3021787655,
+      "modules": [
+        {
+          "name": "META-INF",
+          "fingerprint": 1263785012
+        },
+        {
+          "name": "module-info.class",
+          "fingerprint": 2624416969
+        },
+        {
+          "name": "example-author-0",
+          "fingerprint": 3221304852
+        }
+      ]
+    }
+  ],
+  "pagination": {
+    "index": 0,
+    "pageSize": 2,
+    "resultCount": 2,
+    "totalCount": 3946
+  }
+}

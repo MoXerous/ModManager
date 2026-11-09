@@ -1,6 +1,6 @@
 # behaviors/storage.md — المخطط، والترحيلات، والنسخ الاحتياطي، وبوابة إصدار المخطط
 
-> **المرجع:** `app\storage\schema_contract.py` · `app\storage\migration_runner.py` · `app\storage\migrations\{__init__,v001_contract,v001_baseline,v002_profile_aggregate}.py` · `app\storage\database.py` · `app\storage\repositories.py` · `app\services\operation_journal.py` · `app\operation_models.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\storage\schema_contract.py` · `app\storage\migration_runner.py` · `app\storage\migrations\{__init__,v001_contract,v001_baseline,v002_profile_aggregate}.py` · `app\storage\database.py` · `app\storage\repositories.py` · `app\services\operation_journal.py` · `app\operation_models.py`
 > **إصدار المخطط الحالي: `2`.**
 
 ---
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 )
 ```
 
-**`profiles`** — 33 عموداً (22 قديمة + 11 من v2)
+**`profiles`** — 34 عموداً (23 قديمة + 11 من v2) · الـDDL أدناه يحوي 34 سطر عمود، و`app/storage/migrations/v001_contract.py:26-50` يعرّف 23، و`app/storage/schema_contract.py:24-59` يعرّف 34
 ```sql
 CREATE TABLE IF NOT EXISTS profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

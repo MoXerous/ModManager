@@ -1,6 +1,6 @@
 # behaviors/downloads.md — التحميل، والتحقق من الهاش، وفحص المساحة، وإعادة التوجيه
 
-> **المرجع:** `app\services\download_manager.py` (401 سطراً) · `app\services\artifact_verifier.py` (135) · `tests\qa\test_verified_artifact_pipeline.py` (660)
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\download_manager.py` (401 سطراً) · `app\services\artifact_verifier.py` (135) · `tests\qa\test_verified_artifact_pipeline.py` (660)
 > لا يوجد CurseForge؛ انظر `providers.md` §0.
 
 ---
@@ -139,7 +139,7 @@ if resume_from > 0: headers = {"Range": f"bytes={resume_from}-"}
 2. وإلا تاريخ HTTP عبر `parsedate_to_datetime` ← مقصوص إلى `[0, max_seconds]`
 3. وإلا `base_seconds * 2 ** (attempt - 1)` ← مقصوص إلى `max_seconds`
 
-**الافتراضات:** `backoff_base_seconds = 1.0` · `max_backoff_seconds = 30.0` (الأسطر 40-41). `sleep_func` قابلة للحقن (افتراضياً `time.sleep`) — تُستخدم للتأخير **و** لاستطلاع الإيقاف المؤقت.
+**الافتراضات:** `backoff_base_seconds = 1.0` · `max_backoff_seconds = 30.0` (`app/services/download_manager.py:40-41`). `sleep_func` قابلة للحقن (افتراضياً `time.sleep`) — تُستخدم للتأخير **و** لاستطلاع الإيقاف المؤقت.
 
 ### 6-3. الربط الإنتاجي
 
@@ -226,7 +226,7 @@ with part_path.open("a+b") as artifact:        #     — وضع الإلحاق،
 part_path.replace(target)      # السطر 375 = os.replace — ذرّي، نفس نظام الملفات، يكتب فوق بصمت
 ```
 
-> **تمييز مهم:** `app/ui/workers.py:966` استخدم **«non-replace rename»** في مُثبِّت `.mrpack`، لكن **`DownloadManager` نفسه لا يستخدم عدم-الاستبدال.** أي تعديل إلى ملف مستخدم موجود **محجوب** بالقفزة الأولى (§10.2)، لا هنا.
+> **تمييز مهم:** `app/services/mrpack_installer.py:724` استخدم **«non-replace rename»** في مُثبِّت `.mrpack`، لكن **`DownloadManager` نفسه لا يستخدم عدم-الاستبدال.** أي تعديل إلى ملف مستخدم موجود **محجوب** بالقفزة الأولى (§10.2)، لا هنا.
 
 ### 10-2. الملف الموجود مسبقاً
 

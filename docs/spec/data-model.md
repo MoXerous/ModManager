@@ -53,11 +53,11 @@ FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
 | الجدول | أعمدة | مفاتيح | فهارس صريحة | FK |
 |---|---|---|---|---|
 | `favorites` | **14** | `project_id` PK | 0 | 0 |
-| `profiles` | **33** | `id` PK · `name` UNIQUE | 0 | 0 |
+| `profiles` | **34** | `id` PK · `name` UNIQUE | 0 | 0 |
 | `profile_mods` | **21** | `(profile_id, project_id)` PK | 0 | **1** |
 | `download_history` | **14** | `id` PK | 0 | 0 |
 | `settings` | **2** | `key` PK | 0 | 0 |
-| **المجموع** | **84** | | **0** | **1** |
+| **المجموع** | **85** | | **0** | **1** |
 
 ---
 
@@ -82,8 +82,8 @@ FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
 | 4.3 | **بلا WAL وبلا busy timeout** | نمط الحجب الافتراضي `delete`، مهلة 0. نافذة ثانية أو عمليتان ⇒ `database is locked` فوراً |
 | 4.4 | **`AppRepository.__init__` ينفّذ الترحيلات** | اتصال جديد + قراءة `user_version` **لكل عامل في كل عملية** |
 | 4.5 | **`last_download_at` عمود ميت** | **صفر موضع كتابة** عبر `app/` |
-| 4.6 | **`updated_at` بلا كاتب واحد** | `update_profile` (381-419) يحدّث 22 عموداً و**لا يمسّ `updated_at`**. فقط `touch_profile_last_used` و`update_profile_aggregate_metadata` |
-| 4.7 | **مسارات كتابة متفرّقة** | `create_profile` يكتب 33 · `update_profile` 22 · لا يوجد «تحديث البروفايل» كوحدة |
+| 4.6 | **`updated_at` بلا كاتب واحد** | `update_profile` (381-419) يحدّث 21 عموداً و**لا يمسّ `updated_at`**. فقط `touch_profile_last_used` و`update_profile_aggregate_metadata` |
+| 4.7 | **مسارات كتابة متفرّقة** | `create_profile` يكتب 32 عموداً (كل الأعمدة عدا `id` و`last_download_at`) · `update_profile` 21 · لا يوجد «تحديث البروفايل» كوحدة |
 | 4.8 | **`download_history` بلا فهرس ولا حدّ احتفاظ** | أربعة `LIKE '%…%'` ⇒ فحص كامل مضمون |
 | 4.9 | **`favorites` و`profile_mods` نسختان من نفس المستند البعيد** | 13 عموداً مشتركاً **بلا FK ولا مطابقة** |
 | 4.10 | **`INSERT OR REPLACE` يهدم `added_at`** | والاست **`added_at` لا يُقرأ في أي مكان** |

@@ -1,6 +1,6 @@
 # behaviors/jar-metadata.md — بيانات الـjar وكشف الـloader والتعارضات الكاذبة
 
-> **المرجع:** `app\services\local_mod_metadata.py` · `app\services\instance_detector.py` · `app\services\local_mod_classification.py` · `app\services\content_inventory.py` · `tests\qa\test_content_inventory.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\local_mod_metadata.py` · `app\services\instance_detector.py` · `app\services\local_mod_classification.py` · `app\services\content_inventory.py` · `tests\qa\test_content_inventory.py`
 
 ---
 

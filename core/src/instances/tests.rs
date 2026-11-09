@@ -86,6 +86,49 @@ fn spec_f101_prism_child_uses_parent_root() {
 }
 
 #[test]
+fn spec_f101_a_lock_written_before_sha512_existed_still_reads() {
+    // The field was added after locks were already on disk. Every field here is
+    // `serde(default)` for that reason, and this is the check: an old lock must
+    // not become unreadable, or upgrading the app would strand its instances.
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    std::fs::write(
+        &p,
+        r#"{"schema_version":1,"entries":[{"provider":"modrinth","project_id":"a",
+        "slug":"a-mod","version_id":"v","filename":"a.jar","sha1":"00"}]}"#,
+    )
+    .expect("write old lock");
+
+    let back = read_lock(&p).expect("an old lock must still parse");
+    assert_eq!(back.entries.len(), 1);
+    assert_eq!(back.entries[0].sha1, "00");
+    assert_eq!(
+        back.entries[0].sha512, "",
+        "absent sha512 reads as empty, not as an error"
+    );
+}
+
+#[test]
+fn spec_f101_schema_one_lock_empty_provider_reads_as_modrinth() {
+    // Before CurseForge, Modrinth was the only provider. An empty provider in
+    // a schema-1 lock therefore has exactly one meaning; a filled provider is
+    // left untouched (ADR 0004 §2-3 item 5).
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    std::fs::write(
+        &p,
+        r#"{"schema_version":1,"entries":[
+        {"project_id":"old","slug":"old","version_id":"v1","filename":"old.jar","sha1":"00"},
+        {"provider":"curseforge","project_id":"cf","slug":"cf","version_id":"v2","filename":"cf.jar","sha1":"11"}]}"#,
+    )
+    .expect("write lock");
+
+    let back = read_lock(&p).expect("read");
+    assert_eq!(back.entries[0].provider, "modrinth");
+    assert_eq!(back.entries[1].provider, "curseforge");
+}
+
+#[test]
 fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
     let d = crate::test_tempdir();
     let p = d.path().join("instance.lock.json");
@@ -97,10 +140,68 @@ fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
             version_id: "v".to_string(),
             filename: "a.jar".to_string(),
             sha1: "00".to_string(),
+            sha512: "ff".to_string(),
         }],
     };
     write_lock(&p, &lock).expect("write");
     assert_eq!(read_lock(&p).expect("read"), lock);
     std::fs::write(&p, r#"{"schema_version":99,"entries":[]}"#).expect("write");
     assert!(matches!(read_lock(&p), Err(LockError::NewerSchema { .. })));
+}
+
+/// F-128: the lock is rewritten in place on every install, so its writer must
+/// never depend on the `.part` namespace (a transfer that resumes owns it) and
+/// must never leave a temporary behind. A stale `.part` is somebody else's
+/// file: it neither blocks the write nor gets deleted.
+#[test]
+fn spec_f128_write_lock_is_atomic_and_survives_stale_temp() {
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    let entry = |name: &str| LockEntry {
+        provider: "modrinth".to_string(),
+        project_id: "proj".to_string(),
+        slug: "a-mod".to_string(),
+        version_id: "v1".to_string(),
+        filename: name.to_string(),
+        sha1: "00".to_string(),
+        sha512: "ff".to_string(),
+    };
+
+    write_lock(
+        &p,
+        &LockFile {
+            entries: vec![entry("a.jar")],
+        },
+    )
+    .expect("first write");
+    assert_eq!(read_lock(&p).expect("read").entries[0].filename, "a.jar");
+
+    let part = d.path().join("instance.lock.json.part");
+    std::fs::write(&part, b"foreign part").expect("fixture");
+
+    write_lock(
+        &p,
+        &LockFile {
+            entries: vec![entry("b.jar")],
+        },
+    )
+    .expect("overwrite");
+    assert_eq!(
+        read_lock(&p).expect("read").entries[0].filename,
+        "b.jar",
+        "the second write must replace the first, not append to it"
+    );
+    assert_eq!(
+        std::fs::read(&part).expect("read"),
+        b"foreign part",
+        "a `.part` this writer never created must survive untouched"
+    );
+
+    let leftovers: Vec<String> = std::fs::read_dir(d.path())
+        .expect("ls")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporaries left: {leftovers:?}");
 }

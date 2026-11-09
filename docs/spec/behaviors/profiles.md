@@ -1,6 +1,6 @@
 # behaviors/profiles.md — النسخ، والتحقق، والتفعيل/التعطيل، والنسخ الاحتياطي
 
-> **المرجع:** `app\services\profile_manager.py` · `app\domain\profile_aggregate.py` · `app\services\profile_validation.py` · `app\services\profile_content_toggle.py` · `app\services\profile_backup_restore.py` · `app\services\profile_update_backup.py` · `app\services\instance_detector.py`
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\profile_manager.py` · `app\domain\profile_aggregate.py` · `app\services\profile_validation.py` · `app\services\profile_content_toggle.py` · `app\services\profile_backup_restore.py` · `app\services\profile_update_backup.py` · `app\services\instance_detector.py`
 
 ---
 

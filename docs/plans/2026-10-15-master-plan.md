@@ -278,7 +278,7 @@ pub fn resolve(req: &ResolveRequest, catalog: &Catalog) -> Result<Plan, ResolveE
 
 **Files:** `core/src/providers/curseforge.rs` · `core/src/modpack/{mod.rs,mrpack.rs,curseforge.rs}` · `core/src/adopt.rs`
 
-- [ ] مزوّد CurseForge (API v1): المفتاح من إعداد المستخدم أو البيئة — **لا يُلتزَم أبداً** · `fingerprints` بـMurmurHash2 بعد تجريد الفراغات — **تحقّق من التوثيق الرسمي**
+- [ ] مزوّد CurseForge (API v1): المفتاح من إعداد المستخدم أو البيئة — **لا يُلتزَم أبداً** · `fingerprints`: **اقرأ** `fileFingerprint` (`u32` لكل ملف من استجابة الـAPI) وأرسِله كما هو إلى `POST /v1/fingerprints` — **لا تحسبه**: لا خوارزمية مُعلَنة ولا متجه اختبار · التحقّق من التنزيل بـ**SHA-1** من `data.hashes[]` حيث `algo = 1` — **لا SHA-512 في الـAPI** (`docs/spec/fixtures.md` §7-5)
 - [ ] حالة **غياب رابط تنزيل**: افتح صفحة الملف في المتصفّج وأرشد المستخدم
 - [ ] **اقترح في ADR**هل نحتاج proxy صغير للمفتاح — **ولا تبنِه بلا موافقتي**
 - [ ] `.mrpack` (`modrinth.index.json` + `overrides`) وحِزَم CurseForge (`manifest.json` + `overrides`) عبر قواعد السلامة، مع تقدّم ومعاينة خطة

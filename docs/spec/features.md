@@ -41,8 +41,8 @@
 | **F-012** | تحديد معدل من جهة العميل | **غير موجود** | providers | — | **Defer** | M1 | `foundations.md` §4.4 «محدّد معدل داخلي»؛ ابدأ عند بلوغ 100 طلب/دقيقة |
 | **F-013** | تخزين مؤقت لنتائج البحث | **غير موجود** | providers | — | **Defer** | M1 | `foundations.md` §4.4 «تخزين مؤقت بمدة صلاحية» |
 | **F-014** | **مزوّد CurseForge** | **غير موجود إطلاقاً** | providers | — (فحص `curseforge` = صفر نتيجة) | **Keep** | M3 | **قرارك: خارج v1؛ في M3 بمفتاح API يدخله المستخدم في الإعدادات.** جديد بالكامل — لا نحمل سلوكاً منه |
-| **F-015** | حالة `downloadUrl` الفارغ عند CurseForge | يفتح صفحة الملف في المتصفح | providers | — | **Keep** | M3 | سلوك موصوف في `foundations.md` §4.4، **غير مُنفَّذ ولا مُختبَر** |
-| **F-016** | بصمة CurseForge (MurmurHash2) | يعرّف المودات اليدوية | providers | — | **Defer** | M3 | دالة صغيرة **نكتبها** (`foundations.md` §3.2) — مرتبطة بـF-014 |
+| **F-015** | حالة `downloadUrl: null` عند CurseForge | يفتح صفحة الملف في المتصفح | providers | — | **Keep** | M3 | `null` الصريح لا `""`، والقرار على مستوى المود (`allowModDistribution = false` ⇒ `null` في 62 من 62 ملفاً — `fixtures.md` §7-7 ب)؛ موصوف في `foundations.md` §4.4، **غير مُنفَّذ ولا مُختبَر** |
+| **F-016** | بصمة CurseForge (`fileFingerprint`) | يعرّف المودات اليدوية | providers | — | **Defer** | M3 | بصمةُ الـAPI نفسِه (`u32` لكل ملف) **تُقرأ ولا تُحسَب**، وتُرسَل كما هي إلى `POST /v1/fingerprints`؛ الخوارزميةُ غيرُ معلنةٍ ولا مُتحقَّقٍ منها (`fixtures.md` §7-5) — مرتبطة بـF-014 |
 | **F-017** | رابط تنزيل فارغ | يمنع التنزيل ويُظهر سبباً | providers | `modrinth_mapping.py:46` · `batch_install_plan.py:84` | **Keep** | M1 | `project_id` وحده لا يُثبت |
 | **F-018** | `User-Agent` وصفي **بمعلومات تواصل** | لا يراه المستخدم | providers | `config.py:15` | **Keep** | M1 | **قرارك: ثابت واحد في `core` قابل للضبط، قيمة مؤقتة `ModManager/0.1.0-dev (dev build)`، وبوابة تفشل بناء الإصدار النهائي ما دامت مؤقتة.** `AGENTS.md` §5.11 يفرضه |
 | **F-019** | **رفض تسريب جسم الاستجابة** | لا يظهر نص خام في رسالة الخطأ | providers | `test_modrinth_api_resilience.py:42,99,107,240` | **Keep** | M1 | خصوصية |

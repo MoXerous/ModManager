@@ -6,9 +6,9 @@
 use super::cache::RunCache;
 use super::graph::{ResolvedContent, ReviewCandidate};
 use super::plan::{build_batch_install_plan, build_safety_warnings};
-use super::resolve::{resolve_dependency, resolve_project};
+use super::resolve::{resolve_dependency, resolve_project, ResolveError};
 use super::{PlanEntry, PlanSummary, PreferredPin, ResolveParams, Warning};
-use crate::providers::{Provider, ProviderError, Version, VersionDependency};
+use crate::providers::{Provider, Version, VersionDependency};
 use std::collections::{HashMap, HashSet};
 
 /// Everything a plan UI/CLI needs after one call.
@@ -24,18 +24,23 @@ pub struct BatchPlan {
 
 /// Resolve slugs → transitive required deps → batch plan + warnings.
 /// `existing` holds filenames already in the destination (F-065 info).
-/// Slugs that fail `get_project` abort with that [`ProviderError`].
+/// A provider failure on a selected project aborts with the typed
+/// [`ResolveError`]; dependency failures stay visible as `dependency-error`
+/// stubs (one broken dep must not hide the rest of the plan).
 pub async fn resolve_and_plan(
     provider: &dyn Provider,
     slugs: &[String],
     game: &str,
     loader: &str,
     existing: &HashSet<String>,
-) -> Result<BatchPlan, ProviderError> {
+) -> Result<BatchPlan, ResolveError> {
     let mut cache = RunCache::new(true);
     let mut selected: Vec<ResolvedContent> = Vec::new();
     for slug in slugs {
-        let project = provider.get_project(slug).await?;
+        let project = provider
+            .get_project(slug)
+            .await
+            .map_err(|source| ResolveError::provider("get_project", slug.clone(), source))?;
         let ptype = if project.project_type.is_empty() {
             "mod".to_string()
         } else {
@@ -54,11 +59,12 @@ pub async fn resolve_and_plan(
                     pin: PreferredPin::default(),
                 },
             )
-            .await,
+            .await?,
         );
     }
     // Transitive required deps; cycles cut silently (F-061 deferred).
     let mut deps: Vec<ReviewCandidate> = Vec::new();
+    let mut dependency_warnings: Vec<Warning> = Vec::new();
     let mut known: HashSet<String> = selected.iter().map(|r| r.project_id.clone()).collect();
     let mut grown: Vec<ResolvedContent> = selected.clone();
     let mut i = 0;
@@ -92,13 +98,26 @@ pub async fn resolve_and_plan(
                         requires_parent: false,
                     });
                     grown.push(r);
+                } else if r.status == "dependency-error" {
+                    // A failed dep is skipped from the download set, but the
+                    // plan must say which provider call failed — not leave the
+                    // user with a generic "required metadata is missing"
+                    // warning that cannot distinguish a 500 from a typo.
+                    dependency_warnings.push(Warning {
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "Required dependency {id} could not be resolved: {}",
+                            r.reason
+                        ),
+                    });
                 }
             }
         }
         i += 1;
     }
     let (entries, summary) = build_batch_install_plan(&selected, &deps, game, loader);
-    let warnings = build_safety_warnings(&entries, &grown, existing);
+    let mut warnings = build_safety_warnings(&entries, &grown, existing);
+    warnings.extend(dependency_warnings);
     let mut versions: HashMap<String, Version> = HashMap::new();
     for r in &grown {
         if let Some(v) = &r.version {

@@ -21,7 +21,7 @@
 json.dumps(operation_record_to_dict(record), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 ```
 
-**18 مفتاحاً علوياً:** `schema` · `operation_id` · `revision` · `kind` · `state` · `created_at` · `updated_at` · `profile_id` · `target_path` · `staging_path` · `backup_path` · 5 عدّادات **مشتقّة لا مخزَّنة** (`planned_count`, `completed_count`, `failed_count`, `cancelled_count`, `skipped_count`) · `message` · `items`.
+**18 مفتاحاً علوياً** (19 مع كتلة `pack` الاختيارية — §4-2-1): `schema` · `operation_id` · `revision` · `kind` · `state` · `created_at` · `updated_at` · `profile_id` · `target_path` · `staging_path` · `backup_path` · 5 عدّادات **مشتقّة لا مخزَّنة** (`planned_count`, `completed_count`, `failed_count`, `cancelled_count`, `skipped_count`) · `message` · `items` · `pack` *(اختياري: `mrpack_install` فقط)*.
 
 **كل عنصر 8 مفاتيح:** `item_id` · `project_id` · `title` · `filename` · `state` · `partial_path` · `final_path` · `message`.
 
@@ -31,6 +31,15 @@ json.dumps(operation_record_to_dict(record), indent=2, sort_keys=True, ensure_as
 - `OperationItemState` = `queued | downloading | verifying | committing | completed | skipped | failed | cancelled`
 
 **التحليل مجموعة مغلقة:** `_reject_unknown_or_missing_keys` (444-454) ترفض **المفاتيح المجهولة والغائرة** معاً على السجلّ والعنصر. و`operation_record_from_dict` **يعيد اشتقاق العدّادات الخمسة ويتحقق منها** (385-397) ويرفع `operation counter mismatch for <key>`. ومعرّفات العناصر المكرّرة مرفوضة في `__post_init__` (165-166).
+
+### 4-2-1. نسخة السجلّ (v2) وكتلة `pack`
+
+السجلّ الذي يكتبه هذا التطبيق نسخته `modmanager.operation_journal.v2`. النسخة `v1` (السابقة) **تُقرأ كما هي**: لا مفتاح `pack` فيها، وهي سجلّات كتبها هذا التطبيق قبل إضافة الكتلة، فرفضها يحوّل كل سجلّ موجود على القرص إلى ملف تالف. أي نسخة غير معروفة **تُرفض** عند القراءة: السجلّ الذي كتبه بناء أحدث قد يحمل مفاتيح تُقرأ خطأً هنا، والردّ الصادق على «لا أعرف هذا الملف» هو الرفض لا التأويل.
+
+- الكتلة `pack` **اختيارية** وتُكتب فقط لعملية `mrpack_install`: 4 مفاتيح مغلقة على الجانبين (`pack_name` · `pack_version_id` · `archive_sha512` · `archive_path`). سجلّ عملية أخرى لا يحملها، وسجلّ `mrpack_install` بلا `pack` **مرفوض**: سجلّ لا يسمّي الأرشيف لا يمكن استئنافه، إذ لا معنى لـ«استئناف ماذا».
+- كل عنصر من عناصر السجلّ يسمّي `partial_path` (ملف `.part` الذي تملكه العملية) و`final_path` (الوجهة التي وصل إليها الملف). هذان المساران هما **إثبات** أن ملف `.part` على القرص لنا: لا شيء آخر يميّز ملفنا عن ملف غريب، و`safety::atomic::write_part` يرفض استبدال `.part` لا يستطيع نسبته — فلا يُحذف إلا ما يسمّيه سجلّ.
+- `revision` يزيد **مرة واحدة** لكل كتابة، حتى حين تحمل الكتابة عدة انتقالات معاً (F-076): السجلّ ملف واحد، وكتابة واحدة = مراجعة واحدة.
+- الكتابة الواحدة تحمل عدة انتقالات لأن السجلّ ملف واحد: كل كتابة تعيد كتابة الملف كله، والملف يكبر مع عدد العناصر. فيُكتب انتقال الملف (انتقاله إلى `downloading` ثم `verifying` ثم `committing`) في كتابة واحدة، ويسير في نفس الكتابة انتهاء الملف السابق — فتكتب مراجعة واحدة لكل ملف بدل أربع، ويتقلّص حجم ما يُكتب إلى الربع تقريباً.
 
 ### 4-3. دلالة `revision`
 

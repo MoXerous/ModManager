@@ -1,6 +1,6 @@
 # behaviors/archive-safety.md — فك الأرشيف ومُنقّي المسارات
 
-> **المرجع:** `app\services\safe_archive.py` (197 سطراً) · `tests\qa\test_safe_archive.py` (190)
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\safe_archive.py` (197 سطراً) · `tests\qa\test_safe_archive.py` (190)
 > ⚠️ **المود باكات مدخل غير موثوق.** `AGENTS.md` §5.6 يفرض `enclosed_name()` وحدوداً على الحجم والعدد. **الكود القديم لا يستخدم `enclosed_name()`** — بل منقّياً خاصاً به. هذا موصوف حرفياً أدناه.
 
 ---

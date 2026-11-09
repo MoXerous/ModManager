@@ -28,6 +28,9 @@ use std::path::PathBuf;
 pub struct Ctx {
     pub instance: Option<PathBuf>,
     pub api_base: Option<String>,
+    /// The operator's explicit opt-in for plain HTTP to loopback
+    /// (`--insecure-loopback`). Never inferred from a URL.
+    pub insecure_loopback: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -91,17 +94,42 @@ pub fn lock_path(ctx: &Ctx) -> Result<PathBuf, CliError> {
     Ok(instance_dir(ctx)?.join("instance.lock.json"))
 }
 
-/// Loopback CDN (tests) may use http; everything else stays https-only
-/// inside the downloader.
-fn allow_insecure(url: &str) -> bool {
-    let host = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("");
-    host == "localhost" || host == "::1" || host.starts_with("127.")
+/// Builds the `DownloadRequest` for every CLI download, one place, so the
+/// transport decision cannot drift between commands.
+///
+/// The transport rule is ours, not the remote's: https only, exactly like
+/// the Tauri app (`commands.rs` passes `false` there). Plain HTTP is enabled
+/// by one thing only — the operator passing the hidden `--insecure-loopback`
+/// flag, which states that this run was started against a local test server.
+/// A provider response is data, and data does not choose the transport:
+/// `allow_insecure(&file.url)` used to make a response naming
+/// `http://127.evil.com` — a DNS name anyone can register — a plain-HTTP
+/// fetch with the remote author instead of us choosing the transport
+/// (AGENTS.md §5.11, `User-Agent` and CDN trust boundaries).
+///
+/// Core still re-checks every hop, so even with the flag only loopback
+/// *addresses* are admitted and `127.evil.com` stays refused.
+pub(crate) fn build_download_request(
+    ctx: &Ctx,
+    url: String,
+    dest: PathBuf,
+    expected_size: Option<u64>,
+    sha1_hex: Option<String>,
+    sha512_hex: Option<String>,
+) -> mm_core::downloader::DownloadRequest {
+    mm_core::downloader::DownloadRequest {
+        url,
+        dest,
+        expected_size,
+        sha1_hex,
+        sha512_hex,
+        // The operator's explicit flag, and nothing else. It used to be
+        // derived from `api_base`, which meant a response naming
+        // `http://127.evil.com` - a DNS name anyone can register - could
+        // choose the transport. A provider response is data, and data does
+        // not choose the transport.
+        allow_insecure_loopback: ctx.insecure_loopback,
+    }
 }
 
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
@@ -170,6 +198,7 @@ pub async fn resolve_slugs(
         .await
         .map_err(|e| CliError::Provider(e.to_string()))
 }
+
 pub fn print_plan(entries: &[PlanEntry], summary: &PlanSummary, warnings: &[Warning]) {
     print_table(
         &["status", "source", "title", "version", "file", "reason"],
@@ -196,5 +225,131 @@ pub fn print_plan(entries: &[PlanEntry], summary: &PlanSummary, warnings: &[Warn
     );
     for w in warnings {
         println!("[{}] {}", w.severity, w.message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_download_request, Ctx};
+    use std::path::PathBuf;
+
+    fn ctx(api_base: Option<&str>, insecure_loopback: bool) -> Ctx {
+        Ctx {
+            instance: None,
+            api_base: api_base.map(str::to_string),
+            insecure_loopback,
+        }
+    }
+
+    fn request_for(ctx: &Ctx, url: &str) -> mm_core::downloader::DownloadRequest {
+        build_download_request(
+            ctx,
+            url.to_string(),
+            PathBuf::from("x.jar"),
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// The CLI transport decision against old code: `allow_insecure(&file.url)`
+    /// read the flag out of the provider's URL, and the old `is_loopback`
+    /// prefix check made `127.evil.com` count as loopback. Remote data must
+    /// never weaken the transport rule.
+    #[test]
+    fn spec_f031_cli_never_enables_insecure_http_from_remote_urls() {
+        let production = ctx(None, false);
+        for url in [
+            "http://127.evil.com/x.jar",
+            "http://127.0.0.1.evil.io/x.jar",
+            "http://127.0.0.1/x.jar",
+            "http://localhost/x.jar",
+        ] {
+            let req = request_for(&production, url);
+            assert!(
+                !req.allow_insecure_loopback,
+                "{url} must not weaken the transport rule"
+            );
+        }
+    }
+
+    /// `--api-base` is a routing option, not a transport decision. A loopback
+    /// base used to switch plain HTTP on as a side effect; it must not any
+    /// more. The move from `--api-base` alone is exactly the regression the
+    /// next assertion pins.
+    #[test]
+    fn spec_f031_cli_insecure_http_is_not_derived_from_api_base() {
+        let loopback_api = ctx(Some("http://127.0.0.1:8080/v2"), false);
+        for url in [
+            "http://127.0.0.1:8080/x.jar",
+            "https://api.modrinth.com/x.jar",
+        ] {
+            assert!(
+                !request_for(&loopback_api, url).allow_insecure_loopback,
+                "{url}: --api-base must not enable plain HTTP"
+            );
+        }
+
+        // The flag is the switch, and it is the whole switch.
+        let flagged = ctx(None, true);
+        assert!(request_for(&flagged, "http://127.0.0.1:8080/x.jar").allow_insecure_loopback);
+    }
+
+    /// The rule through the real downloader: no flag → even a live plain-HTTP
+    /// loopback URL is refused (and never fetched); flag → the same URL lands.
+    #[tokio::test]
+    async fn spec_f031_cli_plain_http_loopback_needs_the_flag() {
+        use mm_core::downloader::client::DownloadError;
+        use mm_core::downloader::{DownloadProgress, Downloader};
+        use std::ops::ControlFlow;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"payload"))
+            .mount(&server)
+            .await;
+        let url = format!("{}/x.bin", server.uri());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dl = Downloader::new(1).expect("client");
+        let mut go = |_p: DownloadProgress| ControlFlow::Continue(());
+        let still = || false;
+
+        // The api-base points at the same loopback server: still refused.
+        let strict = ctx(Some(&url), false);
+        let req = build_download_request(
+            &strict,
+            url.clone(),
+            dir.path().join("refused.bin"),
+            None,
+            None,
+            None,
+        );
+        assert!(matches!(
+            dl.download(&req, &mut go, &still).await,
+            Err(DownloadError::InvalidUrl(_))
+        ));
+        assert_eq!(
+            server.received_requests().await.expect("count").len(),
+            0,
+            "a refused scheme never reaches the socket"
+        );
+
+        let flagged = ctx(None, true);
+        let req = build_download_request(
+            &flagged,
+            url,
+            dir.path().join("allowed.bin"),
+            None,
+            None,
+            None,
+        );
+        let out = dl
+            .download(&req, &mut go, &still)
+            .await
+            .expect("flag allows loopback http");
+        assert_eq!(std::fs::read(&out.path).expect("read"), b"payload");
     }
 }

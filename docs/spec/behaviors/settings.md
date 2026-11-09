@@ -1,6 +1,6 @@
 # behaviors/settings.md — الإعدادات المحفوظة ومساراتها
 
-> **المرجع:** `app\config.py` · `app\storage\repositories.py:595-620` · `app\ui\main_window.py:1069-1310` (`SettingsDialog`)
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\config.py` · `app\storage\repositories.py:595-620` · `app\ui\main_window.py:1069-1310` (`SettingsDialog`)
 > ⚠️ **`test_operation_journal.py` لا يحتوي اختبارات إعدادات، ولا يوجد ملف اختبار إعدادات مخصَّص.** التغطية **غير مباشرة** فقط.
 
 ---

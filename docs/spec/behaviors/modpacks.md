@@ -1,6 +1,6 @@
 # behaviors/modpacks.md — `.mrpack` و CurseForge zip
 
-> **المرجع:** `app\services\mrpack_service.py` (730 سطراً) · `app\services\mrpack_installer.py` (1,659) · `tests\qa\test_mrpack_installer.py` (1,489)
+> **المرجع:** `D:\latest_project\` (تطبيق بايثون/PySide6، `master` @ `4f71f18`) · `app\services\mrpack_service.py` (730 سطراً) · `app\services\mrpack_installer.py` (1,659) · `tests\qa\test_mrpack_installer.py` (1,489)
 > ⚠️ **CurseForge zip: غير موجود إطلاقاً.** لا كود ولا اختبار. `foundations.md` §4.7 و§4.4 يصفانه كتصميم **مستقبلي**. كل ما يخصّه هنا **غير مُتحقَّق**.
 
 ---

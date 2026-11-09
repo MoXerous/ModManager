@@ -1,6 +1,11 @@
 //! `instance.lock.json`: pinned install state. Newer schemas are
 //! refused, never migrated silently (mirrors AGENTS.md §5.10).
 
+use crate::safety::atomic::{write_atomic_unique, AtomicError};
+
+/// The file name inside an instance root.
+pub const LOCK_FILE_NAME: &str = "instance.lock.json";
+
 /// Current lock schema; writers always emit this.
 pub const LOCK_SCHEMA_VERSION: u32 = 1;
 
@@ -18,6 +23,15 @@ pub struct LockEntry {
     pub filename: String,
     #[serde(default)]
     pub sha1: String,
+    /// Recorded alongside `sha1` because that is the only durable record of
+    /// what was installed: the download verified both, but a later audit or a
+    /// re-verify can only use what is written down. SHA-1 is collision-broken,
+    /// which is exactly the property a mod channel must not rely on.
+    ///
+    /// `default` keeps locks written before this field readable — an absent
+    /// value reads as empty, which every consumer already handles for `sha1`.
+    #[serde(default)]
+    pub sha512: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -50,9 +64,18 @@ fn read_lock_str(text: &str) -> Result<LockFile, LockError> {
             supported: LOCK_SCHEMA_VERSION,
         });
     }
-    Ok(LockFile {
-        entries: doc.entries,
-    })
+    // Old schema-1 locks predate the provider field. Modrinth was the only
+    // provider then, so an empty value there has exactly one meaning
+    // (ADR 0004 §2-3 item 5). Writers always fill it.
+    let mut entries = doc.entries;
+    if doc.schema_version == 1 {
+        for entry in &mut entries {
+            if entry.provider.is_empty() {
+                entry.provider = "modrinth".to_string();
+            }
+        }
+    }
+    Ok(LockFile { entries })
 }
 
 pub fn write_lock(path: &std::path::Path, lock: &LockFile) -> Result<(), LockError> {
@@ -61,7 +84,12 @@ pub fn write_lock(path: &std::path::Path, lock: &LockFile) -> Result<(), LockErr
         entries: lock.entries.clone(),
     };
     let text = serde_json::to_string_pretty(&doc).map_err(|_| LockError::Invalid)?;
-    std::fs::write(path, text).map_err(LockError::Io)?;
+    // The lock is the only durable record of what was installed, so a crash
+    // mid-write must leave the previous file intact, never a truncated one.
+    // `write_atomic_unique` uses a fresh temp per attempt: a stale `.part` or
+    // a temp left by a killed run can never block the next write.
+    let mut bytes = text.as_bytes();
+    write_atomic_unique(path, &mut bytes)?;
     Ok(())
 }
 
@@ -69,6 +97,8 @@ pub fn write_lock(path: &std::path::Path, lock: &LockFile) -> Result<(), LockErr
 pub enum LockError {
     #[error("io error")]
     Io(std::io::Error),
+    #[error(transparent)]
+    Atomic(#[from] AtomicError),
     #[error("invalid lock file")]
     Invalid,
     #[error("unsupported lock schema {found}, supported {supported}")]

@@ -1,0 +1,217 @@
+{
+  "data": {
+    "isCacheBuilt": true,
+    "exactMatches": [
+      {
+        "id": 238222,
+        "file": {
+          "id": 9277601,
+          "gameId": 432,
+          "modId": 238222,
+          "isAvailable": true,
+          "displayName": "15.74.0.228 for Fabric 1.20.1",
+          "fileName": "jei-1.20.1-fabric-15.74.0.228.jar",
+          "releaseType": 2,
+          "fileStatus": 4,
+          "hashes": [
+            {
+              "value": "85d8e1ebf0be1c83cd21f97afe89903c8643b2c3",
+              "algo": 1
+            },
+            {
+              "value": "2ad09ee79478711d3edce131504c1b06",
+              "algo": 2
+            }
+          ],
+          "fileDate": "2026-10-21T14:31:24.613Z",
+          "fileLength": 6929002,
+          "downloadCount": 1,
+          "fileSizeOnDisk": 14774554,
+          "downloadUrl": "https://edge.forgecdn.net/files/9277/601/jei-1.20.1-fabric-15.74.0.228.jar",
+          "gameVersions": [
+            "Client",
+            "Fabric",
+            "1.20.1",
+            "Server"
+          ],
+          "sortableGameVersions": [
+            {
+              "gameVersionName": "Client",
+              "gameVersionPadded": "0",
+              "gameVersion": "",
+              "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+              "gameVersionTypeId": 75208
+            },
+            {
+              "gameVersionName": "Fabric",
+              "gameVersionPadded": "0",
+              "gameVersion": "",
+              "gameVersionReleaseDate": "2022-09-01T00:00:00Z",
+              "gameVersionTypeId": 68441
+            },
+            {
+              "gameVersionName": "1.20.1",
+              "gameVersionPadded": "0000000001.0000000020.0000000001",
+              "gameVersion": "1.20.1",
+              "gameVersionReleaseDate": "2023-06-12T14:26:38.477Z",
+              "gameVersionTypeId": 75125
+            },
+            {
+              "gameVersionName": "Server",
+              "gameVersionPadded": "0",
+              "gameVersion": "",
+              "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+              "gameVersionTypeId": 75208
+            }
+          ],
+          "dependencies": [
+            {
+              "modId": 1700987,
+              "relationType": 2
+            },
+            {
+              "modId": 1689768,
+              "relationType": 3
+            }
+          ],
+          "alternateFileId": 0,
+          "isServerPack": false,
+          "fileFingerprint": 1929556446,
+          "modules": [
+            {
+              "name": "META-INF",
+              "fingerprint": 1584636826
+            },
+            {
+              "name": "module-info.class",
+              "fingerprint": 2624416969
+            },
+            {
+              "name": "example-author-0",
+              "fingerprint": 1516886532
+            }
+          ]
+        },
+        "latestFiles": [
+          {
+            "id": 3040523,
+            "gameId": 432,
+            "modId": 238222,
+            "isAvailable": true,
+            "displayName": "jei_1.12.2-4.16.1.301.jar",
+            "fileName": "jei_1.12.2-4.16.1.301.jar",
+            "releaseType": 1,
+            "fileStatus": 4,
+            "hashes": [
+              {
+                "value": "3045e8440ea44071d8b83c4e7b3c190348fdc527",
+                "algo": 1
+              },
+              {
+                "value": "1dee4be93d666e2228039c551e927b35",
+                "algo": 2
+              }
+            ],
+            "fileDate": "2020-08-24T01:01:39.123Z",
+            "fileLength": 653211,
+            "downloadCount": 29039447,
+            "downloadUrl": "https://edge.forgecdn.net/files/3040/523/jei_1.12.2-4.16.1.301.jar",
+            "gameVersions": [
+              "1.12.2"
+            ],
+            "sortableGameVersions": [
+              {
+                "gameVersionName": "1.12.2",
+                "gameVersionPadded": "0000000001.0000000012.0000000002",
+                "gameVersion": "1.12.2",
+                "gameVersionReleaseDate": "2017-09-18T05:00:00Z",
+                "gameVersionTypeId": 628
+              }
+            ],
+            "dependencies": [],
+            "alternateFileId": 0,
+            "isServerPack": false,
+            "fileFingerprint": 3089143260,
+            "modules": [
+              {
+                "name": "META-INF",
+                "fingerprint": 2236405288
+              },
+              {
+                "name": "example-author-0",
+                "fingerprint": 2222830911
+              },
+              {
+                "name": "pack.mcmeta",
+                "fingerprint": 1488642189
+              }
+            ]
+          },
+          {
+            "id": 3272039,
+            "gameId": 432,
+            "modId": 238222,
+            "isAvailable": true,
+            "displayName": "jei-1.13.2-5.0.0.31.jar",
+            "fileName": "jei-1.13.2-5.0.0.31.jar",
+            "releaseType": 3,
+            "fileStatus": 4,
+            "hashes": [
+              {
+                "value": "aa15cdea079db8b91d75e3c68216df80a70545d8",
+                "algo": 1
+              },
+              {
+                "value": "1ee1f4fb4c6e199c02c7d15cbd0d2c8a",
+                "algo": 2
+              }
+            ],
+            "fileDate": "2021-04-11T03:49:47.687Z",
+            "fileLength": 690802,
+            "downloadCount": 32375,
+            "downloadUrl": "https://edge.forgecdn.net/files/3272/39/jei-1.13.2-5.0.0.31.jar",
+            "gameVersions": [
+              "1.13.2"
+            ],
+            "sortableGameVersions": [
+              {
+                "gameVersionName": "1.13.2",
+                "gameVersionPadded": "0000000001.0000000013.0000000002",
+                "gameVersion": "1.13.2",
+                "gameVersionReleaseDate": "2018-10-22T00:00:00Z",
+                "gameVersionTypeId": 55023
+              }
+            ],
+            "dependencies": [],
+            "alternateFileId": 0,
+            "isServerPack": false,
+            "fileFingerprint": 2700304635,
+            "modules": [
+              {
+                "name": "META-INF",
+                "fingerprint": 1102858494
+              },
+              {
+                "name": "example-author-0",
+                "fingerprint": 2811918946
+              },
+              {
+                "name": "pack.mcmeta",
+                "fingerprint": 3652707984
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "exactFingerprints": [
+      1929556446
+    ],
+    "partialMatches": [],
+    "partialMatchFingerprints": {},
+    "installedFingerprints": [
+      1929556446
+    ],
+    "unmatchedFingerprints": null
+  }
+}
