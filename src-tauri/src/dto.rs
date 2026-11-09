@@ -1096,6 +1096,146 @@ impl From<&mm_core::legacy::LegacyWarning> for LegacyWarningDto {
     }
 }
 
+// --- Legacy import: plan and execute (F-181) ------------------------------
+//
+// `action` (`register | skip | block`), every `code` and `blockedReason` are
+// stable codes: the UI owns the sentences and translates them. `detail` is a
+// path or an id for the diagnostic line - never parsed, never translated.
+// `entries` in the report mirror the plan's order, so a row the user saw in
+// the preview is the same row in the result.
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyImportPlanDto {
+    pub entries: Vec<LegacyImportPlanEntryDto>,
+    #[ts(type = "number")]
+    pub ready: usize,
+    #[ts(type = "number")]
+    pub skipped: usize,
+    #[ts(type = "number")]
+    pub blocked: usize,
+    /// `root_not_found | database_missing | database_unsupported |
+    /// profiles_table_missing`. Set only when no entry can be planned at all.
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyImportPlanEntryDto {
+    pub legacy_id: String,
+    pub name: String,
+    /// The detected instance root this entry would register. Empty when the
+    /// profile has no usable root.
+    pub root: String,
+    pub game_version: Option<String>,
+    pub loader: Option<String>,
+    /// `managed | manual | adopted`.
+    pub source: String,
+    /// `register | skip | block`.
+    pub action: String,
+    /// `ready | already_registered | root_missing | duplicate_in_selection |
+    /// profile_missing`.
+    pub code: String,
+    /// The instance that already owns `root`, when one does.
+    pub existing_instance: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyImportReportDto {
+    /// The backup of the new database taken before the first row, when rows
+    /// were written. `None` means nothing was written, so nothing needed one.
+    pub backup: Option<String>,
+    #[ts(type = "number")]
+    pub imported: usize,
+    #[ts(type = "number")]
+    pub skipped: usize,
+    #[ts(type = "number")]
+    pub blocked: usize,
+    pub blocked_reason: Option<String>,
+    pub entries: Vec<LegacyImportOutcomeDto>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LegacyImportOutcomeDto {
+    pub legacy_id: String,
+    pub name: String,
+    /// True only for a row this run inserted.
+    pub applied: bool,
+    /// `imported` for an applied row; otherwise the plan's own code.
+    pub code: String,
+    pub instance_id: Option<String>,
+    /// A path or an id, for the diagnostic line only.
+    pub detail: String,
+}
+
+impl From<&mm_core::legacy::ImportPlan> for LegacyImportPlanDto {
+    fn from(plan: &mm_core::legacy::ImportPlan) -> Self {
+        Self {
+            entries: plan.entries.iter().map(Into::into).collect(),
+            ready: plan.ready,
+            skipped: plan.skipped,
+            blocked: plan.blocked,
+            blocked_reason: plan.blocked_reason.map(str::to_string),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::ImportEntry> for LegacyImportPlanEntryDto {
+    fn from(entry: &mm_core::legacy::ImportEntry) -> Self {
+        Self {
+            legacy_id: entry.legacy_id.clone(),
+            name: entry.name.clone(),
+            root: display(&entry.root),
+            game_version: entry.game_version.clone(),
+            loader: entry.loader.clone(),
+            source: entry.source.as_str().to_string(),
+            action: action_code(entry.action).to_string(),
+            code: entry.code.to_string(),
+            existing_instance: entry.existing_instance.clone(),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::ImportReport> for LegacyImportReportDto {
+    fn from(report: &mm_core::legacy::ImportReport) -> Self {
+        Self {
+            backup: report.backup.as_deref().map(display),
+            imported: report.imported,
+            skipped: report.skipped,
+            blocked: report.blocked,
+            blocked_reason: report.blocked_reason.map(str::to_string),
+            entries: report.outcomes.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&mm_core::legacy::ImportOutcome> for LegacyImportOutcomeDto {
+    fn from(outcome: &mm_core::legacy::ImportOutcome) -> Self {
+        Self {
+            legacy_id: outcome.legacy_id.clone(),
+            name: outcome.name.clone(),
+            applied: outcome.applied,
+            code: outcome.code.to_string(),
+            instance_id: outcome.instance_id.clone(),
+            detail: outcome.detail.clone(),
+        }
+    }
+}
+
+fn action_code(action: mm_core::legacy::ImportAction) -> &'static str {
+    match action {
+        mm_core::legacy::ImportAction::Register => "register",
+        mm_core::legacy::ImportAction::Skip => "skip",
+        mm_core::legacy::ImportAction::Block => "block",
+    }
+}
+
 /// Display only. A path that is not valid UTF-8 is shown lossily; nothing on
 /// this screen is ever sent back as a path.
 fn display(path: &std::path::Path) -> String {

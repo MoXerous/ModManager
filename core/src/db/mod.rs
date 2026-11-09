@@ -52,6 +52,56 @@ impl Db {
     pub(crate) fn conn(&self) -> &rusqlite::Connection {
         &self.conn
     }
+
+    /// Page-consistent backup of the current database before a legacy import.
+    ///
+    /// The copy is taken *before* the first row of the import is written, so a
+    /// failed or unwanted import can always be undone by hand. Named with the
+    /// same no-replace discipline as the migration backup (F-136): a `.bak`
+    /// that already exists is never overwritten.
+    ///
+    /// The backup goes to a temporary name that carries a UUID, so two calls
+    /// cannot collide, and it is published by rename only after the copy has
+    /// been flushed to disk. Any failure removes the temporary file.
+    pub fn backup_before_legacy_import(&self) -> Result<PathBuf, DbError> {
+        let temp = self
+            .path
+            .with_extension(format!("pre-legacy-import.{}.tmp", uuid::Uuid::new_v4()));
+
+        let copied = (|| -> Result<(), DbError> {
+            let mut dst = rusqlite::Connection::open(&temp)?;
+            // The destination must be a rollback-journal database: in WAL mode
+            // the copied pages could land in a `-wal` sidecar, and the rename
+            // below only publishes the main file.
+            dst.pragma_update(None, "journal_mode", "DELETE")?;
+            let backup = rusqlite::backup::Backup::new(&self.conn, &mut dst)?;
+            backup.run_to_completion(i32::MAX, std::time::Duration::from_millis(0), None)?;
+            Ok(())
+        })();
+        if let Err(error) = copied {
+            remove_sqlite_files(&temp);
+            return Err(error);
+        }
+
+        // fsync through a write-capable handle: FlushFileBuffers fails on
+        // read-only handles (Windows) — same rule as atomic::commit_part.
+        let synced = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&temp)
+            .and_then(|file| file.sync_all());
+        if let Err(error) = synced {
+            remove_sqlite_files(&temp);
+            return Err(DbError::Io(error));
+        }
+
+        let target = unique_legacy_bak(&self.path);
+        if let Err(error) = std::fs::rename(&temp, &target) {
+            remove_sqlite_files(&temp);
+            return Err(DbError::Io(error));
+        }
+        Ok(target)
+    }
 }
 
 /// Open (creating) `path`: pragmas, version gate, backup, migrate.
@@ -148,6 +198,36 @@ fn unique_bak(path: &Path, from: u32) -> PathBuf {
             return cand;
         }
         n += 1;
+    }
+}
+
+/// `pre-legacy-import.<epoch>.<pid>.<n>.bak` next to the database.
+fn unique_legacy_bak(path: &Path) -> PathBuf {
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut n = 0u32;
+    loop {
+        let cand = path.with_extension(format!(
+            "pre-legacy-import.{epoch}.{}.{n}.bak",
+            std::process::id()
+        ));
+        if !cand.exists() {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+/// Removes a temporary database and the sidecars SQLite may have created next
+/// to it. Best effort: the caller is already on a failure path.
+fn remove_sqlite_files(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(sidecar));
     }
 }
 
