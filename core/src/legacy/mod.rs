@@ -12,13 +12,20 @@
 
 pub mod db;
 pub mod discover;
+pub mod import;
 pub mod json;
 
+#[cfg(test)]
+mod import_tests;
 #[cfg(test)]
 mod tests;
 
 pub use db::{LegacyDbScan, LegacyProfileRow};
 pub use discover::{discover_roots, LegacyRootSource, LegacyRoots};
+pub use import::{
+    execute_import, plan_import, ImportAction, ImportEntry, ImportError, ImportOutcome, ImportPlan,
+    ImportReport,
+};
 pub use json::{read_installed_mods, read_profile_json, InstalledModsFact, JsonFact};
 
 use std::path::{Path, PathBuf};

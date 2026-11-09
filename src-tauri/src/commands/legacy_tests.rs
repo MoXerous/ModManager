@@ -4,7 +4,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::legacy::{explicit_home, scan_with};
+use super::legacy::{
+    execute_import_with, explicit_home, normalize_selection, plan_import_with, scan_with,
+};
 use crate::dto::ErrorCode;
 
 const OLD_SCHEMA: &str = "
@@ -183,4 +185,112 @@ fn spec_f181_an_unreadable_database_is_a_warning_and_still_cleans_scratch() {
         leftovers.is_empty(),
         "leftover scratch entries: {leftovers:?}"
     );
+}
+
+/// The whole write path through the bridge: a real scan, a plan, a backup and
+/// a registered row. The old home is read, never written.
+#[test]
+fn spec_f181_bridge_plans_and_executes_with_a_real_scan() {
+    let dir = tempfile::tempdir().expect("temp");
+    let (home, instance) = seed_old_home(dir.path());
+    let scratch = dir.path().join("scratch");
+    let db = mm_core::db::open(&dir.path().join("new.db")).expect("new db");
+
+    let plan =
+        plan_import_with(&db, Some(home.clone()), &scratch, vec!["1".to_string()]).expect("plan");
+    assert_eq!(plan.blocked_reason, None);
+    assert_eq!((plan.ready, plan.skipped, plan.blocked), (1, 0, 0));
+    assert_eq!(plan.entries.len(), 1);
+    let entry = &plan.entries[0];
+    assert_eq!(entry.legacy_id, "1");
+    assert_eq!(entry.name, "Old one");
+    assert_eq!(entry.root, instance.display().to_string());
+    assert_eq!(entry.action, "register");
+    assert_eq!(entry.code, "ready");
+    assert_eq!(entry.source, "manual", "an empty v1 kind is not adopted");
+    assert_eq!(entry.game_version.as_deref(), Some("1.20.1"));
+    assert_eq!(entry.loader.as_deref(), Some("fabric"));
+    assert_eq!(
+        mm_core::db::instances::list(&db).expect("list").len(),
+        0,
+        "a plan writes nothing"
+    );
+
+    let report = execute_import_with(&db, Some(home.clone()), &scratch, vec!["1".to_string()])
+        .expect("execute");
+    assert_eq!(report.imported, 1);
+    assert_eq!((report.skipped, report.blocked), (0, 0));
+    let backup = report.backup.expect("a backup was taken");
+    assert!(Path::new(&backup).is_file(), "backup missing at {backup}");
+    assert_eq!(report.entries[0].code, "imported");
+    assert!(report.entries[0].applied);
+    assert!(report.entries[0].instance_id.is_some());
+
+    let rows = mm_core::db::instances::list(&db).expect("list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "Old one");
+    assert_eq!(
+        rows[0].source,
+        mm_core::db::instances::InstanceSource::Manual
+    );
+
+    // The same selection again is a skip, not a second row and not a backup.
+    let again = execute_import_with(&db, Some(home), &scratch, vec!["1".to_string()])
+        .expect("second execute");
+    assert_eq!(again.imported, 0);
+    assert_eq!(again.backup, None);
+    assert_eq!(again.entries[0].code, "already_registered");
+    assert_eq!(mm_core::db::instances::list(&db).expect("list").len(), 1);
+
+    // The snapshot copies never outlive their command.
+    let leftovers: Vec<_> = fs::read_dir(&scratch)
+        .expect("scratch base")
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "leftover scratch entries: {leftovers:?}"
+    );
+}
+
+#[test]
+fn spec_f181_bridge_refuses_an_empty_selection() {
+    for empty in [vec![], vec![String::new()], vec!["   ".to_string()]] {
+        let err = normalize_selection(empty).expect_err("an empty selection is malformed");
+        assert_eq!(err.code, ErrorCode::InvalidInput);
+    }
+
+    // Order is kept and repeats are dropped.
+    let got = normalize_selection(vec![
+        " 2 ".to_string(),
+        "1".to_string(),
+        "2".to_string(),
+        String::new(),
+    ])
+    .expect("selection");
+    assert_eq!(got, vec!["2".to_string(), "1".to_string()]);
+}
+
+/// A newer old schema is a plan reason, not an IPC failure: the screen has a
+/// sentence for it and nothing was written.
+#[test]
+fn spec_f181_bridge_reports_an_unsupported_database_as_a_plan_reason() {
+    let dir = tempfile::tempdir().expect("temp");
+    let (home, _instance) = seed_old_home(dir.path());
+    {
+        let connection =
+            rusqlite::Connection::open(home.join("data").join("app.sqlite3")).expect("old db");
+        connection
+            .pragma_update(None, "user_version", 3)
+            .expect("stamp a newer schema");
+    }
+    let scratch = dir.path().join("scratch");
+    let db = mm_core::db::open(&dir.path().join("new.db")).expect("new db");
+
+    let plan = plan_import_with(&db, Some(home), &scratch, vec!["1".to_string()]).expect("plan");
+
+    assert_eq!(plan.blocked_reason.as_deref(), Some("database_unsupported"));
+    assert!(plan.entries.is_empty());
+    assert_eq!((plan.ready, plan.skipped, plan.blocked), (0, 0, 0));
 }

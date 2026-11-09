@@ -14,6 +14,8 @@ import type { IpcError } from '../bindings/IpcError';
 import type { InstanceSnapshotDto } from '../bindings/InstanceSnapshotDto';
 import type { InstanceSummaryDto } from '../bindings/InstanceSummaryDto';
 import type { InstallPlanDto } from '../bindings/InstallPlanDto';
+import type { LegacyImportPlanDto } from '../bindings/LegacyImportPlanDto';
+import type { LegacyImportReportDto } from '../bindings/LegacyImportReportDto';
 import type { LegacyScanDto } from '../bindings/LegacyScanDto';
 import type { LinkInstanceRequest } from '../bindings/LinkInstanceRequest';
 import type { ModpackApplyResultDto } from '../bindings/ModpackApplyResultDto';
@@ -236,6 +238,35 @@ export function scanLegacyImport(overrideHome?: string): Promise<LegacyScanDto> 
   const value = overrideHome?.trim();
   return invoke<LegacyScanDto>('scan_legacy_import', {
     overrideHome: value ? value : null,
+  });
+}
+
+/** What registering `selected` would do. Writes nothing: it is the dry run. */
+export function planLegacyImport(
+  overrideHome: string | undefined,
+  selected: string[],
+): Promise<LegacyImportPlanDto> {
+  const value = overrideHome?.trim();
+  return invoke<LegacyImportPlanDto>('plan_legacy_import', {
+    overrideHome: value ? value : null,
+    selected,
+  });
+}
+
+/**
+ * Registers the selected profiles in our database, after backing it up.
+ *
+ * Rust re-scans and rebuilds the plan, so this list is a selection, never a
+ * plan the screen could have edited into registering an unseen folder.
+ */
+export function executeLegacyImport(
+  overrideHome: string | undefined,
+  selected: string[],
+): Promise<LegacyImportReportDto> {
+  const value = overrideHome?.trim();
+  return invoke<LegacyImportReportDto>('execute_legacy_import', {
+    overrideHome: value ? value : null,
+    selected,
   });
 }
 
