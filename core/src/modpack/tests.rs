@@ -91,15 +91,6 @@ fn mrpack_a_traversing_path_is_refused() {
 }
 
 #[test]
-fn mrpack_a_traversing_overrides_folder_is_refused() {
-    let raw = index_with("", r#","overrides":"../outside""#);
-    assert!(matches!(
-        parse_index(raw.as_bytes()),
-        Err(IndexError::UnsafePath { .. })
-    ));
-}
-
-#[test]
 fn mrpack_a_file_with_no_download_is_refused() {
     let f = r#"{"path":"mods/x.jar","hashes":{"sha1":"a","sha512":"b"},"downloads":[]}"#;
     let raw = index_with(f, "");
@@ -192,16 +183,17 @@ fn mrpack_a_non_minecraft_game_is_refused() {
 }
 
 #[test]
-fn mrpack_override_layers_are_listed_client_first_server_last() {
+fn mrpack_layer_names_come_from_the_format_not_the_index() {
+    // The format fixes the folder names (`overrides`, `client-overrides`,
+    // `server-overrides`). Some indexes also spell them out; those fields are
+    // not part of the reader's contract, so a pack cannot point the planner at
+    // an arbitrary folder by renaming one here.
     let raw = index_with(
-        "",
-        r#","serverOverrides":"server-overrides","clientOverrides":"client-overrides""#,
+        &one_file(),
+        r#","overrides":"base","clientOverrides":"client","serverOverrides":"server""#,
     );
-    let pack = parse_index(raw.as_bytes()).expect("parse");
-    assert_eq!(
-        pack.override_layers,
-        vec!["client-overrides", "overrides", "server-overrides"]
-    );
+    let pack = parse_index(raw.as_bytes()).expect("unknown pack fields are ignored");
+    assert_eq!(pack.files.len(), 1);
 }
 
 #[test]
@@ -209,8 +201,6 @@ fn mrpack_an_empty_pack_is_valid() {
     let raw = r#"{"formatVersion":1,"game":"minecraft","versionId":"v","name":"Empty","files":[]}"#;
     let pack = parse_index(raw.as_bytes()).expect("an empty pack is not an error");
     assert!(pack.files.is_empty());
-    // The default layer still exists: a pack may ship no overrides folder.
-    assert_eq!(pack.override_layers, vec!["overrides"]);
 }
 
 #[test]
@@ -273,11 +263,4 @@ fn mrpack_a_file_path_inside_the_staging_directory_is_refused() {
         parse_index(raw.as_bytes()),
         Err(IndexError::StagingPath { .. })
     ));
-}
-
-#[test]
-fn mrpack_a_layer_name_with_a_trailing_slash_is_normalised() {
-    let raw = index_with("", r#","clientOverrides":"client-overrides/""#);
-    let pack = parse_index(raw.as_bytes()).expect("parse");
-    assert_eq!(pack.override_layers, vec!["client-overrides", "overrides"]);
 }

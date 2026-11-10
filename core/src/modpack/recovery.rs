@@ -480,7 +480,7 @@ pub async fn recover_with(
     )?;
     journal.replace_items(operation_id, items, None)?;
 
-    let filtered = InstallPlan { ops: redo };
+    let filtered = InstallPlan::new(redo);
     let executor = PlanExecutor::new(
         provider,
         downloader,

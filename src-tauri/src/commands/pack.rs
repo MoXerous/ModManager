@@ -55,7 +55,9 @@ use tauri::ipc::Channel;
 use zip::ZipArchive;
 
 use mm_core::journal::{Journal, JournalError, JournalOp, OperationKind, OperationRecord};
-use mm_core::modpack::archive::{plan_install, read_pack, InstallOp, InstallPlan, PackError};
+use mm_core::modpack::archive::{
+    plan_install, read_pack, InstallOp, InstallPlan, PackError, PlanSkips,
+};
 use mm_core::modpack::exec::{self, ExecError, PackEvent, PackIdentity};
 use mm_core::modpack::mrpack::{Pack, STAGING_DIR};
 use mm_core::modpack::recovery as pack_recovery;
@@ -253,7 +255,12 @@ fn read_plan(
     Ok((digest, pack, plan, writes))
 }
 
-fn plan_dto(digest: &str, pack: &Pack, writes: &[exec::PlannedWrite]) -> ModpackPlanDto {
+fn plan_dto(
+    digest: &str,
+    pack: &Pack,
+    writes: &[exec::PlannedWrite],
+    skips: &PlanSkips,
+) -> ModpackPlanDto {
     let mut download_count = 0;
     let mut override_count = 0;
     let mut replace_count = 0;
@@ -293,6 +300,9 @@ fn plan_dto(digest: &str, pack: &Pack, writes: &[exec::PlannedWrite]) -> Modpack
         download_count,
         override_count,
         replace_count,
+        skipped_optional: skips.remote_optional,
+        skipped_unsupported: skips.remote_unsupported,
+        skipped_server_overrides: skips.server_overrides,
     }
 }
 
@@ -427,12 +437,12 @@ pub async fn plan_modpack_install_with(
     // The plan itself stays here: it is what the writes were derived from, and
     // the apply rebuilds it rather than accepting one from the webview. The
     // digest of those bytes is the one thing the webview gets to keep.
-    let (digest, pack, _plan, writes) = tauri::async_runtime::spawn_blocking(move || {
+    let (digest, pack, plan, writes) = tauri::async_runtime::spawn_blocking(move || {
         read_plan(&pack_path, &instance_root, None, None)
     })
     .await
     .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))??;
-    Ok(plan_dto(&digest, &pack, &writes))
+    Ok(plan_dto(&digest, &pack, &writes, &plan.skips))
 }
 
 /// Applies a `.mrpack` to an instance, streaming progress on a channel.

@@ -20,4 +20,19 @@ downloadCount: number, overrideCount: number,
 /**
  * Destinations that already hold a file and will be replaced.
  */
-replaceCount: number, };
+replaceCount: number, 
+/**
+ * Remote entries with `env.client = "optional"`; this install has no
+ * per-file selection yet, so they are not applied (F-074).
+ */
+skippedOptional: number, 
+/**
+ * Remote entries with `env.client = "unsupported"`: never applied on a
+ * client (F-074).
+ */
+skippedUnsupported: number, 
+/**
+ * Files under `server-overrides/`: a client install never writes them
+ * (F-074).
+ */
+skippedServerOverrides: number, };

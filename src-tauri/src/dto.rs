@@ -801,6 +801,18 @@ pub struct ModpackPlanDto {
     /// Destinations that already hold a file and will be replaced.
     #[ts(type = "number")]
     pub replace_count: usize,
+    /// Remote entries with `env.client = "optional"`; this install has no
+    /// per-file selection yet, so they are not applied (F-074).
+    #[ts(type = "number")]
+    pub skipped_optional: usize,
+    /// Remote entries with `env.client = "unsupported"`: never applied on a
+    /// client (F-074).
+    #[ts(type = "number")]
+    pub skipped_unsupported: usize,
+    /// Files under `server-overrides/`: a client install never writes them
+    /// (F-074).
+    #[ts(type = "number")]
+    pub skipped_server_overrides: usize,
 }
 
 /// One progress event on the modpack channel.

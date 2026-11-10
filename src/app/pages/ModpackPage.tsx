@@ -390,6 +390,20 @@ export function ModpackPage() {
                 {t('pack.count.replaces', { count: plan.replaceCount })}
               </Chip>
             )}
+            {/* What the pack carries and this client install leaves out. The
+                plan states it, so "nothing else was in the pack" is never an
+                assumption the screen invites (F-074). */}
+            {plan.skippedOptional > 0 && (
+              <Chip>{t('pack.count.skippedOptional', { count: plan.skippedOptional })}</Chip>
+            )}
+            {plan.skippedUnsupported > 0 && (
+              <Chip>{t('pack.count.skippedUnsupported', { count: plan.skippedUnsupported })}</Chip>
+            )}
+            {plan.skippedServerOverrides > 0 && (
+              <Chip>
+                {t('pack.count.skippedServerOverrides', { count: plan.skippedServerOverrides })}
+              </Chip>
+            )}
           </div>
 
           <ul className="mt-2.5 flex max-h-[46vh] flex-col gap-1 overflow-auto">
