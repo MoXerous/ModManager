@@ -21,13 +21,15 @@ pub mod updates;
 pub const APP_NAME: &str = "ModManager";
 
 /// User-Agent لكل طلبات الشبكة الصادرة (§5.11).
-/// قيمة مؤقتة للتطوير فقط — تُستبدل بقيمة الإصدار مع رابط GitHub.
-/// بوابة الإصدار أدناه تُفشل بناء release ما دامت هذه القيمة مؤقتة.
-pub const USER_AGENT: &str = "ModManager/0.1.0-dev (dev build)";
-
-#[cfg(not(debug_assertions))]
-compile_error!(
-    "USER_AGENT is still the temporary dev value; set the release value (with GitHub URL) before building release"
+///
+/// The repository is the contact channel: Modrinth asks for a descriptive
+/// `User-Agent` with a way to reach the author, and the public issue tracker is
+/// that way. The version is read from the crate rather than typed here, so a
+/// release bump cannot leave a stale value behind.
+pub const USER_AGENT: &str = concat!(
+    "ModManager/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/MoXerous/ModManager)"
 );
 
 /// معلومات الإصدار والنظام.
@@ -75,5 +77,19 @@ mod tests {
         assert!(!info.version.is_empty());
         assert!(!info.os.is_empty());
         assert!(!info.arch.is_empty());
+    }
+
+    #[test]
+    fn spec_f018_user_agent_is_final_and_names_the_repository() {
+        assert_eq!(
+            USER_AGENT,
+            concat!(
+                "ModManager/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/MoXerous/ModManager)"
+            ),
+            "F-018: the release value must carry the version and a contact URL"
+        );
+        assert!(!USER_AGENT.contains("-dev"));
     }
 }
