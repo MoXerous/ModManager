@@ -268,6 +268,11 @@
   "browse.downloads_one": "{{count}} download",
   "browse.downloads_other": "{{count}} downloads",
   "browse.target": "Install into",
+  "browse.loadMore": "Load more",
+  "browse.loadingMore": "Loading…",
+  "browse.loadMoreFailed": "Could not load the next page: {{reason}}",
+  "browse.noResultsTitle": "No matches",
+  "browse.noResultsBody": "Try a shorter query, or loosen the version and loader filters.",
 
   "combobox.suggestions": "Suggestions",
   "combobox.empty": "No suggestions.",
