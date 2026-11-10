@@ -300,6 +300,11 @@
   "browse.downloads_many": "{{count}} تنزيلًا",
   "browse.downloads_other": "{{count}} تنزيل",
   "browse.target": "التثبيت في",
+  "browse.loadMore": "حمّل المزيد",
+  "browse.loadingMore": "جارٍ التحميل…",
+  "browse.loadMoreFailed": "تعذّر تحميل الصفحة التالية: {{reason}}",
+  "browse.noResultsTitle": "لا مطابقات",
+  "browse.noResultsBody": "جرّب استعلامًا أقصر، أو خفّف فلترَي الإصدار واللودر.",
 
   "combobox.suggestions": "الاقتراحات",
   "combobox.empty": "لا اقتراحات.",

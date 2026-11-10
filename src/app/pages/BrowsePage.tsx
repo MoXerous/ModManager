@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 
 import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
 import type { ProjectDto } from '../../bindings/ProjectDto';
-import type { SearchPageDto } from '../../bindings/SearchPageDto';
 import type { IpcError } from '../../bindings/IpcError';
 import type { CurseForgeKeyDto } from '../../bindings/CurseForgeKeyDto';
 import { Combobox } from '@/components/ui/Combobox';
@@ -37,15 +36,37 @@ interface Props {
   onOpenSettings: () => void;
 }
 
+/** One screenful. `offset` is a row count, so this is the page's stride. */
+const PAGE_SIZE = 20;
+
+/**
+ * Append a page without repeating a project.
+ *
+ * A catalogue is allowed to return the same project on two pages while its
+ * ranking shifts; two React children with one key is a render error, and two
+ * identical cards read as a bug even when they are not.
+ */
+function appendUnique(prev: ProjectDto[], next: ProjectDto[]): ProjectDto[] {
+  const seen = new Set(prev.map((p) => `${p.providerId}:${p.id}`));
+  return [...prev, ...next.filter((p) => !seen.has(`${p.providerId}:${p.id}`))];
+}
+
 export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   // The version, the loader and the provider are shared with the queue: what
   // is filtered here is what gets installed there.
   const { gameVersion, loader, provider } = useGameTarget();
-  const [page, setPage] = useState<SearchPageDto | null>(null);
+  const [hits, setHits] = useState<ProjectDto[]>([]);
+  // `total` is what the catalogue says exists; `loaded` is how many rows this
+  // screen has asked for, which is not `hits.length` when a page repeated a
+  // project. Pagination follows `loaded`, so a duplicate can never skip a row.
+  const [total, setTotal] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(0);
   const [error, setError] = useState<IpcError | null>(null);
+  const [moreError, setMoreError] = useState<IpcError | null>(null);
   const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [installing, setInstalling] = useState<string | null>(null);
   const [instances, setInstances] = useState<InstanceSummaryDto[]>([]);
   const [target, setTarget] = useState('');
@@ -103,14 +124,29 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const selectProvider = useCallback(
     (next: ProviderId) => {
       setGameTarget({ provider: next });
-      setPage(null);
+      setHits([]);
+      setTotal(null);
+      setLoaded(0);
       setError(null);
+      setMoreError(null);
       void curseforgeKeyStatus()
         .then(setKeyStatus)
         .catch(() => setKeyStatus(null));
     },
     [],
   );
+
+  /** The same rule for the facets: a result list is a claim about the version
+   *  and the loader it was asked for. Editing either one leaves rows on screen
+   *  that the next install cannot honour, because the install reads the facet,
+   *  not the row. */
+  const resetResults = useCallback(() => {
+    setHits([]);
+    setTotal(null);
+    setLoaded(0);
+    setError(null);
+    setMoreError(null);
+  }, []);
 
   const targetPath = instances.find((i) => i.id === target)?.path ?? '';
   // Nothing to install into is not a state the button can be pressed in. An
@@ -126,26 +162,77 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     gameVersion.trim().length > 0 &&
     loader.trim().length > 0;
 
-  const search = useCallback(() => {
-    const text = query.trim();
-    if (text.length === 0) {
-      return;
+  /**
+   * One page of results, at `offset`.
+   *
+   * Offset 0 is a new question: the old rows go before the request so a slow
+   * answer cannot be mistaken for a filter over what was already there. A
+   * larger offset appends, and a failed append leaves the rows the user is
+   * reading in place — losing page one because page two timed out is worse
+   * than a short page one.
+   */
+  const runSearch = useCallback(
+    (offset: number) => {
+      const text = query.trim();
+      if (text.length === 0) {
+        return;
+      }
+      if (offset === 0) {
+        setSearching(true);
+        setHits([]);
+        setTotal(null);
+        setLoaded(0);
+      } else {
+        setLoadingMore(true);
+      }
+      setError(null);
+      setMoreError(null);
+      searchProjects({
+        query: text,
+        provider,
+        // The facets are identifiers, not prose: an empty field means "no
+        // filter", and "Fabric" typed with a capital is still the fabric facet.
+        gameVersion: gameVersion.trim() || undefined,
+        loader: loader.trim().toLowerCase() || undefined,
+        limit: PAGE_SIZE,
+        offset,
+      })
+        .then((page) => {
+          // A catalogue that says "more" and returns nothing would leave a
+          // button whose only possible result is another empty page. The
+          // requested offset is then the honest end of the list.
+          const exhausted = page.hits.length === 0;
+          setTotal(exhausted ? offset : page.total);
+          setLoaded(offset + page.hits.length);
+          setHits((prev) => (offset === 0 ? page.hits : appendUnique(prev, page.hits)));
+        })
+        .catch((e) => {
+          // A first page that failed has nothing to keep; an appended page
+          // that failed still has the rows above the button.
+          if (offset === 0) {
+            setError(toIpcError(e));
+          } else {
+            setMoreError(toIpcError(e));
+          }
+        })
+        .finally(() => {
+          if (offset === 0) {
+            setSearching(false);
+          } else {
+            setLoadingMore(false);
+          }
+        });
+    },
+    [gameVersion, loader, provider, query],
+  );
+
+  const search = useCallback(() => runSearch(0), [runSearch]);
+
+  const loadMore = useCallback(() => {
+    if (!searching && !loadingMore) {
+      runSearch(loaded);
     }
-    setSearching(true);
-    setError(null);
-    searchProjects({
-      query: text,
-      provider,
-      // The facets are identifiers, not prose: an empty field means "no
-      // filter", and "Fabric" typed with a capital is still the fabric facet.
-      gameVersion: gameVersion.trim() || undefined,
-      loader: loader.trim().toLowerCase() || undefined,
-      limit: 20,
-    })
-      .then(setPage)
-      .catch((e) => setError(toIpcError(e)))
-      .finally(() => setSearching(false));
-  }, [gameVersion, loader, provider, query]);
+  }, [loaded, loadingMore, runSearch, searching]);
 
   const install = useCallback(
     (project: ProjectDto) => {
@@ -209,7 +296,10 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
             id="browse-version"
             label={t('browse.fieldVersion')}
             value={gameVersion}
-            onValueChange={(next) => setGameTarget({ gameVersion: next })}
+            onValueChange={(next) => {
+              setGameTarget({ gameVersion: next });
+              resetResults();
+            }}
             options={GAME_VERSIONS}
             className="w-32"
           />
@@ -220,7 +310,10 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
             id="browse-loader"
             label={t('browse.fieldLoader')}
             value={loader}
-            onValueChange={(next) => setGameTarget({ loader: next })}
+            onValueChange={(next) => {
+              setGameTarget({ loader: next });
+              resetResults();
+            }}
             options={LOADERS}
             className="w-32"
           />
@@ -268,7 +361,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     );
   }
 
-  if (searching && !page) {
+  if (searching) {
     return (
       <div className="flex flex-col">
         {header}
@@ -277,7 +370,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     );
   }
 
-  if (!page) {
+  if (total === null) {
     return (
       <div className="flex flex-col">
         {header}
@@ -290,19 +383,39 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     <div className="flex flex-col">
       {header}
       <p className="px-5 pt-3 text-small text-muted-foreground">
-        {t('browse.results', { count: page.total })}
+        {t('browse.results', { count: total })}
       </p>
-      <div className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
-        {page.hits.map((p) => (
-          <Card
-            key={p.id}
-            project={p}
-            installing={installing}
-            canInstall={canInstall}
-            onInstall={install}
-          />
-        ))}
-      </div>
+      {hits.length === 0 ? (
+        <EmptyState
+          title={t('browse.noResultsTitle')}
+          body={t('browse.noResultsBody')}
+          className="px-5 pt-2"
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
+          {hits.map((p) => (
+            <Card
+              key={`${p.providerId}:${p.id}`}
+              project={p}
+              installing={installing}
+              canInstall={canInstall}
+              onInstall={install}
+            />
+          ))}
+        </div>
+      )}
+      {loaded < total && (
+        <div className="flex flex-col items-start gap-1.5 px-5 pb-5">
+          {moreError && (
+            <p role="alert" className="text-small text-status-issue">
+              {t('browse.loadMoreFailed', { reason: t(`error.${moreError.code}`) })}
+            </p>
+          )}
+          <Button type="button" variant="outline" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? t('browse.loadingMore') : t('browse.loadMore')}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
