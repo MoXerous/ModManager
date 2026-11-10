@@ -18,6 +18,7 @@ import {
 } from '../../lib/ipc';
 import { formatBytes } from '../../lib/format';
 import { type ProviderId, PROVIDERS, getGameTarget } from '../gameTarget';
+import { InstanceExport } from './InstanceExport';
 
 type Action = 'enable' | 'disable';
 
@@ -98,6 +99,8 @@ function UpdateResults({ preview }: { preview: UpdatePreviewDto }) {
 
 interface Props {
   root: string;
+  /** The registry's name for this instance; only the export default uses it. */
+  instanceName: string;
   /** The registered instance's own target; the check is worthless without it. */
   gameVersion: string | null;
   loader: string | null;
@@ -106,14 +109,16 @@ interface Props {
 
 /**
  * The one tab `screens.md` §6 keeps for instance details: installed content.
- * Validate, repair, backup, restore and export are gone on purpose — four tabs
- * and five dialogs in the old app, for things a context menu does.
+ * Validate, repair, backup and restore are gone on purpose — four tabs and five
+ * dialogs in the old app, for things a context menu does. Export stayed because
+ * it is the one action whose result leaves the app: a `.mrpack` the user can
+ * share, and its plan is worth reading before it is written (F-081/F-082).
  *
  * Toggle is preview-then-execute. The preview carries the refusals too, which
  * is the part worth showing: `allowed: false` with a `reason` is the only place
  * the user learns why a file was left alone.
  */
-export function InstanceDetails({ root, gameVersion, loader, onChanged }: Props) {
+export function InstanceDetails({ root, instanceName, gameVersion, loader, onChanged }: Props) {
   const { t } = useTranslation();
   const [snap, setSnap] = useState<InstanceSnapshotDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
@@ -293,6 +298,16 @@ export function InstanceDetails({ root, gameVersion, loader, onChanged }: Props)
         )}
         {updates && <UpdateResults preview={updates} />}
       </div>
+
+      {/* The pack leaves the app, so it gets its own review card rather than a
+          menu item: the preview is the only place the user sees what will and
+          will not travel before a file is written. */}
+      <InstanceExport
+        root={root}
+        instanceName={instanceName}
+        gameVersion={gameVersion}
+        loader={loader}
+      />
 
       {plan && (
         <div className="mx-5 mt-3 rounded-control border border-border bg-card px-4 py-3">

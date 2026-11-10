@@ -19,6 +19,10 @@ import type { LegacyImportReportDto } from '../bindings/LegacyImportReportDto';
 import type { LegacyScanDto } from '../bindings/LegacyScanDto';
 import type { LinkInstanceRequest } from '../bindings/LinkInstanceRequest';
 import type { ModpackApplyResultDto } from '../bindings/ModpackApplyResultDto';
+import type { ModpackExportPlanDto } from '../bindings/ModpackExportPlanDto';
+import type { ModpackExportRequest } from '../bindings/ModpackExportRequest';
+import type { ModpackExportSummaryDto } from '../bindings/ModpackExportSummaryDto';
+import type { ModpackExportWriteRequest } from '../bindings/ModpackExportWriteRequest';
 import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
 import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
 import type { PackEventDto } from '../bindings/PackEventDto';
@@ -303,6 +307,40 @@ export async function executeModpackInstall(
     req,
     onEvent: channel,
   });
+}
+
+// --- Pack export (F-081, F-082) ------------------------------------------
+//
+// The mirror image of install: the instance is the source and the archive is
+// the destination. Same plan-then-write rule, with the lock's digest as the
+// token that binds a confirm to the preview the user read.
+
+/** What an export would put in the archive. Writes nothing. */
+export function planModpackExport(req: ModpackExportRequest): Promise<ModpackExportPlanDto> {
+  return invoke<ModpackExportPlanDto>('plan_modpack_export', { req });
+}
+
+/**
+ * Writes the reviewed pack to `outputPath` (from the save dialog).
+ *
+ * `expectedLockSha512` must be the plan's `lockSha512`: the command re-plans
+ * against the disk and refuses an instance whose lock moved, so the archive is
+ * always built from the instance the user previewed.
+ */
+export function writeModpackExport(
+  req: ModpackExportWriteRequest,
+): Promise<ModpackExportSummaryDto> {
+  return invoke<ModpackExportSummaryDto>('write_modpack_export', { req });
+}
+
+/**
+ * Top-level instance folders an export can carry under `overrides/`.
+ *
+ * Read-only and registry-gated. Empty on an instance with nothing configurable,
+ * which is the honest answer — not an error.
+ */
+export function listExportFolders(instanceRoot: string): Promise<string[]> {
+  return invoke<string[]>('list_export_folders', { instanceRoot });
 }
 
 // --- Pack recovery (F-076/F-146) -----------------------------------------

@@ -177,7 +177,7 @@ export function Shell({ page, onNavigate, children }: ShellProps) {
         </div>
       </nav>
 
-      <div className="flex min-w-0 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border px-5 text-muted-foreground">
           <span className="text-foreground">{t(`nav.${page}`)}</span>
           <button

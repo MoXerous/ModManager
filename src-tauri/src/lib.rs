@@ -51,6 +51,9 @@ pub fn run() {
             // has to be the module that defines them.
             commands::pack::plan_modpack_install,
             commands::pack::execute_modpack_install,
+            commands::pack::plan_modpack_export,
+            commands::pack::write_modpack_export,
+            commands::pack::list_export_folders,
             commands::pack::pending_pack_recoveries,
             commands::pack::recover_pack_apply,
             commands::pack::dismiss_pack_apply,
