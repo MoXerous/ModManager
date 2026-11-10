@@ -1129,3 +1129,263 @@ pub async fn dismiss_pack_apply_with(
     .await
     .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
 }
+
+// --- export (F-081, F-082) -------------------------------------------------
+
+/// Folders the export screen offers to ship as overrides.
+///
+/// Top-level directories only, because an override folder is a unit of choice.
+/// Logs, crash reports, worlds and the app's own scratch tree are not pack
+/// material, so they are not offered; `mods` is the index's territory (the lock
+/// already names every file in it). A folder that is a link is skipped: it
+/// leaves the instance, and the exporter would refuse it anyway.
+#[tauri::command]
+pub async fn list_export_folders(
+    state: tauri::State<'_, AppState>,
+    instance_root: String,
+) -> Result<Vec<String>, IpcError> {
+    let (root, _id) = registered_root(state.inner(), &instance_root).await?;
+    tauri::async_runtime::spawn_blocking(move || export_folders_in(&root))
+        .await
+        .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
+}
+
+/// The folder listing half of [`list_export_folders`], off the async runtime.
+pub fn export_folders_in(root: &Path) -> Result<Vec<String>, IpcError> {
+    const NOT_OFFERED: [&str; 7] = [
+        "mods",
+        "saves",
+        "logs",
+        "crash-reports",
+        "crash_reports",
+        ".mm-staging",
+        "backups",
+    ];
+    let entries = std::fs::read_dir(root)
+        .map_err(|e| IpcError::io(format!("cannot read {}: {e}", root.display())))?;
+    let mut folders = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if name.starts_with('.') || NOT_OFFERED.contains(&name.as_str()) {
+            continue;
+        }
+        let meta = match std::fs::symlink_metadata(entry.path()) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            folders.push(name);
+        }
+    }
+    folders.sort_by_key(|name| name.to_lowercase());
+    Ok(folders)
+}
+
+/// Everything core's exporter refuses is about the plan's own inputs: an
+/// empty name, a folder that is not an instance folder, a lock this build
+/// cannot read. `io` is reserved for the disk actually failing.
+fn export_error(e: &mm_core::modpack::export::ExportError) -> IpcError {
+    use mm_core::modpack::export::ExportError as E;
+    match e {
+        E::MissingLock => IpcError::new(ErrorCode::NoInstanceLock, e),
+        E::Empty => IpcError::new(ErrorCode::EmptyExport, e),
+        E::EmptyName
+        | E::EmptyVersionId
+        | E::EmptyGameVersion
+        | E::UnsafeFolder(_)
+        | E::NotAFolder(_)
+        | E::DestinationIsDir(_) => IpcError::invalid_input(e),
+        E::Lock(lock) => IpcError::from_lock(lock),
+        E::Io { .. } | E::Zip(_) => IpcError::io(e),
+    }
+}
+
+fn export_settings(
+    dto: &crate::dto::ModpackExportSettingsDto,
+) -> mm_core::modpack::export::ExportSettings {
+    mm_core::modpack::export::ExportSettings {
+        name: dto.name.clone(),
+        version_id: dto.version_id.clone(),
+        summary: dto.summary.clone(),
+        game_version: dto.game_version.clone(),
+        loader: dto.loader.clone(),
+        override_folders: dto.override_folders.clone(),
+    }
+}
+
+fn export_plan_dto(
+    plan: &mm_core::modpack::export::ExportPlan,
+) -> crate::dto::ModpackExportPlanDto {
+    use crate::dto::{
+        ModpackExportExcludedDto, ModpackExportFileDto, ModpackExportOverrideDto,
+        ModpackExportPlanDto, ModpackExportSkipDto,
+    };
+    ModpackExportPlanDto {
+        name: plan.name.clone(),
+        version_id: plan.version_id.clone(),
+        summary: plan.summary.clone(),
+        game_version: plan.game_version.clone(),
+        loader: plan.loader.clone(),
+        lock_sha512: plan.lock_sha512.clone(),
+        files: plan
+            .files
+            .iter()
+            .map(|f| ModpackExportFileDto {
+                project_id: f.project_id.clone(),
+                version_id: f.version_id.clone(),
+                title: f.title.clone(),
+                project_type: f.project_type.clone(),
+                path: f.destination(),
+                size: f.size,
+            })
+            .collect(),
+        overrides: plan
+            .overrides
+            .iter()
+            .map(|o| ModpackExportOverrideDto {
+                archive_path: o.archive_path.clone(),
+                size: o.size,
+            })
+            .collect(),
+        skipped: plan
+            .skipped
+            .iter()
+            .map(|s| ModpackExportSkipDto {
+                project_id: s.project_id.clone(),
+                version_id: s.version_id.clone(),
+                reason: s.reason.as_str().to_string(),
+            })
+            .collect(),
+        excluded: plan
+            .excluded
+            .iter()
+            .map(|e| ModpackExportExcludedDto {
+                path: e.path.clone(),
+                reason: e.reason.as_str().to_string(),
+            })
+            .collect(),
+        override_count: plan.overrides.len(),
+        total_override_bytes: plan.total_override_bytes(),
+    }
+}
+
+/// The save dialog's answer, gated before anything is created.
+///
+/// The parent must already exist: a typo in the path must fail, not silently
+/// grow a directory tree somewhere the user did not choose.
+fn export_output_path(raw: &str) -> Result<PathBuf, IpcError> {
+    let path = PathBuf::from(raw.trim());
+    if path.as_os_str().is_empty() {
+        return Err(IpcError::invalid_input("empty export path"));
+    }
+    if !path.is_absolute() {
+        return Err(IpcError::invalid_input(
+            "the export destination must be an absolute path",
+        ));
+    }
+    if path.is_dir() {
+        return Err(IpcError::invalid_input(
+            "the export destination is a directory",
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| IpcError::invalid_input("the export destination has no parent folder"))?;
+    if !parent.is_dir() {
+        return Err(IpcError::new(
+            ErrorCode::NotFound,
+            format!("the export folder does not exist: {}", parent.display()),
+        ));
+    }
+    Ok(path)
+}
+
+/// What the exported pack will contain, without writing it (F-081).
+///
+/// Reads the lock and the selected folders only. The returned `lock_sha512`
+/// is the token the write sends back: a lock that moved between the preview
+/// and the confirm refuses the write instead of exporting a different pack.
+#[tauri::command]
+pub async fn plan_modpack_export(
+    state: tauri::State<'_, AppState>,
+    req: crate::dto::ModpackExportRequest,
+) -> Result<crate::dto::ModpackExportPlanDto, IpcError> {
+    let provider =
+        crate::providers::build(state.inner(), mm_core::providers::modrinth::PROVIDER_ID)?;
+    plan_modpack_export_with(state.inner(), provider.as_ref(), req).await
+}
+
+/// The body of `plan_modpack_export`, with the provider as a parameter.
+pub async fn plan_modpack_export_with(
+    state: &AppState,
+    provider: &dyn mm_core::providers::Provider,
+    req: crate::dto::ModpackExportRequest,
+) -> Result<crate::dto::ModpackExportPlanDto, IpcError> {
+    let (root, _id) = registered_root(state, &req.instance_root).await?;
+    // The same lock an install takes: an export must not read an instance
+    // while an apply is halfway through writing it.
+    let _guard = apply_lock_for(&root).lock_owned().await;
+    let plan =
+        mm_core::modpack::export::plan_export(provider, &root, &export_settings(&req.settings))
+            .await
+            .map_err(|e| export_error(&e))?;
+    Ok(export_plan_dto(&plan))
+}
+
+/// Writes the reviewed pack (F-081), after re-planning against the disk.
+///
+/// The plan is rebuilt here rather than accepted from the webview, the same
+/// rule every apply follows: the screen holds a review, not the authority to
+/// write. `expected_lock_sha512` is what makes the review binding.
+#[tauri::command]
+pub async fn write_modpack_export(
+    state: tauri::State<'_, AppState>,
+    req: crate::dto::ModpackExportWriteRequest,
+) -> Result<crate::dto::ModpackExportSummaryDto, IpcError> {
+    let provider =
+        crate::providers::build(state.inner(), mm_core::providers::modrinth::PROVIDER_ID)?;
+    write_modpack_export_with(state.inner(), provider.as_ref(), req).await
+}
+
+/// The body of `write_modpack_export`, with the provider as a parameter.
+pub async fn write_modpack_export_with(
+    state: &AppState,
+    provider: &dyn mm_core::providers::Provider,
+    req: crate::dto::ModpackExportWriteRequest,
+) -> Result<crate::dto::ModpackExportSummaryDto, IpcError> {
+    let (root, _id) = registered_root(state, &req.instance_root).await?;
+    let output = export_output_path(&req.output_path)?;
+    let _guard = apply_lock_for(&root).lock_owned().await;
+    let plan =
+        mm_core::modpack::export::plan_export(provider, &root, &export_settings(&req.settings))
+            .await
+            .map_err(|e| export_error(&e))?;
+    if !plan
+        .lock_sha512
+        .eq_ignore_ascii_case(&req.expected_lock_sha512)
+    {
+        return Err(IpcError::new(
+            ErrorCode::InstanceChanged,
+            format!(
+                "the instance lock is {} now, the plan was built from {}",
+                plan.lock_sha512, req.expected_lock_sha512
+            ),
+        ));
+    }
+
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        mm_core::modpack::export::write_export_zip(&plan, &output)
+    })
+    .await
+    .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
+    .map_err(|e| export_error(&e))?;
+
+    Ok(crate::dto::ModpackExportSummaryDto {
+        output: summary.output.to_string_lossy().into_owned(),
+        file_count: summary.file_count,
+        override_count: summary.override_count,
+        total_size: summary.total_size,
+    })
+}

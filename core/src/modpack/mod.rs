@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod exec;
+pub mod export;
 pub mod mrpack;
 pub mod recovery;
 
@@ -10,6 +11,8 @@ pub mod recovery;
 mod archive_tests;
 #[cfg(test)]
 mod exec_tests;
+#[cfg(test)]
+mod export_tests;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]

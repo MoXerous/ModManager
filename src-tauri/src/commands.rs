@@ -942,6 +942,8 @@ pub(crate) mod channel_tests;
 #[cfg(test)]
 pub(crate) mod diagnostics_tests;
 #[cfg(test)]
+pub(crate) mod export_tests;
+#[cfg(test)]
 pub(crate) mod legacy_tests;
 #[cfg(test)]
 pub(crate) mod pack_tests;

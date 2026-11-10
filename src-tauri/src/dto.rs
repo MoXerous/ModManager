@@ -60,6 +60,17 @@ pub enum ErrorCode {
     /// disk between the preview and the confirm. A malformed request is
     /// `InvalidInput`; this is a file the user must look at again.
     PackChanged,
+    /// The instance's pinned content changed after an export plan was shown.
+    /// The same shape as `PackChanged`, for the other side of the plan.
+    InstanceChanged,
+    /// The instance has no `instance.lock.json`: nothing is recorded as
+    /// installed, so there is nothing to pin in a pack. Not malformed input,
+    /// and not an empty disk either — the user must install content first.
+    NoInstanceLock,
+    /// The chosen settings produced a pack with no indexed files and no
+    /// overrides. Refusing here is the difference between an empty archive and
+    /// a pack that silently says it contains nothing.
+    EmptyExport,
     NotFound,
     /// 404 من المزوّد.
     ProviderApi,
@@ -813,6 +824,132 @@ pub struct ModpackPlanDto {
     /// (F-074).
     #[ts(type = "number")]
     pub skipped_server_overrides: usize,
+}
+
+/// What the export screen asks to be reviewed.
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportRequest {
+    /// Absolute path of the registered instance being exported.
+    pub instance_root: String,
+    pub settings: ModpackExportSettingsDto,
+}
+
+/// The user's choices for the pack the export writes.
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportSettingsDto {
+    pub name: String,
+    /// The pack's own version id; the UI pre-fills a timestamp.
+    pub version_id: String,
+    pub summary: Option<String>,
+    pub game_version: String,
+    /// `fabric`, `quilt`, `forge` or `neoforge`; core maps it to the format key.
+    pub loader: String,
+    /// Instance-relative folders copied under `overrides/` (F-082).
+    pub override_folders: Vec<String>,
+}
+
+/// The confirmed export: the same settings plus the destination and the token
+/// that proves the instance did not move under the preview.
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportWriteRequest {
+    pub instance_root: String,
+    pub settings: ModpackExportSettingsDto,
+    /// `lockSha512` from the preview; a mismatch is `instanceChanged`.
+    pub expected_lock_sha512: String,
+    /// Absolute destination path the save dialog returned.
+    pub output_path: String,
+}
+
+/// One resolved project the pack will reference.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportFileDto {
+    pub project_id: String,
+    pub version_id: String,
+    pub title: String,
+    pub project_type: String,
+    /// Destination inside the pack (`mods/sodium.jar`).
+    pub path: String,
+    #[ts(type = "number")]
+    pub size: u64,
+}
+
+/// One local file the pack will carry under `overrides/`.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportOverrideDto {
+    pub archive_path: String,
+    #[ts(type = "number")]
+    pub size: u64,
+}
+
+/// One locked project left out, with the core's stable reason key.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportSkipDto {
+    pub project_id: String,
+    pub version_id: String,
+    /// `unsupported_provider`, `no_file`, …; the UI translates
+    /// `export.skip.<reason>`.
+    pub reason: String,
+}
+
+/// One local path kept out of the pack, with core's stable reason key.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportExcludedDto {
+    /// Instance-relative path, forward slashes.
+    pub path: String,
+    /// `transient`, `environment`, `secret`, `symlink`, `duplicate`,
+    /// `unsafe_name`; the UI translates `export.excluded.<reason>`.
+    pub reason: String,
+}
+
+/// Everything the pack will contain. Read-only: nothing was written to build
+/// this answer (AGENTS.md §5.4).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportPlanDto {
+    pub name: String,
+    pub version_id: String,
+    pub summary: Option<String>,
+    pub game_version: String,
+    pub loader: String,
+    /// The token the write must send back; see `ModpackExportWriteRequest`.
+    pub lock_sha512: String,
+    pub files: Vec<ModpackExportFileDto>,
+    pub overrides: Vec<ModpackExportOverrideDto>,
+    pub skipped: Vec<ModpackExportSkipDto>,
+    pub excluded: Vec<ModpackExportExcludedDto>,
+    #[ts(type = "number")]
+    pub override_count: usize,
+    #[ts(type = "number")]
+    pub total_override_bytes: u64,
+}
+
+/// What writing the pack produced.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModpackExportSummaryDto {
+    pub output: String,
+    #[ts(type = "number")]
+    pub file_count: usize,
+    #[ts(type = "number")]
+    pub override_count: usize,
+    #[ts(type = "number")]
+    pub total_size: u64,
 }
 
 /// One progress event on the modpack channel.

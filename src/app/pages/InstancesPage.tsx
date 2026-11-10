@@ -72,7 +72,15 @@ function Card({
   const initial = row.name.trim().charAt(0).toUpperCase() || '?';
 
   return (
-    <article className="flex flex-col gap-2 rounded-card border border-border bg-card p-3.5">
+    <article
+      className={cn(
+        'flex flex-col gap-2 rounded-card border border-border bg-card p-3.5',
+        // An expanded card is a panel, not a tile: the updates table, the
+        // installed list and the export form need the width of the grid,
+        // otherwise every field is squeezed into one column's worth of space.
+        open && 'sm:col-span-2 lg:col-span-3',
+      )}
+    >
       <div className="flex items-center gap-2">
         <span
           aria-hidden
@@ -126,6 +134,7 @@ function Card({
       {open && (
         <InstanceDetails
           root={row.path}
+          instanceName={row.name}
           gameVersion={row.minecraftVersion}
           loader={row.loader}
           onChanged={onChanged}
