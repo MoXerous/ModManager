@@ -120,18 +120,13 @@ fn mrpack_a_traversing_override_member_is_refused_by_the_inspector() {
 }
 
 #[test]
-fn mrpack_a_later_layer_wins_the_same_path_instead_of_adding_it_twice() {
-    // Both layers are declared, and the zip lists the server one first on
-    // purpose. The central directory says nothing about precedence, so a
-    // planner that follows archive order hands the win to `overrides` even
-    // though the format says otherwise.
-    let index = index_for(
-        "mods/sodium.jar",
-        r#","overrides":"overrides","serverOverrides":"server-overrides""#,
-    );
+fn spec_f073_client_overrides_win_over_overrides_regardless_of_archive_order() {
+    // The zip lists the client layer first on purpose. The central directory
+    // says nothing about precedence, so a planner that follows archive order
+    // hands the win to `overrides` even though the format says otherwise.
     let bytes = zip_of(&[
-        ("modrinth.index.json", &index),
-        ("server-overrides/options.txt", "server"),
+        ("modrinth.index.json", &default_index()),
+        ("client-overrides/options.txt", "client"),
         ("overrides/options.txt", "base"),
     ]);
     let (pack, inventory) = open(&bytes);
@@ -144,11 +139,75 @@ fn mrpack_a_later_layer_wins_the_same_path_instead_of_adding_it_twice() {
     assert!(
         plan.ops.contains(&InstallOp::CopyOverride {
             safe_path: "options.txt".to_string(),
-            source_layer: "server-overrides".to_string(),
+            source_layer: "client-overrides".to_string(),
         }),
-        "the format's last layer must win, not the last archive entry: {:?}",
+        "the client layer must win, not the last archive entry: {:?}",
         plan.ops
     );
+    assert_eq!(plan.skips.server_overrides, 0);
+}
+
+#[test]
+fn spec_f074_server_overrides_are_counted_and_never_installed() {
+    let bytes = zip_of(&[
+        ("modrinth.index.json", &default_index()),
+        ("server-overrides/server.properties", "online-mode=false"),
+        ("server-overrides/config/server.toml", "x"),
+        ("overrides/options.txt", "base"),
+    ]);
+    let (pack, inventory) = open(&bytes);
+    let plan = plan_install(&pack, &inventory).expect("plan");
+
+    assert_eq!(plan.skips.server_overrides, 2);
+    assert_eq!(plan.overrides(), 1);
+    assert!(
+        plan.ops.iter().all(|op| match op {
+            InstallOp::CopyOverride { source_layer, .. } => source_layer != "server-overrides",
+            InstallOp::Download { .. } => true,
+        }),
+        "a client install must never write the server layer: {:?}",
+        plan.ops
+    );
+}
+
+#[test]
+fn spec_f074_remote_files_the_client_cannot_use_are_skipped_and_counted() {
+    let optional = format!(
+        r#"{{"path":"mods/optional.jar","hashes":{{"sha1":"a","sha512":"{}"}},
+          "downloads":["https://cdn.modrinth.com/o.jar"],"fileSize":10,
+          "env":{{"client":"optional","server":"required"}}}}"#,
+        sha128('b')
+    );
+    let unsupported = format!(
+        r#"{{"path":"mods/server-only.jar","hashes":{{"sha1":"a","sha512":"{}"}},
+          "downloads":["https://cdn.modrinth.com/s.jar"],"fileSize":10,
+          "env":{{"client":"unsupported","server":"required"}}}}"#,
+        sha128('c')
+    );
+    let files = format!(
+        "{},{},{}",
+        one_download_for("mods/required.jar", &sha128('a')),
+        optional,
+        unsupported
+    );
+    let index = index_json(&files, "");
+    let bytes = zip_of(&[("modrinth.index.json", &index)]);
+    let (pack, inventory) = open(&bytes);
+    let plan = plan_install(&pack, &inventory).expect("plan");
+
+    assert_eq!(
+        plan.downloads(),
+        1,
+        "only the required file is fetched: {:?}",
+        plan.ops
+    );
+    assert_eq!(plan.skips.remote_optional, 1);
+    assert_eq!(plan.skips.remote_unsupported, 1);
+    assert!(plan.ops.contains(&InstallOp::Download {
+        safe_path: "mods/required.jar".to_string(),
+        sha512: sha128('a'),
+        size: Some(10),
+    }));
 }
 
 #[test]
@@ -246,25 +305,16 @@ fn mrpack_a_file_entry_ending_in_a_slash_is_refused() {
 }
 
 #[test]
-fn mrpack_a_layer_name_with_a_trailing_slash_still_matches_its_members() {
-    let index = index_for(
-        "mods/sodium.jar",
-        r#","clientOverrides":"client-overrides/""#,
-    );
+fn mrpack_a_custom_layer_name_in_the_index_does_not_create_a_layer() {
+    // Layer folders are the format's, not the index's: a `clientOverrides`
+    // field pointing at `cli/` must not make `cli/` an override layer.
+    let index = index_for("mods/sodium.jar", r#","clientOverrides":"cli""#);
     let bytes = zip_of(&[
         ("modrinth.index.json", &index),
+        ("cli/options.txt", "hidden"),
         ("client-overrides/options.txt", "client"),
     ]);
     let (pack, inventory) = open(&bytes);
-
-    assert!(
-        pack.override_layers
-            .iter()
-            .any(|layer| layer == "client-overrides"),
-        "the parser must strip the folder slash: {:?}",
-        pack.override_layers
-    );
-
     let plan = plan_install(&pack, &inventory).expect("plan");
     assert_eq!(plan.overrides(), 1, "ops were {:?}", plan.ops);
     assert!(plan.ops.contains(&InstallOp::CopyOverride {

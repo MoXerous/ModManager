@@ -116,7 +116,7 @@ fn sha512_hex(data: &[u8]) -> String {
         .collect()
 }
 
-fn pack_of(layers: &[&str], files: Vec<PackFile>) -> Pack {
+fn pack_of(files: Vec<PackFile>) -> Pack {
     Pack {
         format_version: 1,
         version_id: "ver".to_string(),
@@ -124,7 +124,6 @@ fn pack_of(layers: &[&str], files: Vec<PackFile>) -> Pack {
         summary: None,
         dependencies: BTreeMap::new(),
         files,
-        override_layers: layers.iter().map(|s| s.to_string()).collect(),
     }
 }
 
@@ -208,13 +207,11 @@ async fn mrpack_override_is_copied_with_its_bytes() {
     let instance = dir.path().join("instance");
     write_fixture(&staging, "overrides/config/a.toml", b"hello");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "config/a.toml".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "config/a.toml".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -260,18 +257,13 @@ async fn mrpack_override_is_copied_from_the_layer_the_plan_names() {
     write_fixture(&staging, "client-overrides/config/a.toml", b"client");
     write_fixture(&staging, "overrides/config/a.toml", b"main");
 
-    let pack = pack_of(
-        &["client-overrides", "overrides", "server-overrides"],
-        vec![],
-    );
+    let pack = pack_of(vec![]);
     // The planner already picked the winner; the executor must not pick again
     // by "last layer that has the file" and accidentally copy a different one.
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "config/a.toml".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "config/a.toml".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -310,13 +302,11 @@ async fn mrpack_missing_override_is_refused() {
     let instance = dir.path().join("instance");
     std::fs::create_dir_all(&staging).expect("staging");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "config/gone.toml".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "config/gone.toml".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -371,22 +361,17 @@ async fn mrpack_download_lands_hash_verified_from_the_provider() {
         .mount(&server)
         .await;
 
-    let pack = pack_of(
-        &["overrides"],
-        vec![pack_file(
-            "config/mod.bin",
-            &sha512,
-            vec![format!("{}/decoy.bin", server.uri())],
-            Some(body.len() as u64),
-        )],
-    );
-    let plan = InstallPlan {
-        ops: vec![InstallOp::Download {
-            safe_path: "config/mod.bin".to_string(),
-            sha512: sha512.clone(),
-            size: Some(body.len() as u64),
-        }],
-    };
+    let pack = pack_of(vec![pack_file(
+        "config/mod.bin",
+        &sha512,
+        vec![format!("{}/decoy.bin", server.uri())],
+        Some(body.len() as u64),
+    )]);
+    let plan = InstallPlan::new(vec![InstallOp::Download {
+        safe_path: "config/mod.bin".to_string(),
+        sha512: sha512.clone(),
+        size: Some(body.len() as u64),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client(&server.uri());
     let executor = PlanExecutor::new(
@@ -452,22 +437,17 @@ async fn mrpack_wrong_hash_is_refused_and_leaves_no_file() {
         .mount(&server)
         .await;
 
-    let pack = pack_of(
-        &["overrides"],
-        vec![pack_file(
-            "config/bad.bin",
-            &sha512,
-            vec![format!("{}/bad.bin", server.uri())],
-            Some(expected.len() as u64),
-        )],
-    );
-    let plan = InstallPlan {
-        ops: vec![InstallOp::Download {
-            safe_path: "config/bad.bin".to_string(),
-            sha512: sha512.clone(),
-            size: Some(expected.len() as u64),
-        }],
-    };
+    let pack = pack_of(vec![pack_file(
+        "config/bad.bin",
+        &sha512,
+        vec![format!("{}/bad.bin", server.uri())],
+        Some(expected.len() as u64),
+    )]);
+    let plan = InstallPlan::new(vec![InstallOp::Download {
+        safe_path: "config/bad.bin".to_string(),
+        sha512: sha512.clone(),
+        size: Some(expected.len() as u64),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client(&server.uri());
     let executor = PlanExecutor::new(
@@ -512,13 +492,11 @@ async fn mrpack_path_escaping_the_instance_is_refused() {
     let instance = dir.path().join("instance");
     std::fs::create_dir_all(&staging).expect("staging");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "../evil.txt".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "../evil.txt".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -558,20 +536,18 @@ fn mrpack_dry_run_writes_nothing() {
     let instance = dir.path().join("instance");
     std::fs::create_dir_all(&staging).expect("staging");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![
-            InstallOp::Download {
-                safe_path: "mods/a.jar".to_string(),
-                sha512: "ab".repeat(64),
-                size: Some(42),
-            },
-            InstallOp::CopyOverride {
-                safe_path: "config/a.toml".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-        ],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![
+        InstallOp::Download {
+            safe_path: "mods/a.jar".to_string(),
+            sha512: "ab".repeat(64),
+            size: Some(42),
+        },
+        InstallOp::CopyOverride {
+            safe_path: "config/a.toml".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+    ]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -610,12 +586,10 @@ fn mrpack_dry_run_writes_nothing() {
 
 #[test]
 fn mrpack_dry_run_refuses_an_escaping_path() {
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "mods/../../evil.txt".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "mods/../../evil.txt".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     assert!(matches!(
         dry_run(&plan, Path::new("unused-instance")),
         Err(ExecError::UnsafePath { .. })
@@ -630,19 +604,17 @@ async fn mrpack_callback_receives_the_terminal_event_last() {
     write_fixture(&staging, "overrides/a.txt", b"a");
     write_fixture(&staging, "overrides/b.txt", b"b");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![
-            InstallOp::CopyOverride {
-                safe_path: "a.txt".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-            InstallOp::CopyOverride {
-                safe_path: "b.txt".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-        ],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![
+        InstallOp::CopyOverride {
+            safe_path: "a.txt".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+        InstallOp::CopyOverride {
+            safe_path: "b.txt".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+    ]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -691,19 +663,17 @@ fn mrpack_dry_run_marks_destinations_that_will_be_overwritten() {
     std::fs::create_dir_all(instance.join("config")).expect("config");
     std::fs::write(instance.join("config/a.toml"), b"old").expect("seed");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![
-            InstallOp::CopyOverride {
-                safe_path: "config/a.toml".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-            InstallOp::CopyOverride {
-                safe_path: "config/new.toml".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-        ],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![
+        InstallOp::CopyOverride {
+            safe_path: "config/a.toml".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+        InstallOp::CopyOverride {
+            safe_path: "config/new.toml".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+    ]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -736,13 +706,11 @@ async fn mrpack_a_stale_staging_directory_is_removed_before_apply() {
     std::fs::create_dir_all(instance.join(".mm-staging")).expect("stale staging");
     std::fs::write(instance.join(".mm-staging/leftover.part"), b"stale").expect("leftover");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "a.txt".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "a.txt".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -778,13 +746,11 @@ async fn mrpack_overrides_extracted_into_the_staging_tree_survive_until_they_are
     let staging = instance.join(".mm-staging");
     write_fixture(&staging, "overrides/a.txt", b"a");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "a.txt".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "a.txt".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -818,13 +784,11 @@ async fn mrpack_a_plan_writing_an_app_managed_file_is_refused() {
     write_fixture(&staging, "overrides/profile.json", b"{}");
     let instance = dir.path().join("instance");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: "profile.json".to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: "profile.json".to_string(),
+        source_layer: "overrides".to_string(),
+    }]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -857,12 +821,10 @@ async fn mrpack_a_plan_writing_an_app_managed_file_is_refused() {
 
 /// One override op, the shape the pack tests use.
 fn override_op(safe_path: &str) -> InstallPlan {
-    InstallPlan {
-        ops: vec![InstallOp::CopyOverride {
-            safe_path: safe_path.to_string(),
-            source_layer: "overrides".to_string(),
-        }],
-    }
+    InstallPlan::new(vec![InstallOp::CopyOverride {
+        safe_path: safe_path.to_string(),
+        source_layer: "overrides".to_string(),
+    }])
 }
 
 #[tokio::test]
@@ -875,7 +837,7 @@ async fn spec_f076_the_apply_writes_a_record_that_names_the_pack_and_the_instanc
     let instance = dir.path().join("instance");
     write_fixture(&staging, "overrides/config/a.toml", b"hello");
 
-    let pack = pack_of(&["overrides"], vec![]);
+    let pack = pack_of(vec![]);
     let plan = override_op("config/a.toml");
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
@@ -955,19 +917,17 @@ async fn spec_f076_an_interrupted_apply_leaves_a_record_that_describes_the_insta
     write_fixture(&staging, "overrides/a.txt", b"a");
     write_fixture(&staging, "overrides/b.txt", b"b");
 
-    let pack = pack_of(&["overrides"], vec![]);
-    let plan = InstallPlan {
-        ops: vec![
-            InstallOp::CopyOverride {
-                safe_path: "a.txt".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-            InstallOp::CopyOverride {
-                safe_path: "b.txt".to_string(),
-                source_layer: "overrides".to_string(),
-            },
-        ],
-    };
+    let pack = pack_of(vec![]);
+    let plan = InstallPlan::new(vec![
+        InstallOp::CopyOverride {
+            safe_path: "a.txt".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+        InstallOp::CopyOverride {
+            safe_path: "b.txt".to_string(),
+            source_layer: "overrides".to_string(),
+        },
+    ]);
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
     let executor = PlanExecutor::new(
@@ -1050,7 +1010,7 @@ async fn spec_f076_the_apply_clears_the_part_an_interrupted_commit_of_the_same_p
     let part = crate::safety::atomic::part_path(&destination);
     std::fs::write(&part, b"half-written").expect("leftover");
 
-    let pack = pack_of(&["overrides"], vec![]);
+    let pack = pack_of(vec![]);
     let plan = override_op("config/a.toml");
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");
@@ -1116,7 +1076,7 @@ async fn spec_f076_a_part_the_journal_does_not_mention_survives_untouched() {
     let part = crate::safety::atomic::part_path(&destination);
     std::fs::write(&part, b"not ours").expect("foreign");
 
-    let pack = pack_of(&["overrides"], vec![]);
+    let pack = pack_of(vec![]);
     let plan = override_op("config/a.toml");
     let downloader = Downloader::new(1).expect("downloader");
     let provider = client("http://127.0.0.1:9");

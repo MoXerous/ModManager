@@ -16,11 +16,10 @@
 //! `PackFile.sha512` to `Provider::get_versions_by_hashes` and let it return
 //! the URL list to use instead of trusting `downloads` first.
 //!
-//! shortcut: `server-overrides` / `client-overrides` are read and reported but
-//! not merged. Applying the layer order (client, then overrides, then server)
-//! belongs to the install step. Ceiling: a client-side install ignores the
-//! server layer entirely. Upgrade path: the installer composes three passes
-//! over the same extracted tree.
+//! The override layer names are the format's, not the index's: `overrides/`,
+//! `client-overrides/` and `server-overrides/` are fixed folder names in the
+//! archive. `plan_install` applies the two client layers in precedence order
+//! and skips the server one; a client-side install never applies it.
 
 use crate::instances::metadata::PROFILE_FILE_NAME;
 use crate::safety::path::{safe_member_name, NameError};
@@ -38,6 +37,17 @@ pub const SUPPORTED_FORMAT_VERSION: u64 = 1;
 /// the planner must refuse a pack that writes into the installer's own scratch
 /// space, and two constants drifting apart would reopen exactly that hole.
 pub const STAGING_DIR: &str = ".mm-staging";
+
+/// Override layers a client install applies, in precedence order (F-073).
+///
+/// The names are fixed by the format. Later layers replace earlier ones at the
+/// same destination, so the archive's own member order cannot decide the
+/// winner; `plan_install` walks this list, not the central directory.
+pub const CLIENT_OVERRIDE_LAYERS: [&str; 2] = ["overrides", "client-overrides"];
+
+/// The server-only layer (F-074). A client install never writes it, and the
+/// plan reports how many members it left out.
+pub const SERVER_OVERRIDE_LAYER: &str = "server-overrides";
 
 /// Root-level files this application writes and later reads as its own state.
 ///
@@ -91,15 +101,11 @@ pub fn reserved_destination(safe_path: &str) -> Option<Reserved> {
     None
 }
 
-fn default_overrides() -> String {
-    "overrides".to_string()
-}
-
 // --- on-disk shape, exactly as documented -----------------------------------
 
-// The format is camelCase on disk — `formatVersion`, `versionId`,
-// `serverOverrides`. Without this the parser rejects every real pack on the
-// very first field, and the compiler is happy to let it ship.
+// The format is camelCase on disk — `formatVersion`, `versionId`. Without
+// this the parser rejects every real pack on the very first field, and the
+// compiler is happy to let it ship.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawIndex {
@@ -113,12 +119,6 @@ struct RawIndex {
     files: Vec<RawFile>,
     #[serde(default)]
     dependencies: std::collections::BTreeMap<String, String>,
-    #[serde(default = "default_overrides")]
-    overrides: String,
-    #[serde(default)]
-    server_overrides: Option<String>,
-    #[serde(default)]
-    client_overrides: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -187,9 +187,6 @@ pub struct Pack {
     pub summary: Option<String>,
     pub dependencies: std::collections::BTreeMap<String, String>,
     pub files: Vec<PackFile>,
-    /// Folder names to copy over the instance, in the order the format applies
-    /// them. Empty when the pack ships no overrides folder.
-    pub override_layers: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -304,32 +301,6 @@ pub fn parse_index(bytes: &[u8]) -> Result<Pack, IndexError> {
         });
     }
 
-    // Client first, plain overrides, then server: the order the format says the
-    // layers apply in. `as_ref` flattens the two optionals to the same
-    // `&String` as the defaulted one, so the three slots are one type.
-    let layers: Vec<&String> = [
-        raw.client_overrides.as_ref(),
-        Some(&raw.overrides),
-        raw.server_overrides.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    let mut override_layers = Vec::with_capacity(layers.len());
-    for layer in layers {
-        let name = safe_member_name(layer).map_err(|reason| IndexError::UnsafePath {
-            path: layer.clone(),
-            reason,
-        })?;
-        // A layer is a folder. `safe_member_name` keeps the trailing slash it
-        // allows for directory members, so strip exactly one, the same rule
-        // `inspect_zip` uses for its collision key. Without this a pack that
-        // says `"clientOverrides": "client-overrides/"` matches no member and
-        // its whole layer vanishes with no error.
-        override_layers.push(name.strip_suffix('/').unwrap_or(&name).to_string());
-    }
-
     Ok(Pack {
         format_version: raw.format_version,
         version_id: raw.version_id,
@@ -337,7 +308,6 @@ pub fn parse_index(bytes: &[u8]) -> Result<Pack, IndexError> {
         summary: raw.summary,
         dependencies: raw.dependencies,
         files,
-        override_layers,
     })
 }
 

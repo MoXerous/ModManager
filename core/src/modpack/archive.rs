@@ -19,7 +19,10 @@ use std::io::{Cursor, Read, Seek};
 use unicode_normalization::UnicodeNormalization;
 use zip::ZipArchive;
 
-use super::mrpack::{parse_index, reserved_destination, IndexError, Pack, PackFile, Reserved};
+use super::mrpack::{
+    parse_index, reserved_destination, IndexError, Pack, PackFile, Reserved, Side,
+    CLIENT_OVERRIDE_LAYERS, SERVER_OVERRIDE_LAYER,
+};
 use crate::safety::inspect::{inspect_zip, read_limited, ArchiveLimits, MemberInfo};
 use crate::safety::path::safe_member_name;
 
@@ -81,13 +84,40 @@ pub enum InstallOp {
     },
 }
 
+/// What a plan deliberately leaves out, and why.
+///
+/// The counts exist so the preview can say what the pack contains and this
+/// installer will not apply — silence would read as "the pack has nothing
+/// else" (F-074).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlanSkips {
+    /// Remote entries with `env.client = "optional"`. This client install has
+    /// no per-file selection yet, so they are not installed.
+    pub remote_optional: usize,
+    /// Remote entries with `env.client = "unsupported"`: a client never
+    /// installs them.
+    pub remote_unsupported: usize,
+    /// Files under `server-overrides/`: a client never applies them.
+    pub server_overrides: usize,
+}
+
 /// The whole of what a pack asks for, before any of it is done.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InstallPlan {
     pub ops: Vec<InstallOp>,
+    pub skips: PlanSkips,
 }
 
 impl InstallPlan {
+    /// A plan with no skips; the constructor exists so callers that already
+    /// know their ops (tests, the recovery redo list) do not have to spell the
+    /// counters out.
+    pub fn new(ops: Vec<InstallOp>) -> Self {
+        Self {
+            ops,
+            skips: PlanSkips::default(),
+        }
+    }
     pub fn downloads(&self) -> usize {
         self.ops
             .iter()
@@ -157,16 +187,22 @@ fn destination_key(safe_path: &str) -> String {
 
 /// Turns a pack plus the archive inventory into the work list.
 ///
-/// Override files are the archive members that sit under a declared layer.
-/// The layer order matters and is the format's, not ours: client, then
-/// overrides, then server, each overwriting the last.
+/// Override files are the archive members that sit under one of the format's
+/// two client layers. The layer order is the format's, not the archive's:
+/// `overrides`, then `client-overrides`, each replacing the last (F-073).
 ///
 /// The inventory is in central-directory order, which says nothing about
 /// precedence. Iterating the layers first and the members second is what makes
-/// the collapse follow the format: a pack that lists `server-overrides` before
-/// `overrides` in the zip still gets the server file, because the layer loop
-/// visits `overrides` first and inserts the server value last.
+/// the collapse follow the format: a pack that lists `client-overrides` before
+/// `overrides` in the zip still gets `client-overrides` as the winner, because
+/// the layer loop visits it last.
+///
+/// `server-overrides/` is never applied and remote entries a client cannot use
+/// (`env.client` of `optional` or `unsupported`) are never downloaded; both are
+/// counted in [`PlanSkips`] so the preview can state them (F-074).
 pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan, PackError> {
+    let mut skips = PlanSkips::default();
+
     // Duplicate decision for `files[]` entries naming one destination, keyed
     // on [`destination_key`]:
     //
@@ -184,6 +220,20 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
     let mut settled: BTreeMap<String, String> = BTreeMap::new();
     let mut collapsed: Vec<&PackFile> = Vec::with_capacity(pack.files.len());
     for file in &pack.files {
+        // The client side decides whether the file belongs in this install at
+        // all. Skipping happens before the duplicate bookkeeping: two entries
+        // that are absent are not a contradiction.
+        match file.client {
+            Side::Required => {}
+            Side::Optional => {
+                skips.remote_optional += 1;
+                continue;
+            }
+            Side::Unsupported => {
+                skips.remote_unsupported += 1;
+                continue;
+            }
+        }
         let sha = file.sha512.to_lowercase();
         match settled.entry(destination_key(&file.safe_path)) {
             Entry::Vacant(slot) => {
@@ -201,17 +251,7 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
     }
 
     let mut overrides: BTreeMap<String, InstallOp> = BTreeMap::new();
-    for layer in &pack.override_layers {
-        // Defence in depth: `parse_index` already strips this, but a `Pack`
-        // can be built by hand and handed to this function.
-        let layer = layer.strip_suffix('/').unwrap_or(layer);
-        if layer.is_empty() {
-            continue;
-        }
-        let layer = safe_member_name(layer).map_err(|reason| PackError::Name {
-            path: layer.to_string(),
-            reason,
-        })?;
+    for layer in CLIENT_OVERRIDE_LAYERS {
         let prefix = format!("{layer}/");
         for member in inventory {
             if member.is_dir {
@@ -230,15 +270,26 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
                 continue;
             }
             check_reserved(&safe, &member.name)?;
+            // Later layers overwrite earlier ones: `client-overrides` is the
+            // client's last word, so inserting it second is the whole rule.
             overrides.insert(
                 destination_key(&safe),
                 InstallOp::CopyOverride {
                     safe_path: safe,
-                    source_layer: layer.clone(),
+                    source_layer: (*layer).to_string(),
                 },
             );
         }
     }
+
+    // A server layer is content for a dedicated server, which this application
+    // never produces. Counting it is all the preview needs: the user should
+    // see that the pack carries more than what the client receives.
+    let server_prefix = format!("{SERVER_OVERRIDE_LAYER}/");
+    skips.server_overrides = inventory
+        .iter()
+        .filter(|m| !m.is_dir && m.name.starts_with(&server_prefix))
+        .count();
 
     let mut ops = Vec::with_capacity(collapsed.len() + overrides.len());
     for file in collapsed {
@@ -265,7 +316,7 @@ pub fn plan_install(pack: &Pack, inventory: &[MemberInfo]) -> Result<InstallPlan
     }
     ops.extend(overrides.into_values());
 
-    Ok(InstallPlan { ops })
+    Ok(InstallPlan { ops, skips })
 }
 
 fn check_reserved(safe_path: &str, original: &str) -> Result<(), PackError> {
