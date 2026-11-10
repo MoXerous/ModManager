@@ -16,6 +16,10 @@ pub struct PlanEntry {
     pub source: String,
     /// `Provider::provider_id()` of the content this entry came from.
     pub provider: String,
+    /// The provider's human-facing identifier for the project. Kept because
+    /// the download history records what the user would search for, and a
+    /// numeric id is not that.
+    pub slug: String,
     pub project_id: String,
     pub title: String,
     pub project_type: String,
@@ -69,6 +73,7 @@ fn entry_for(r: &ResolvedContent, source: &str, dependency_type: &str) -> PlanEn
         None => PlanEntry {
             source: source.to_string(),
             provider: r.provider.clone(),
+            slug: r.slug.clone(),
             project_id: r.project_id.clone(),
             title: r.title.clone(),
             project_type: r.project_type.clone(),
@@ -89,6 +94,7 @@ fn entry_for(r: &ResolvedContent, source: &str, dependency_type: &str) -> PlanEn
             None => PlanEntry {
                 source: source.to_string(),
                 provider: r.provider.clone(),
+                slug: r.slug.clone(),
                 project_id: r.project_id.clone(),
                 title: r.title.clone(),
                 project_type: r.project_type.clone(),
@@ -103,6 +109,7 @@ fn entry_for(r: &ResolvedContent, source: &str, dependency_type: &str) -> PlanEn
             Some(f) => PlanEntry {
                 source: source.to_string(),
                 provider: r.provider.clone(),
+                slug: r.slug.clone(),
                 project_id: r.project_id.clone(),
                 title: r.title.clone(),
                 project_type: r.project_type.clone(),

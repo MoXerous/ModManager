@@ -5,6 +5,7 @@ import type { AppPathsDto } from '../bindings/AppPathsDto';
 import type { CheckUpdatesRequest } from '../bindings/CheckUpdatesRequest';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
+import type { DownloadHistoryEntryDto } from '../bindings/DownloadHistoryEntryDto';
 import type { InstallEventDto } from '../bindings/InstallEventDto';
 import type { InstallRequest } from '../bindings/InstallRequest';
 import type { InstallResultDto } from '../bindings/InstallResultDto';
@@ -193,6 +194,39 @@ export async function executeInstall(
     req,
     onEvent: channel,
   });
+}
+
+// --- download history (F-152, F-153) ------------------------------------
+//
+// The queue is a channel and dies with the window; this is the part that
+// survives a restart. Reading is one page at a time (`limit`), newest first.
+
+/** The four outcomes the log records. */
+export type DownloadHistoryStatus = 'success' | 'skipped' | 'failed' | 'cancelled';
+
+export interface DownloadHistoryQuery {
+  /** Absent means "every outcome". */
+  status?: DownloadHistoryStatus;
+  /** Matched against slug, title, filename and project id. */
+  search?: string;
+  limit?: number;
+}
+
+export function listDownloadHistory(
+  query: DownloadHistoryQuery = {},
+): Promise<DownloadHistoryEntryDto[]> {
+  return invoke<DownloadHistoryEntryDto[]>('list_download_history', {
+    query: {
+      status: query.status ?? null,
+      search: query.search ?? '',
+      limit: query.limit ?? 200,
+    },
+  });
+}
+
+/** Deletes the whole log; the answer is how many rows went. */
+export function clearDownloadHistory(): Promise<number> {
+  return invoke<number>('clear_download_history');
 }
 
 // --- CurseForge API key (ADR 0004 2-1) -----------------------------------
