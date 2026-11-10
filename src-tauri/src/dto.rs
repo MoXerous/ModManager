@@ -731,6 +731,79 @@ pub struct InstallResultDto {
     pub skipped: Vec<String>,
 }
 
+// --- download history (F-152, F-153) ------------------------------------
+
+/// One row of the install log.
+///
+/// `status` is a stable identifier (`success` | `skipped` | `failed` |
+/// `cancelled`), not a sentence: the UI translates `downloads.status.<value>`
+/// and decides how a failure reads. `message` is diagnostic text, kept for the
+/// row's own detail line and never shown as the whole state.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DownloadHistoryEntryDto {
+    /// Row id. Exact as a JS number for any id this table will ever hold.
+    #[ts(type = "number")]
+    pub id: i64,
+    pub provider: String,
+    pub project_id: String,
+    pub slug: String,
+    pub title: String,
+    pub version_id: Option<String>,
+    pub version_number: Option<String>,
+    pub game_version: String,
+    pub loader: String,
+    pub file_name: String,
+    pub file_sha1: Option<String>,
+    pub destination_path: Option<String>,
+    pub status: String,
+    pub message: String,
+    /// Epoch seconds. The screen formats it in the user's locale; picking a
+    /// zone is a display decision, not a storage one.
+    #[ts(type = "number")]
+    pub created_at: i64,
+}
+
+impl From<&mm_core::db::download_history::HistoryEntry> for DownloadHistoryEntryDto {
+    fn from(e: &mm_core::db::download_history::HistoryEntry) -> Self {
+        Self {
+            id: e.id,
+            provider: e.provider.clone(),
+            project_id: e.project_id.clone(),
+            slug: e.slug.clone(),
+            title: e.title.clone(),
+            version_id: e.version_id.clone(),
+            version_number: e.version_number.clone(),
+            game_version: e.game_version.clone(),
+            loader: e.loader.clone(),
+            file_name: e.file_name.clone(),
+            file_sha1: e.file_sha1.clone(),
+            destination_path: e.destination_path.clone(),
+            status: e.status.as_str().to_string(),
+            message: e.message.clone(),
+            created_at: e.created_at,
+        }
+    }
+}
+
+/// What the history screen asks for. An empty `status` means "all"; the three
+/// tabs differ only in this field.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadHistoryQueryDto {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub search: String,
+    #[serde(default = "default_history_limit")]
+    pub limit: u32,
+}
+
+fn default_history_limit() -> u32 {
+    200
+}
+
 // --- Modpack (.mrpack) install ------------------------------------------
 
 /// What the webview asks for: a pack file and the instance it goes into.

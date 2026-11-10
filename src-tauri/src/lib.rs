@@ -41,6 +41,8 @@ pub fn run() {
             commands::app_paths,
             commands::open_app_folder,
             commands::execute_install,
+            commands::list_download_history,
+            commands::clear_download_history,
             commands::curseforge_key_status,
             commands::save_curseforge_key,
             commands::legacy::scan_legacy_import,

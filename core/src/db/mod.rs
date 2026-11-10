@@ -3,6 +3,7 @@
 //! `Db::open` is the only entry point: pragmas, gate, backup, migrate.
 
 pub mod cache;
+pub mod download_history;
 pub mod instances;
 pub mod schema;
 
@@ -10,7 +11,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Current schema version (`MIGRATIONS.len()`).
-pub const CURRENT_VERSION: u32 = 4;
+pub const CURRENT_VERSION: u32 = 5;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -294,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_f133_upgrades_v3_to_v4_preserving_rows() {
+    fn spec_f133_upgrades_v3_to_current_preserving_rows() {
         let dir = crate::test_tempdir();
         let p = dir.path().join("t.db");
         {
@@ -321,7 +322,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(v, 4);
+        assert_eq!(v, CURRENT_VERSION);
         let (id, provider, project_id, sha1): (String, String, String, Option<String>) = db
             .conn
             .query_row(
@@ -594,10 +595,13 @@ mod tests {
             .expect("ls")
             .map(|e| e.expect("entry").file_name())
             .collect();
+        // The name carries the version being left and the one being reached;
+        // spelling the reached version here would make every later migration
+        // edit a test about v4.
+        let expected = format!(".pre-v3-to-v{CURRENT_VERSION}.");
         assert!(
-            baks.iter()
-                .any(|n| n.to_string_lossy().contains(".pre-v3-to-v4.")),
-            "expected a v3-to-v4 .bak next to {p:?}, found {baks:?}"
+            baks.iter().any(|n| n.to_string_lossy().contains(&expected)),
+            "expected a {expected} .bak next to {p:?}, found {baks:?}"
         );
     }
 

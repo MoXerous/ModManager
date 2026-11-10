@@ -68,6 +68,13 @@ fn sha1_hex(bytes: &[u8]) -> String {
 /// guessed hash would make the download fail verification correctly and the
 /// test would prove nothing.
 async fn mount_modrinth(server: &MockServer, jar: &[u8]) {
+    mount_modrinth_serving(server, jar, jar).await;
+}
+
+/// The same fixture, with the bytes the server actually returns chosen
+/// separately from the bytes the version metadata promises. The failure test
+/// needs a body that cannot match its declared hash.
+async fn mount_modrinth_serving(server: &MockServer, jar: &[u8], body: &[u8]) {
     let project_body = r#"{
         "id": "AANobbMI", "slug": "sodium", "title": "Sodium",
         "description": "d", "body": "b", "client_side": "required",
@@ -121,7 +128,7 @@ async fn mount_modrinth(server: &MockServer, jar: &[u8]) {
         .and(path("/data/sodium.jar"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_bytes(jar.to_vec())
+                .set_body_bytes(body.to_vec())
                 .insert_header("content-type", "application/java-archive"),
         )
         .mount(server)
@@ -336,6 +343,131 @@ fn install_refuses_an_empty_slug_list_without_emitting_anything() {
         assert!(
             sink.lock().expect("events").is_empty(),
             "a refused install must not narrate itself"
+        );
+    });
+}
+
+/// F-152: the same install that lands a file leaves exactly one row saying so.
+///
+/// The row is read back through core's own `list`, not through the command, so
+/// this test covers the write side of the log and the query side in one run.
+#[test]
+fn spec_f152_a_successful_install_writes_one_history_row() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        mount_modrinth(&server, &jar).await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+        execute_install_with(&state, &provider, req, recording_channel(&sink), true)
+            .await
+            .expect("install failed");
+
+        let rows = state
+            .with_db(|db| {
+                mm_core::db::download_history::list(db, &Default::default())
+                    .map_err(|e| crate::dto::IpcError::internal(e.to_string()))
+            })
+            .await
+            .expect("history");
+
+        assert_eq!(rows.len(), 1, "one file, one row: {rows:?}");
+        let row = &rows[0];
+        assert_eq!(row.status, mm_core::db::download_history::Status::Success);
+        assert_eq!(row.provider, "modrinth");
+        assert_eq!(row.project_id, "AANobbMI");
+        assert_eq!(row.slug, "sodium");
+        assert_eq!(row.title, "Sodium");
+        assert_eq!(row.version_id.as_deref(), Some("vvvv"));
+        assert_eq!(row.version_number.as_deref(), Some("0.5.8"));
+        assert_eq!(row.game_version, "1.21.1");
+        assert_eq!(row.loader, "fabric");
+        assert_eq!(row.file_name, "sodium-0.5.8.jar");
+        let sha1 = sha1_hex(&jar);
+        assert_eq!(row.file_sha1.as_deref(), Some(sha1.as_str()));
+        assert!(
+            row.destination_path
+                .as_deref()
+                .unwrap_or_default()
+                .ends_with("sodium-0.5.8.jar"),
+            "the row must name the file that landed: {:?}",
+            row.destination_path
+        );
+        assert!(row.created_at > 0, "a row with no time cannot be listed");
+    });
+}
+
+/// F-152: a file that fails verification is the row a user goes looking for,
+/// so a batch that stops early still writes it.
+#[test]
+fn spec_f152_a_failed_download_still_writes_a_failed_row() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        mount_modrinth_serving(&server, &jar, b"not the bytes the hashes promise").await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+        let out =
+            execute_install_with(&state, &provider, req, recording_channel(&sink), true).await;
+        assert!(out.is_err(), "a hash mismatch must not install");
+
+        let rows = state
+            .with_db(|db| {
+                mm_core::db::download_history::list(db, &Default::default())
+                    .map_err(|e| crate::dto::IpcError::internal(e.to_string()))
+            })
+            .await
+            .expect("history");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "the failure is the point of the row: {rows:?}"
+        );
+        assert_eq!(
+            rows[0].status,
+            mm_core::db::download_history::Status::Failed
+        );
+        assert!(
+            !rows[0].message.is_empty(),
+            "a failed row with no reason is a dead end"
+        );
+        assert_eq!(rows[0].destination_path, None);
+        assert!(
+            !root.join("mods").join("sodium-0.5.8.jar").exists(),
+            "a failed verification must not leave a jar"
         );
     });
 }

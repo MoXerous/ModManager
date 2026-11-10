@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 
 use crate::dto::{
     AppInfo, AppPathsDto, CheckUpdatesRequest, CreateInstancePlanDto, CreateInstanceRequest,
-    CreateRecoveryDto, CurseForgeKeyDto, ErrorCode, InstallPlanDto, InstallRequest,
-    InstallResultDto, InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest,
-    LocalFactDto, LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto,
-    ProjectDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, UpdatePreviewDto,
-    WarningDto,
+    CreateRecoveryDto, CurseForgeKeyDto, DownloadHistoryEntryDto, DownloadHistoryQueryDto,
+    ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto,
+    InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto,
+    PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto, SearchQueryDto,
+    TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
-use mm_core::downloader::JournalOp;
+use mm_core::downloader::{ItemProgress, JournalOp};
 
 /// `.mrpack` install commands. The whole module is the bridge: the format's
 /// decisions live in `mm_core::modpack` (see the module's own docs).
@@ -729,7 +729,7 @@ pub async fn execute_install_with(
     on_event: tauri::ipc::Channel<crate::dto::InstallEventDto>,
     allow_insecure_loopback: bool,
 ) -> Result<InstallResultDto, IpcError> {
-    use mm_core::downloader::{BatchItem, Downloader, ItemProgress};
+    use mm_core::downloader::{BatchItem, Downloader};
     use mm_core::resolver::resolve_and_plan;
 
     if req.projects.is_empty() {
@@ -776,6 +776,11 @@ pub async fn execute_install_with(
     // Entries carry the identity; `versions` carries the file. An entry with no
     // downloadable file is skipped rather than guessed at.
     let mut items: Vec<BatchItem> = Vec::new();
+    // The history row needs the identity the plan resolved, not just the file:
+    // by the time an outcome arrives the only thing the downloader still has
+    // is the item id.
+    let mut seeds: std::collections::HashMap<String, HistorySeed> =
+        std::collections::HashMap::new();
     for entry in &plan.entries {
         if entry.status != "downloadable" {
             continue;
@@ -789,6 +794,18 @@ pub async fn execute_install_with(
         let Some(file) = version.files.iter().find(|f| f.primary) else {
             continue;
         };
+        seeds.insert(
+            version_id.to_string(),
+            HistorySeed {
+                provider: entry.provider.clone(),
+                project_id: entry.project_id.clone(),
+                slug: entry.slug.clone(),
+                title: entry.title.clone(),
+                version_number: entry.version_number.clone(),
+                file_name: file.filename.clone(),
+                file_sha1: file.sha1.clone(),
+            },
+        );
         items.push(BatchItem {
             item_id: version_id.to_string(),
             project_id: entry.project_id.clone(),
@@ -822,6 +839,10 @@ pub async fn execute_install_with(
     let mut throttle = crate::progress::ProgressThrottle::new();
     let mut installed: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
+    // Every terminal event, in the order the downloader produced it. A
+    // throttled non-terminal event never gets here; a terminal one always
+    // does, which is what makes this the log's source.
+    let mut outcomes: Vec<(String, ItemProgress)> = Vec::new();
     let mut operation_id = String::new();
 
     {
@@ -863,13 +884,16 @@ pub async fn execute_install_with(
                 ItemProgress::Skipped { path } => skipped.push(path.to_string_lossy().into_owned()),
                 _ => {}
             }
+            if terminal {
+                outcomes.push((item_id.to_string(), p.clone()));
+            }
             let dto = crate::progress::to_dto(item_id, &p);
             // A closed channel means the window went away. The download keeps
             // running and the journal keeps the record, so there is nothing the
             // caller could do about it — not an error worth failing the install.
             let _ = on_event.send(dto);
         };
-        mm_core::downloader::execute_batch(
+        let batch = mm_core::downloader::execute_batch(
             &downloader,
             &mut write,
             &target,
@@ -877,8 +901,20 @@ pub async fn execute_install_with(
             cancel,
             &mut emit,
         )
-        .await
-        .map_err(|e| IpcError::io(e.to_string()))?;
+        .await;
+
+        // The log is written even when the batch stopped early: a failure is
+        // the row a user is most likely to look for. If the write itself fails
+        // the batch's own error wins — a history row is worth less than the
+        // file that did not land, and the journal still holds the batch.
+        let history = log_history(state, &seeds, &outcomes, &req.game_version, &req.loader).await;
+        match batch {
+            Ok(_) => history?,
+            Err(e) => {
+                drop(history);
+                return Err(IpcError::io(e.to_string()));
+            }
+        }
     }
 
     // The journal narrates an unfinished batch; the lock and the table are the
@@ -918,6 +954,160 @@ pub async fn execute_install_with(
     })
 }
 
+/// What a history row needs that only the resolved plan knows.
+///
+/// Keyed by item id, because that is all the downloader still carries when an
+/// outcome arrives.
+struct HistorySeed {
+    provider: String,
+    project_id: String,
+    slug: String,
+    title: String,
+    version_number: Option<String>,
+    file_name: String,
+    file_sha1: Option<String>,
+}
+
+/// How much of a failure message one row keeps.
+///
+/// A downloader error can carry a server's whole answer; a log row is a line,
+/// not a transcript. The cut is on characters, never bytes, so it cannot split
+/// a multi-byte character in half.
+const HISTORY_MESSAGE_LIMIT: usize = 500;
+
+/// Turn the batch's terminal events into rows, in the order they happened.
+///
+/// A pure function on purpose: the interesting part — which outcome becomes
+/// which status, and what a row keeps — is testable without a database, a
+/// server or a channel.
+fn history_rows(
+    seeds: &std::collections::HashMap<String, HistorySeed>,
+    outcomes: &[(String, ItemProgress)],
+    game_version: &str,
+    loader: &str,
+    created_at: i64,
+) -> Vec<mm_core::db::download_history::NewDownload> {
+    use mm_core::db::download_history::{NewDownload, Status};
+
+    let mut rows = Vec::with_capacity(outcomes.len());
+    for (item_id, progress) in outcomes {
+        // An outcome whose identity the plan does not know is not a row we can
+        // write: the history screen would show a project with no name.
+        let Some(seed) = seeds.get(item_id) else {
+            continue;
+        };
+        let (status, destination, message) = match progress {
+            ItemProgress::Landed { path } => (
+                Status::Success,
+                Some(path.to_string_lossy().into_owned()),
+                String::new(),
+            ),
+            ItemProgress::Skipped { path } => (
+                Status::Skipped,
+                Some(path.to_string_lossy().into_owned()),
+                String::new(),
+            ),
+            ItemProgress::Failed { message } => (
+                Status::Failed,
+                None,
+                message.chars().take(HISTORY_MESSAGE_LIMIT).collect(),
+            ),
+            ItemProgress::Cancelled => (Status::Cancelled, None, String::new()),
+            // Not terminal, so `emit` never collects them.
+            ItemProgress::Started { .. } | ItemProgress::Verifying => continue,
+        };
+        rows.push(NewDownload {
+            provider: seed.provider.clone(),
+            project_id: seed.project_id.clone(),
+            slug: seed.slug.clone(),
+            title: seed.title.clone(),
+            version_id: Some(item_id.clone()),
+            version_number: seed.version_number.clone(),
+            game_version: game_version.to_string(),
+            loader: loader.to_string(),
+            file_name: seed.file_name.clone(),
+            file_sha1: seed.file_sha1.clone(),
+            destination_path: destination,
+            status,
+            message,
+            created_at,
+        });
+    }
+    rows
+}
+
+/// Write the rows `history_rows` built, if there are any.
+///
+/// One `with_db` for the whole batch: the lock is taken once, and a batch of
+/// twenty items does not queue twenty database turns behind the UI's reads.
+async fn log_history(
+    state: &AppState,
+    seeds: &std::collections::HashMap<String, HistorySeed>,
+    outcomes: &[(String, ItemProgress)],
+    game_version: &str,
+    loader: &str,
+) -> Result<(), IpcError> {
+    let rows = history_rows(seeds, outcomes, game_version, loader, epoch_now());
+    if rows.is_empty() {
+        return Ok(());
+    }
+    state
+        .with_db(move |db| {
+            for row in &rows {
+                mm_core::db::download_history::log(db, row)
+                    .map_err(|e| IpcError::internal(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+}
+
+/// F-152/F-153: the install log, newest first.
+///
+/// `status` is the tab: absent means every outcome. An unknown value is
+/// refused rather than silently ignored — a filter that matches nothing
+/// because it was misspelled is worse than one that says so.
+#[tauri::command]
+pub async fn list_download_history(
+    state: tauri::State<'_, AppState>,
+    query: DownloadHistoryQueryDto,
+) -> Result<Vec<DownloadHistoryEntryDto>, IpcError> {
+    let status = match query.status.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(value) => Some(
+            mm_core::db::download_history::Status::parse(value)
+                .ok_or_else(|| IpcError::invalid_input(format!("unknown status: {value}")))?,
+        ),
+    };
+    let core = mm_core::db::download_history::Query {
+        status,
+        search: query.search,
+        limit: query.limit,
+    };
+    state
+        .with_db(move |db| {
+            mm_core::db::download_history::list(db, &core)
+                .map(|rows| rows.iter().map(DownloadHistoryEntryDto::from).collect())
+                .map_err(|e| IpcError::internal(e.to_string()))
+        })
+        .await
+}
+
+/// Deletes every history row and answers how many went.
+///
+/// The count is what the screen shows before returning to the empty state; a
+/// bare `()` would leave the UI guessing whether anything happened.
+#[tauri::command]
+pub async fn clear_download_history(state: tauri::State<'_, AppState>) -> Result<u32, IpcError> {
+    state
+        .with_db(|db| {
+            mm_core::db::download_history::clear(db)
+                .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+                .map_err(|e| IpcError::internal(e.to_string()))
+        })
+        .await
+}
+
 /// Where the live CurseForge key comes from, and where its file lives — never
 /// the key itself (ADR 0004 §2-1-4/§2-1-5).
 #[tauri::command]
@@ -943,6 +1133,8 @@ pub(crate) mod channel_tests;
 pub(crate) mod diagnostics_tests;
 #[cfg(test)]
 pub(crate) mod export_tests;
+#[cfg(test)]
+pub(crate) mod history_tests;
 #[cfg(test)]
 pub(crate) mod legacy_tests;
 #[cfg(test)]
