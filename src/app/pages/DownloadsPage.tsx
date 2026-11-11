@@ -15,6 +15,7 @@ import {
   toIpcError,
 } from '../../lib/ipc';
 import { formatBytes, formatRelativeTime } from '../../lib/format';
+import { type DownloadsTab, takeDownloadsTab } from '../downloadsTarget';
 import { useGameTarget } from '../gameTarget';
 
 interface Row extends InstallEventDto {
@@ -24,7 +25,7 @@ interface Row extends InstallEventDto {
 }
 
 /** The three tabs of the reference screen: the queue, what worked, and all of it. */
-type Tab = 'live' | 'completed' | 'history';
+type Tab = DownloadsTab;
 
 const TABS: readonly Tab[] = ['live', 'completed', 'history'];
 
@@ -56,7 +57,7 @@ function statusClass(status: string): string {
  */
 export function DownloadsPage() {
   const { t, i18n } = useTranslation();
-  const [tab, setTab] = useState<Tab>('live');
+  const [tab, setTab] = useState<Tab>(() => takeDownloadsTab() ?? 'live');
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState(false);

@@ -9,13 +9,14 @@ import { Combobox } from '@/components/ui/Combobox';
 import { Segmented } from '@/components/ui/Segmented';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
+import { InstallPlanDialog } from './InstallPlanDialog';
 import {
   curseforgeKeyStatus,
-  executeInstall,
   listInstances,
   searchProjects,
   toIpcError,
 } from '../../lib/ipc';
+import { requestDownloadsTab } from '../downloadsTarget';
 import {
   type ProviderId,
   GAME_VERSIONS,
@@ -67,7 +68,9 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const [moreError, setMoreError] = useState<IpcError | null>(null);
   const [searching, setSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [installing, setInstalling] = useState<string | null>(null);
+  // The project whose plan is open. The dialog builds and shows the plan; the
+  // row itself only asks for it.
+  const [planTarget, setPlanTarget] = useState<ProjectDto | null>(null);
   const [instances, setInstances] = useState<InstanceSummaryDto[]>([]);
   const [target, setTarget] = useState('');
   // Advisory: a failed read must not stop a search, so this only gates the
@@ -148,7 +151,8 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     setMoreError(null);
   }, []);
 
-  const targetPath = instances.find((i) => i.id === target)?.path ?? '';
+  const targetInstance = instances.find((i) => i.id === target) ?? null;
+  const targetPath = targetInstance?.path ?? '';
   // Nothing to install into is not a state the button can be pressed in. An
   // empty version or loader is not either: core reads an empty version as
   // "any version" and installs the newest build of the fallback loader,
@@ -234,32 +238,15 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     }
   }, [loaded, loadingMore, runSearch, searching]);
 
-  const install = useCallback(
-    (project: ProjectDto) => {
-      // The id, not the slug: CurseForge resolves a project by its numeric id
-      // only, and Modrinth accepts either. The provider comes from the row
-      // itself, so a switch after the search cannot send the wrong one.
-      setInstalling(project.id);
-      setError(null);
-      executeInstall(
-        {
-          instanceRoot: targetPath,
-          projects: [project.id],
-          provider: project.providerId,
-          gameVersion: gameVersion.trim(),
-          loader: loader.trim().toLowerCase(),
-        },
-        () => {},
-      )
-        .then(onInstalled)
-        .catch((e) => setError(toIpcError(e)))
-        .finally(() => setInstalling(null));
-    },
-    // `targetPath` is read inside, so it belongs in the deps. Without it this
-    // closure keeps the first render's empty string and sends an empty root,
-    // which is the exact failure this commit exists to remove.
-    [gameVersion, loader, onInstalled, targetPath],
-  );
+  /**
+   * Opening the review is the only thing a click does: `execute_install` is
+   * called from the dialog's confirm, after the plan has been read. The batch's
+   * progress lives in the queue, which is where the successful install sends
+   * the user.
+   */
+  const openPlan = useCallback((project: ProjectDto) => {
+    setPlanTarget(project);
+  }, []);
 
   // A name, not a path: the list already shows where each instance is, and a
   // path in a dropdown is unreadable and would need truncation.
@@ -397,9 +384,8 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
             <Card
               key={`${p.providerId}:${p.id}`}
               project={p}
-              installing={installing}
               canInstall={canInstall}
-              onInstall={install}
+              onInstall={openPlan}
             />
           ))}
         </div>
@@ -416,18 +402,34 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
           </Button>
         </div>
       )}
+
+      <InstallPlanDialog
+        open={planTarget !== null}
+        project={planTarget}
+        instance={targetInstance}
+        gameVersion={gameVersion}
+        loader={loader}
+        onClose={() => setPlanTarget(null)}
+        onInstalled={() => {
+          // Close before navigating: Browse unmounts on the page swap, and the
+          // next visit must not find a dialog still open over new results.
+          setPlanTarget(null);
+          // The live queue never saw this batch — its events ran in this
+          // dialog — so the honest destination is the log of what happened.
+          requestDownloadsTab('history');
+          onInstalled();
+        }}
+      />
     </div>
   );
 }
 
 function Card({
   project,
-  installing,
   canInstall,
   onInstall,
 }: {
   project: ProjectDto;
-  installing: string | null;
   canInstall: boolean;
   onInstall: (project: ProjectDto) => void;
 }) {
@@ -460,7 +462,7 @@ function Card({
           type="button"
           variant="outline"
           className="ms-auto"
-          disabled={installing !== null || !canInstall}
+          disabled={!canInstall}
           onClick={() => onInstall(project)}
         >
           {t('install.start')}
