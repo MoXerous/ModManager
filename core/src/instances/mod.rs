@@ -1,13 +1,16 @@
-﻿//! Instance folders: read-only scanning, lock file, enable/disable.
+﻿//! Instance folders: read-only scanning, lock file, enable/disable, safe
+//! removal.
 //!
-//! Scanning never writes. The only writer here is [`toggle`] (rename
-//! only) and [`lock`] (the lock file itself).
+//! Scanning never writes. The only writers here are [`toggle`] (rename
+//! only), [`remove`] (move into a dated backup folder, never delete), and
+//! [`lock`] (the lock file itself).
 
 pub mod lock;
 pub mod metadata;
 pub mod record;
 pub mod recovery;
 pub mod registry;
+pub mod remove;
 pub mod toggle;
 
 pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile, LOCK_FILE_NAME};
@@ -20,6 +23,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalContentFact {
     pub path: PathBuf,
+    /// Path inside the `mods` folder, always `/`-separated for IPC. Unlike
+    /// `filename`, this keeps `disabled_mods/` intact, so a later toggle or
+    /// removal addresses the file the user actually sees.
+    pub rel_path: String,
     pub filename: String,
     pub size: u64,
     pub sha1: String,
@@ -146,7 +153,8 @@ fn hex_of(bytes: impl AsRef<[u8]>) -> String {
 
 /// Read-only mod scan: facts only, no writes, no moves.
 pub fn scan_mods(instance: &Instance) -> Vec<LocalContentFact> {
-    iter_local_mod_scan_files(&instance.minecraft_root.join("mods"))
+    let folder = instance.minecraft_root.join("mods");
+    iter_local_mod_scan_files(&folder)
         .into_iter()
         .map(|p| {
             let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -155,8 +163,13 @@ pub fn scan_mods(instance: &Instance) -> Vec<LocalContentFact> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
+            let rel_path = p
+                .strip_prefix(&folder)
+                .map(relative_display)
+                .unwrap_or_else(|_| filename.clone());
             LocalContentFact {
                 path: p.clone(),
+                rel_path,
                 filename,
                 size,
                 sha1: sha1_of(&p),
@@ -165,6 +178,17 @@ pub fn scan_mods(instance: &Instance) -> Vec<LocalContentFact> {
             }
         })
         .collect()
+}
+
+/// `/`-separated path for IPC, independent of the platform separator.
+fn relative_display(rel: &Path) -> String {
+    rel.components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]

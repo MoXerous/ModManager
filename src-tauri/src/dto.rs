@@ -391,6 +391,10 @@ pub struct InstallPlanDto {
 pub struct LocalFactDto {
     /// Filename only — absolute paths never cross IPC.
     pub filename: String,
+    /// Path inside `mods/`, `/`-separated (`a.jar`, `disabled_mods/b.jar`).
+    /// The filename alone cannot address a file the scan found in a
+    /// subfolder, so toggle and remove take this value, never a bare name.
+    pub rel_path: String,
     #[ts(type = "number")]
     pub size: u64,
     pub sha1: String,
@@ -558,7 +562,8 @@ pub struct PreviewToggleDto {
     /// and a separator guess would be wrong on one of the two platforms.
     pub instance_root: String,
     pub action: ToggleActionDto,
-    /// Filenames inside `<instance_root>/mods`, not absolute paths.
+    /// Paths inside `<instance_root>/mods`, `/`-separated and relative
+    /// (`a.jar`, `disabled_mods/a.jar`) — never absolute, never `..`.
     pub files: Vec<String>,
 }
 
@@ -588,6 +593,82 @@ pub struct ToggleResultDto {
     /// `success` | `failed` | `skipped` | `rolledBack` | `rollbackFailed` | `rollbackSkipped`.
     pub state: String,
     pub reason: String,
+}
+
+// --- Safe content removal (F-111/F-112) ---------------------------------
+//
+// Removal is preview then execute, like toggle. The plan carries a stable
+// reason code per entry so the UI translates it; `reason` stays the legacy
+// English wording and is never the only record of a refusal. Execution
+// rebuilds the plan in Rust: a body from the webview is not trusted.
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemovePreviewRequestDto {
+    /// The instance folder; `mods` is derived in Rust.
+    pub instance_root: String,
+    /// Paths inside `mods`, `/`-separated, as returned by `scan_instance`.
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoveExecuteRequestDto {
+    pub instance_root: String,
+    pub files: Vec<String>,
+    /// The exact word for external/unknown entries; empty when not needed.
+    #[serde(default)]
+    pub confirmation: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoveEntryDto {
+    pub filename: String,
+    pub rel_path: String,
+    pub allowed: bool,
+    /// Allowed, but ownership is external/unknown: confirm with the word.
+    pub requires_confirmation: bool,
+    /// `allowed` | `root-missing` | `source-missing` | `symlink` | `outside`
+    /// | `backup-folder` | `unsupported` | ...
+    pub reason_code: String,
+    /// English spec wording, for logs and for a code the UI does not know.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemovePlanDto {
+    pub entries: Vec<RemoveEntryDto>,
+    /// At least one allowed entry needs the typed word.
+    pub requires_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoveResultDto {
+    pub filename: String,
+    pub rel_path: String,
+    /// `moved-to-backup` | `failed`.
+    pub state: String,
+    /// `moved-to-backup` | guard code | `backup-exists` | `backup-unwritable`
+    /// | `backup-outside` | `move-failed`.
+    pub reason_code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoveRunDto {
+    pub results: Vec<RemoveResultDto>,
+    /// Empty when `remove_manifest.json` was written; otherwise why not.
+    pub manifest_error: String,
 }
 
 // --- Instances (F-101..F-104) -------------------------------------------

@@ -29,6 +29,8 @@ import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
 import type { PackEventDto } from '../bindings/PackEventDto';
 import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
 import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
+import type { RemovePlanDto } from '../bindings/RemovePlanDto';
+import type { RemoveRunDto } from '../bindings/RemoveRunDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
@@ -51,7 +53,14 @@ export interface PreviewToggleRequest {
   /** جذر النسخة، لا مجلد mods مباشرة. */
   instanceRoot: string;
   action: 'disable' | 'enable';
-  /** أسماء ملفات داخل mods، يُحلّها Rust تحت <instanceRoot>/mods. المسارات المطلقة تُرفض هنا. */
+  /** مسارات نسبية داخل mods من `LocalFactDto.relPath`، يُحلّها Rust تحت <instanceRoot>/mods. */
+  files: string[];
+}
+
+export interface RemoveContentRequest {
+  /** جذر النسخة، لا مجلد mods مباشرة. */
+  instanceRoot: string;
+  /** مسارات نسبية داخل mods من `LocalFactDto.relPath`؛ لا أسماء مطلقة. */
   files: string[];
 }
 
@@ -120,6 +129,29 @@ export function executeToggle(req: PreviewToggleRequest): Promise<ToggleResultDt
       instanceRoot: req.instanceRoot,
       action: req.action,
       files: req.files,
+    },
+  });
+}
+
+/** معاينة الحذف الآمن: تُقرأ الحراسات فقط، ولا يُنشأ مجلد النسخ. */
+export function previewRemoveContent(req: RemoveContentRequest): Promise<RemovePlanDto> {
+  return invoke<RemovePlanDto>('preview_remove_content', {
+    req: {
+      instanceRoot: req.instanceRoot,
+      files: req.files,
+    },
+  });
+}
+
+/** نقل إلى مجلد نسخ احتياطي مؤرّخ؛ الخطة تُعاد بناؤها في Rust. */
+export function executeRemoveContent(
+  req: RemoveContentRequest & { confirmation: string },
+): Promise<RemoveRunDto> {
+  return invoke<RemoveRunDto>('execute_remove_content', {
+    req: {
+      instanceRoot: req.instanceRoot,
+      files: req.files,
+      confirmation: req.confirmation,
     },
   });
 }

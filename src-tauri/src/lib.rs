@@ -30,6 +30,8 @@ pub fn run() {
             commands::check_instance_updates,
             commands::preview_toggle,
             commands::execute_toggle,
+            commands::preview_remove_content,
+            commands::execute_remove_content,
             commands::list_instances,
             commands::plan_create_instance,
             commands::execute_create_instance,

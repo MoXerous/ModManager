@@ -58,6 +58,30 @@ fn spec_f101_scan_files_top_level_plus_disabled_sorted() {
 }
 
 #[test]
+fn spec_f067_scan_keeps_relative_path_for_disabled_mods() {
+    let d = crate::test_tempdir();
+    let mods = mods_with(d.path(), &["a.jar"]);
+    let dis = mods.join("disabled_mods");
+    std::fs::create_dir_all(&dis).expect("dir");
+    build_jar(&dis.join("c.jar"), &[("x.txt", b"v")]);
+    let inst = Instance {
+        root: d.path().to_path_buf(),
+        minecraft_root: d.path().to_path_buf(),
+    };
+    let facts = scan_mods(&inst);
+    let top = facts.iter().find(|f| f.filename == "a.jar").expect("top");
+    assert_eq!(top.rel_path, "a.jar");
+    let nested = facts
+        .iter()
+        .find(|f| f.filename == "c.jar")
+        .expect("nested");
+    assert_eq!(
+        nested.rel_path, "disabled_mods/c.jar",
+        "the filename alone loses the folder the file lives in"
+    );
+}
+
+#[test]
 fn spec_f101_scan_is_read_only() {
     use crate::jar_reader::ResourceType;
     let d = crate::test_tempdir();
