@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { InstanceSnapshotDto } from '../../bindings/InstanceSnapshotDto';
@@ -7,7 +7,9 @@ import type { TogglePlanDto } from '../../bindings/TogglePlanDto';
 import type { UpdatePreviewDto } from '../../bindings/UpdatePreviewDto';
 import type { UpdateStatusDto } from '../../bindings/UpdateStatusDto';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Segmented } from '@/components/ui/Segmented';
+import { cn } from 'cn';
 import { ErrorState, LoadingState } from '../../components/state';
 import {
   checkInstanceUpdates,
@@ -19,6 +21,7 @@ import {
 import { formatBytes } from '../../lib/format';
 import { type ProviderId, PROVIDERS, getGameTarget } from '../gameTarget';
 import { InstanceExport } from './InstanceExport';
+import { RemoveDialog } from './RemoveDialog';
 
 type Action = 'enable' | 'disable';
 
@@ -131,26 +134,49 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   const [updates, setUpdates] = useState<UpdatePreviewDto | null>(null);
   const [updatesError, setUpdatesError] = useState<IpcError | null>(null);
   const [updatesBusy, setUpdatesBusy] = useState(false);
+  /**
+   * Selection is by `relPath`, not filename: `disabled_mods/c.jar` and a
+   * top-level `c.jar` are two different files.
+   */
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
     scanInstance(root)
-      .then(setSnap)
+      .then((next) => {
+        setSnap(next);
+        // A rescan is the truth about what exists; keep only selections that
+        // still point at a file, so a removal cannot leave a ghost selected.
+        setSelected((prev) => {
+          const live = new Set(next.mods.map((m) => m.relPath));
+          const pruned = new Set([...prev].filter((p) => live.has(p)));
+          return pruned.size === prev.size ? prev : pruned;
+        });
+      })
       .catch((e) => setError(toIpcError(e)));
   }, [root]);
 
   useEffect(load, [load]);
 
-  // The scan reports filenames only, and the command takes names inside the
-  // instance's mods folder — so the two line up with no path building on this
-  // side at all. Sending an empty list instead would plan nothing and apply
-  // nothing, while looking like a button that works.
-  const names = snap?.mods.map((m) => m.filename) ?? [];
+  const selectedFiles = useMemo(() => {
+    if (!snap) {
+      return [];
+    }
+    return snap.mods
+      .filter((m) => selected.has(m.relPath))
+      .map((m) => m.relPath);
+  }, [snap, selected]);
+
+  // The scan reports each file's relative path, and the command takes paths
+  // inside the instance's mods folder - so the two line up with no path
+  // building on this side. A bare filename would miss `disabled_mods/`.
+  const relPaths = snap?.mods.map((m) => m.relPath) ?? [];
 
   const preview = (a: Action) => {
     setBusy(true);
     setError(null);
-    previewToggle({ instanceRoot: root, action: a, files: names })
+    previewToggle({ instanceRoot: root, action: a, files: relPaths })
       .then((p) => {
         setPlan(p);
         setAction(a);
@@ -164,7 +190,7 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
       return;
     }
     setBusy(true);
-    executeToggle({ instanceRoot: root, action, files: names })
+    executeToggle({ instanceRoot: root, action, files: relPaths })
       .then(() => {
         setPlan(null);
         setAction(null);
@@ -230,13 +256,46 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
 
   const disabledCount = snap.mods.filter((m) => m.disabled).length;
   const total = snap.mods.length;
+  const allSelected = total > 0 && selected.size === total;
+  const someSelected = selected.size > 0 && !allSelected;
+
+  const toggleRow = (relPath: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(relPath)) {
+        next.delete(relPath);
+      } else {
+        next.add(relPath);
+      }
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected(
+      allSelected ? new Set() : new Set(snap.mods.map((m) => m.relPath)),
+    );
+  };
 
   return (
     <div className="flex flex-col">
       <div className="flex items-center gap-2.5 px-5 pt-4">
         <h2 className="text-body font-semibold">{t('details.installedContent')}</h2>
         <span className="text-small text-muted-foreground">{t('details.count', { count: total })}</span>
-        <div className="ms-auto flex items-center gap-2">
+        <div className="ms-auto flex flex-wrap items-center gap-2">
+          {total > 0 && (
+            <span className="me-1 flex items-center gap-1.5 text-caption text-muted-foreground">
+              <Checkbox
+                id="select-all-installed"
+                checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                onCheckedChange={toggleAll}
+                aria-label={t('details.selectAll')}
+              />
+              <label htmlFor="select-all-installed" className="cursor-pointer">
+                {t('details.selectAll')}
+              </label>
+            </span>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -257,6 +316,15 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
             onClick={() => preview('disable')}
           >
             {t('details.actionDisable')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="text-status-issue"
+            disabled={busy || selected.size === 0}
+            onClick={() => setRemoveOpen(true)}
+          >
+            {t('details.actionRemove')}
           </Button>
         </div>
       </div>
@@ -361,9 +429,19 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         <ul className="flex flex-col gap-1.5 px-5 py-4">
           {snap.mods.map((m) => (
             <li
-              key={m.filename}
-              className="flex items-center gap-2.5 rounded-control border border-border bg-card px-3 py-2"
+              key={m.relPath}
+              className={cn(
+                'flex items-center gap-2.5 rounded-control border px-3 py-2',
+                selected.has(m.relPath)
+                  ? 'border-primary/40 bg-surface-sunken'
+                  : 'border-border bg-card',
+              )}
             >
+              <Checkbox
+                checked={selected.has(m.relPath)}
+                onCheckedChange={() => toggleRow(m.relPath)}
+                aria-label={t('details.selectRow', { name: m.filename })}
+              />
               <span
                 className={
                   m.disabled ? 'text-caption text-status-disabled' : 'text-caption text-muted-foreground'
@@ -371,13 +449,38 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
               >
                 {m.resourceType}
               </span>
-              <span className="min-w-0 flex-1 truncate text-body">{m.filename}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-body" dir="auto">
+                  {m.filename}
+                </span>
+                {m.relPath.includes('/') && (
+                  <span
+                    className="block truncate font-mono text-caption text-muted-foreground"
+                    dir="ltr"
+                  >
+                    {m.relPath}
+                  </span>
+                )}
+              </span>
               <span dir="ltr" className="font-mono text-caption text-muted-foreground">
                 {formatBytes(m.size)}
               </span>
             </li>
           ))}
         </ul>
+      )}
+
+      {removeOpen && (
+        <RemoveDialog
+          root={root}
+          files={selectedFiles}
+          onClose={() => setRemoveOpen(false)}
+          onRemoved={() => {
+            setSelected(new Set());
+            load();
+            onChanged();
+          }}
+        />
       )}
     </div>
   );

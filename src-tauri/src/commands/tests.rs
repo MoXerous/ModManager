@@ -300,16 +300,67 @@ fn untrusted_paths_are_filtered_before_core() {
         "ok.jar".to_string(),
         "../escape.jar".to_string(),
         "sub/dir.jar".to_string(),
+        "disabled_mods/nested.jar".to_string(),
+        "C:\\abs.jar".to_string(),
         "..".to_string(),
         "  ".to_string(),
     ];
     let mods = Path::new("M").join("mods");
-    let kept = filenames(&mods, &raw);
-    assert_eq!(kept.len(), 1);
-    assert_eq!(kept[0].file_name().expect("n").to_string_lossy(), "ok.jar");
+    let kept = relative_paths(&mods, &raw);
+    assert_eq!(kept.len(), 2, "{kept:?}");
     // Filtered, and still *inside* the folder rather than resolved against
-    // the process cwd — the join is what makes a surviving name addressable.
+    // the process cwd - the join is what makes a surviving name addressable.
     assert_eq!(kept[0], mods.join("ok.jar"));
+    // The scan reports `disabled_mods/` files, so that one folder is the only
+    // nested shape allowed through; unknown subfolders are still dropped.
+    assert_eq!(kept[1], mods.join("disabled_mods").join("nested.jar"));
+}
+
+#[test]
+fn spec_f111_disabled_file_keeps_lock_ownership() {
+    assert!(lock_matches("a.jar", "a.jar"));
+    assert!(lock_matches("a.jar", "a.jar.disabled"));
+    assert!(lock_matches("A.JAR", "a.JAR.DISABLED"));
+    assert!(!lock_matches("a.jar", "b.jar"));
+    assert!(!lock_matches("a.jar", "a.jar.disabled.disabled"));
+}
+
+#[test]
+fn spec_f111_remove_candidates_mark_only_unlocked_files_external() {
+    use mm_core::instances::{write_lock, LockEntry, LockFile};
+
+    let d = tempfile::tempdir().expect("temp");
+    let mods = d.path().join("mods");
+    std::fs::create_dir_all(&mods).expect("mkdir");
+    for name in ["known.jar", "known.jar.disabled", "unknown.jar"] {
+        std::fs::write(mods.join(name), b"x").expect("write");
+    }
+    write_lock(
+        &d.path().join("instance.lock.json"),
+        &LockFile {
+            entries: vec![LockEntry {
+                provider: "modrinth".to_string(),
+                project_id: "P".to_string(),
+                slug: String::new(),
+                version_id: "V".to_string(),
+                filename: "known.jar".to_string(),
+                sha1: String::new(),
+                sha512: String::new(),
+            }],
+        },
+    )
+    .expect("lock");
+
+    let raw = vec![
+        "known.jar".to_string(),
+        "known.jar.disabled".to_string(),
+        "unknown.jar".to_string(),
+    ];
+    let got = remove_candidates(d.path(), &mods, &raw);
+    assert_eq!(got.len(), 3);
+    assert!(!got[0].external);
+    assert!(!got[1].external, "the disable rename keeps ownership");
+    assert!(got[2].external, "no lock record means external/unknown");
 }
 
 #[test]
@@ -396,11 +447,11 @@ fn spec_f065_a_folder_that_is_not_there_holds_no_installed_mods() {
 }
 
 /// The toggle buttons are the first thing in this app whose whole value is
-/// that they change files. The webview can only send bare names — the scan
-/// reports filenames only, and absolute paths are refused at the door — so
-/// those names must resolve under `<root>/mods`. When they did not, the plan
-/// came back empty and `execute_toggle` renamed nothing, silently, behind a
-/// button that looked like it worked.
+/// that they change files. The webview can only send relative paths - the
+/// scan reports those, and absolute paths are refused at the door - so they
+/// must resolve under `<root>/mods`. When they did not, the plan came back
+/// empty and `execute_toggle` renamed nothing, silently, behind a button that
+/// looked like it worked.
 #[test]
 fn spec_f065_bare_filenames_resolve_to_real_files_in_the_mods_folder() {
     use mm_core::instances::toggle::{preview_toggle, ToggleAction};
@@ -418,7 +469,7 @@ fn spec_f065_bare_filenames_resolve_to_real_files_in_the_mods_folder() {
         "C:\\abs.jar".to_string(),
         "   ".to_string(),
     ];
-    let files = super::filenames(&mods, &names);
+    let files = super::relative_paths(&mods, &names);
 
     assert_eq!(files.len(), 1, "only the plain name survives: {files:?}");
     assert!(
@@ -435,6 +486,39 @@ fn spec_f065_bare_filenames_resolve_to_real_files_in_the_mods_folder() {
         "core must agree it may touch it, said: {}",
         plan.entries[0].reason
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A file in `disabled_mods/` was the silent failure `relPath` fixes: the
+/// scan reported `c.jar`, the bridge joined `mods/c.jar`, and enabling the
+/// file the user could see did nothing.
+#[test]
+fn spec_f067_disabled_mods_relative_path_enables_the_nested_file() {
+    use mm_core::instances::toggle::{preview_toggle, ToggleAction};
+
+    let root = std::env::temp_dir().join(format!("mm-toggle-nested-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mods = root.join("mods");
+    std::fs::create_dir_all(mods.join("disabled_mods")).expect("mkdir");
+    std::fs::write(mods.join("disabled_mods").join("c.jar"), b"x").expect("write");
+
+    let files = super::relative_paths(&mods, &["disabled_mods/c.jar".to_string()]);
+    assert_eq!(files.len(), 1);
+    let plan = preview_toggle(&mods, ToggleAction::Enable, &files);
+    assert!(
+        plan.entries[0].allowed,
+        "core must agree it may move it, said: {}",
+        plan.entries[0].reason
+    );
+    assert_eq!(
+        plan.entries[0].dest.file_name().and_then(|n| n.to_str()),
+        Some("c.jar"),
+        "enable must move it to the top level, not leave it nested"
+    );
+    assert!(plan.entries[0]
+        .dest
+        .starts_with(std::fs::canonicalize(&mods).expect("canonical mods")));
 
     let _ = std::fs::remove_dir_all(&root);
 }

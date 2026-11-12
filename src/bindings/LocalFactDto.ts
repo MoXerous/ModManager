@@ -4,7 +4,13 @@ export type LocalFactDto = {
 /**
  * Filename only — absolute paths never cross IPC.
  */
-filename: string, size: number, sha1: string, 
+filename: string, 
+/**
+ * Path inside `mods/`, `/`-separated (`a.jar`, `disabled_mods/b.jar`).
+ * The filename alone cannot address a file the scan found in a
+ * subfolder, so toggle and remove take this value, never a bare name.
+ */
+relPath: string, size: number, sha1: string, 
 /**
  * `mod` | `shaderpack` | `datapack` | `resourcepack` | `unknown`.
  */

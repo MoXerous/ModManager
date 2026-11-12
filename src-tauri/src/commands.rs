@@ -9,11 +9,13 @@ use crate::dto::{
     CreateRecoveryDto, CurseForgeKeyDto, DownloadHistoryEntryDto, DownloadHistoryQueryDto,
     ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto,
     InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto,
-    PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, SearchPageDto, SearchQueryDto,
-    TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
+    PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, RemoveEntryDto,
+    RemoveExecuteRequestDto, RemovePlanDto, RemovePreviewRequestDto, RemoveResultDto, RemoveRunDto,
+    SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::downloader::{ItemProgress, JournalOp};
+use mm_core::instances::remove::RemoveCandidate;
 
 /// `.mrpack` install commands. The whole module is the bridge: the format's
 /// decisions live in `mm_core::modpack` (see the module's own docs).
@@ -333,14 +335,12 @@ pub async fn scan_instance(instance_root: String) -> Result<InstanceSnapshotDto,
                 .iter()
                 .map(|f| LocalFactDto {
                     filename: f.filename.clone(),
+                    rel_path: f.rel_path.clone(),
                     size: f.size,
                     sha1: f.sha1.clone(),
                     resource_type: format!("{:?}", f.resource_type).to_lowercase(),
                     disabled: f.disabled,
-                    project_id: locked
-                        .iter()
-                        .find(|l| l.filename == f.filename)
-                        .map(|l| l.project_id.clone()),
+                    project_id: lock_entry_for(&locked, &f.filename).map(|l| l.project_id.clone()),
                 })
                 .collect(),
             locked,
@@ -388,8 +388,8 @@ pub(crate) async fn check_updates_with(
 
 #[tauri::command]
 pub async fn preview_toggle(req: PreviewToggleDto) -> Result<TogglePlanDto, IpcError> {
-    let mods_dir = resolve_dir(&req.instance_root)?.join("mods");
-    let files = filenames(&mods_dir, &req.files);
+    let mods_dir = mods_dir_of(&resolve_dir(&req.instance_root)?);
+    let files = relative_paths(&mods_dir, &req.files);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::toggle::preview_toggle;
         let plan = preview_toggle(&mods_dir, req.action.into(), &files);
@@ -414,8 +414,8 @@ pub async fn preview_toggle(req: PreviewToggleDto) -> Result<TogglePlanDto, IpcE
 /// same inputs — a plan body from the webview is never trusted.
 #[tauri::command]
 pub async fn execute_toggle(req: PreviewToggleDto) -> Result<Vec<ToggleResultDto>, IpcError> {
-    let mods_dir = resolve_dir(&req.instance_root)?.join("mods");
-    let files = filenames(&mods_dir, &req.files);
+    let mods_dir = mods_dir_of(&resolve_dir(&req.instance_root)?);
+    let files = relative_paths(&mods_dir, &req.files);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::toggle::{execute_toggle, preview_toggle};
         let action = req.action.into();
@@ -430,6 +430,75 @@ pub async fn execute_toggle(req: PreviewToggleDto) -> Result<Vec<ToggleResultDto
                 reason: r.reason.clone(),
             })
             .collect())
+    })
+    .await
+    .map_err(IpcError::internal)?
+}
+
+// --- Safe content removal (F-111/F-112) ---------------------------------
+
+/// Read-only removal preview. Nothing is created or moved here; every entry
+/// carries its guard verdict and whether it needs the typed word.
+#[tauri::command]
+pub async fn preview_remove_content(
+    req: RemovePreviewRequestDto,
+) -> Result<RemovePlanDto, IpcError> {
+    let root = resolve_dir(&req.instance_root)?;
+    let mods_dir = mods_dir_of(&root);
+    tauri::async_runtime::spawn_blocking(move || {
+        use mm_core::instances::remove::build_remove_preview;
+        let candidates = remove_candidates(&root, &mods_dir, &req.files);
+        let plan = build_remove_preview(&mods_dir, &candidates, std::time::SystemTime::now());
+        Ok(RemovePlanDto {
+            requires_confirmation: plan.requires_confirmation(),
+            entries: plan
+                .entries
+                .iter()
+                .map(|e| RemoveEntryDto {
+                    filename: file_name(&e.source),
+                    rel_path: relative_label(&mods_dir, &e.source),
+                    allowed: e.allowed,
+                    requires_confirmation: e.requires_confirmation,
+                    reason_code: e.reason_code.to_string(),
+                    reason: e.reason.clone(),
+                })
+                .collect(),
+        })
+    })
+    .await
+    .map_err(IpcError::internal)?
+}
+
+/// Move the selected files into the dated backup folder. The plan is rebuilt
+/// here, so a file that changed since the preview is re-guarded rather than
+/// trusted; external/unknown entries refuse the whole run without the word.
+#[tauri::command]
+pub async fn execute_remove_content(
+    req: RemoveExecuteRequestDto,
+) -> Result<RemoveRunDto, IpcError> {
+    let root = resolve_dir(&req.instance_root)?;
+    let mods_dir = mods_dir_of(&root);
+    tauri::async_runtime::spawn_blocking(move || {
+        use mm_core::instances::remove::{build_remove_preview, execute_remove, RemoveError};
+        let candidates = remove_candidates(&root, &mods_dir, &req.files);
+        let plan = build_remove_preview(&mods_dir, &candidates, std::time::SystemTime::now());
+        let run = execute_remove(&plan, &req.confirmation).map_err(|e| match e {
+            RemoveError::ConfirmationRequired => IpcError::invalid_input("confirmation required"),
+        })?;
+        Ok(RemoveRunDto {
+            results: run
+                .results
+                .iter()
+                .map(|r| RemoveResultDto {
+                    filename: file_name(&r.source),
+                    rel_path: relative_label(&mods_dir, &r.source),
+                    state: r.state.as_str().to_string(),
+                    reason_code: r.reason_code.clone(),
+                    message: r.message.clone(),
+                })
+                .collect(),
+            manifest_error: run.manifest_error,
+        })
     })
     .await
     .map_err(IpcError::internal)?
@@ -453,29 +522,99 @@ fn resolve_dir(raw: &str) -> Result<PathBuf, IpcError> {
     Ok(canon)
 }
 
-/// Resolves the webview's bare filenames under `mods_dir`.
+/// `<instance>/mods`, canonical when it exists. Canonical matters because the
+/// scan reports canonical paths; a non-canonical root would make every
+/// `strip_prefix` fall back to a bare filename.
+fn mods_dir_of(root: &Path) -> PathBuf {
+    let raw = root.join("mods");
+    std::fs::canonicalize(&raw).unwrap_or(raw)
+}
+
+/// Turn webview-supplied relative paths into paths inside `mods_dir`.
 ///
-/// The DTO documents these as names inside the folder, and that is the only
+/// The DTO documents these as paths inside the folder, and that is the only
 /// shape that can work: `preview_one` needs a real existing file that
-/// canonicalizes inside `mods_dir`, and it rejected the absolute paths this
-/// helper used to emit just as surely. The name checks stay — a blank name, a
-/// separator, a drive letter or `..` is dropped — and they are on the **raw**
-/// string, because `file_name()` alone would hide `../escape.jar`. Core
-/// re-checks containment afterwards, so this is the first of two gates, not
-/// the only one.
-fn filenames(mods_dir: &Path, raw: &[String]) -> Vec<PathBuf> {
+/// canonicalizes inside `mods_dir`, and it rejects absolute paths. The checks
+/// stay on the **raw** string, because `file_name()` alone would hide
+/// `../escape.jar`. Core re-checks containment afterwards, so this is the
+/// first of two gates, not the only one.
+///
+/// Accepted: one component (`a.jar`), or `disabled_mods/<file>` because that
+/// is the only subfolder the scan returns. Everything else is dropped: `..`,
+/// absolute paths, drive letters, empty components, unknown subfolders.
+/// A dropped path is never re-interpreted against the process cwd.
+fn relative_paths(mods_dir: &Path, raw: &[String]) -> Vec<PathBuf> {
     raw.iter()
         .filter_map(|s| {
             let trimmed = s.trim();
-            if trimmed.is_empty()
-                || trimmed.contains('/')
-                || trimmed.contains('\\')
-                || trimmed == ".."
-                || trimmed.contains(':')
-            {
+            if trimmed.is_empty() || trimmed.contains('\0') || trimmed.contains(':') {
                 return None;
             }
-            Some(mods_dir.join(trimmed))
+            let parts: Vec<&str> = trimmed.split(['/', '\\']).collect();
+            match parts.as_slice() {
+                [name] if sane_component(name) => Some(mods_dir.join(name)),
+                [dir, name]
+                    if dir.eq_ignore_ascii_case("disabled_mods") && sane_component(name) =>
+                {
+                    Some(mods_dir.join(dir).join(name))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn sane_component(part: &str) -> bool {
+    !part.is_empty() && part != "." && part != ".."
+}
+
+/// `/`-separated path relative to `mods`, safe to echo back to the UI.
+fn relative_label(mods_dir: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(mods_dir).unwrap_or(path);
+    relative
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The lock records the installed name before a disable rename, so an exact
+/// match would mark every disabled file as external/unknown and demand the
+/// typed word for content this app installed itself.
+fn lock_matches(locked: &str, disk: &str) -> bool {
+    let wanted = locked.to_lowercase();
+    let actual = disk.to_lowercase();
+    actual == wanted
+        || actual
+            .strip_suffix(".disabled")
+            .is_some_and(|base| base == wanted.as_str())
+}
+
+fn lock_entry_for<'a>(locked: &'a [LockEntryDto], disk: &str) -> Option<&'a LockEntryDto> {
+    locked.iter().find(|l| lock_matches(&l.filename, disk))
+}
+
+/// Candidates for a remove plan: a file with no lock record is external or
+/// unknown, which is the only thing that makes the typed word mandatory.
+/// An unreadable lock is treated as empty — the safe direction.
+fn remove_candidates(root: &Path, mods_dir: &Path, raw: &[String]) -> Vec<RemoveCandidate> {
+    let locked = mm_core::instances::read_lock(&root.join("instance.lock.json"))
+        .map(|l| l.entries)
+        .unwrap_or_default();
+    relative_paths(mods_dir, raw)
+        .into_iter()
+        .map(|path| {
+            let external = {
+                let disk = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                !locked.iter().any(|l| lock_matches(&l.filename, disk))
+            };
+            RemoveCandidate { path, external }
         })
         .collect()
 }
