@@ -1187,18 +1187,16 @@ fn reject_link_ancestors(instance_root: &Path, dest: &Path) -> Result<(), ExecEr
 fn is_link_or_reparse(path: &Path) -> bool {
     match path.symlink_metadata() {
         Ok(meta) => {
-            if meta.file_type().is_symlink() {
-                return true;
-            }
             #[cfg(windows)]
             {
                 use std::os::windows::fs::MetadataExt;
                 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+                meta.file_type().is_symlink()
+                    || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
             }
             #[cfg(not(windows))]
             {
-                false
+                meta.file_type().is_symlink()
             }
         }
         Err(_) => false,

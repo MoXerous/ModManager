@@ -54,6 +54,11 @@ jobs:
       - name: Frontend typecheck and build
         run: pnpm build
 
+      # The traceability matrix is a generated document: if the specs or the
+      # tree change without it being regenerated, the file is a stale claim.
+      - name: Spec traceability matrix is up to date
+        run: pnpm parity:check
+
   # M1's gate (foundations.md §10.2): install a real mod set from the command
   # line, on both systems, with every hash verified. Nothing else here proves
   # that — the rest of the suite runs against wiremock, so the download path,

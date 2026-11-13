@@ -6,6 +6,8 @@
         "dev": "vite",
         "build": "tsc && vite build",
         "preview": "vite preview",
+        "parity": "node scripts/build-parity-matrix.mjs",
+        "parity:check": "node scripts/build-parity-matrix.mjs --check",
         "tauri": "tauri"
     },
     "dependencies": {
