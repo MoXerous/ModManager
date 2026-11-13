@@ -21,7 +21,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      # مُثبَّتٌ على إصدارٍ بعينه: أداةُ CIيجبُ أن تُحاكي الأداةَ التي بُنيت
+      # بها الشريحة، وإلا أخطأ CI في بناءٍ نظيف بسبب lintٍ لم يرَه أحدٌ محليًّا.
+      # يُرفع الإصدارُ صراحةً في طلب مستقلّ، لا تلقائيًّا مع ترقّي `stable`.
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
 
@@ -76,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
 
       - uses: swatinem/rust-cache@v2
 
