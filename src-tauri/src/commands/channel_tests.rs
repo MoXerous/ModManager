@@ -180,7 +180,7 @@ fn phase(e: &Value) -> &str {
 }
 
 #[test]
-fn install_emits_a_well_formed_event_sequence_over_a_real_channel() {
+fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
     tauri::async_runtime::block_on(async {
         let server = MockServer::start().await;
         let jar = jar_bytes();

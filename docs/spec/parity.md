@@ -19,21 +19,21 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 81 | 81 |
+| مُختبَر بمعرّف المواصفة | 88 | 88 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 10 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
-| إشارة في الوثائق فقط | 2 | 3 |
-| بلا أثر | 60 | 64 |
+| إشارة في الوثائق فقط | 1 | 2 |
+| بلا أثر | 54 | 58 |
 
-**81 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **62** بلا أثرٍ قابلٍ للتتبّع.
+**88 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **55** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
-| M1 | 72 | 55 | 3 | 14 |
-| M2 | 38 | 11 | 2 | 25 |
-| M3 | 41 | 14 | 4 | 23 |
+| M1 | 72 | 56 | 3 | 13 |
+| M2 | 38 | 12 | 2 | 24 |
+| M3 | 41 | 19 | 4 | 18 |
 | later | 1 | 1 | 0 | 0 |
 
 ## بنود `Keep` بلا أثر قابلٍ للتتبّع — قائمة hygiene
@@ -51,14 +51,8 @@
 | **F-025** | الاستئناف عبر `Range` | downloads | M1 |
 | **F-029** | التحقق من كل وجهة إعادة توجيه | downloads | M1 |
 | **F-036** | **الإلغاء حالة مستقلة لا نجاح** | downloads | M1 |
-| **F-037** | أطوار معلنة قبل كل عمل | downloads | M1 |
 | **F-038** | حارس سباق الروابط الرمزية | downloads | M1 |
 | **F-040** | صفحة التنزيلات (3 تبويبات) | downloads | M2 |
-| **F-068** | استيراد `.mrpack` | modpacks | M3 |
-| **F-069** | **معاينة غير مُعدِّلة** | modpacks | M3 |
-| **F-070** | تحقق صارم من الفهرس (9 فئات حواجب) | modpacks | M3 |
-| **F-071** | التحقق من هاش الملفات البعيدة | modpacks | M3 |
-| **F-072** | **26 رمز خطأ مسمّى** | modpacks | M3 |
 | **F-075** | **نشر ذرّي بلا استبدال** | modpacks | M3 |
 | **F-077** | التراجع **يرفض بلا إيصال مطابق** | modpacks | M3 |
 | **F-078** | احتياطي روابط التنزيل | modpacks | M3 |
@@ -89,7 +83,6 @@
 | **F-137** | **fail-closed عند القفل** | storage | M1 |
 | **F-138** | **تنقية رسائل الترحيل** | storage | M1 |
 | **F-139** | **فشل قبل بناء النافذة** | storage | M1 |
-| **F-144** | **القفل عبر العمليات** | operations | M2 |
 | **F-145** | مركز العمليات (قراءة فقط) | operations | M2 |
 | **F-150** | **فشل مغلق بلا مخرج خام** | logging | M1 |
 | **F-155** | تصدير بروفايل zip | import/export | M2 |
@@ -151,7 +144,7 @@
 | **F-034** | حذف `.part` عند فشل التحقق | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/safety/atomic.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
 | **F-035** | الإيقاف المؤقت / الاستئناف / الإلغاء | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
 | **F-036** | **الإلغاء حالة مستقلة لا نجاح** | Keep | M1 | بلا أثر | — |
-| **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | بلا أثر | — |
+| **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/channel_tests.rs (+1) |
 | **F-038** | حارس سباق الروابط الرمزية | Keep | M1 | بلا أثر | — |
 | **F-039** | التنزيل بالتوازي | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/downloader/mod.rs (+1) |
 | **F-040** | صفحة التنزيلات (3 تبويبات) | Keep | M2 | بلا أثر | — |
@@ -194,11 +187,11 @@
 
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
-| **F-068** | استيراد `.mrpack` | Keep | M3 | إشارة في الوثائق فقط | وثائق: docs/adr/0005-pack-url-policy.md |
-| **F-069** | **معاينة غير مُعدِّلة** | Keep | M3 | بلا أثر | — |
-| **F-070** | تحقق صارم من الفهرس (9 فئات حواجب) | Keep | M3 | بلا أثر | — |
-| **F-071** | التحقق من هاش الملفات البعيدة | Keep | M3 | بلا أثر | — |
-| **F-072** | **26 رمز خطأ مسمّى** | Keep | M3 | بلا أثر | — |
+| **F-068** | استيراد `.mrpack` | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/pack_tests.rs · وثائق: docs/adr/0005-pack-url-policy.md |
+| **F-069** | **معاينة غير مُعدِّلة** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) |
+| **F-070** | تحقق صارم من الفهرس (9 فئات حواجب) | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/tests.rs |
+| **F-071** | التحقق من هاش الملفات البعيدة | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs |
+| **F-072** | **26 رمز خطأ مسمّى** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) |
 | **F-073** | أولوية `overrides` < `client-overrides` | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs · كود: core/src/modpack/archive.rs، core/src/modpack/mrpack.rs |
 | **F-074** | تخطّي محتوى الخادم | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs · كود: core/src/modpack/archive.rs، core/src/modpack/mrpack.rs (+3) |
 | **F-075** | **نشر ذرّي بلا استبدال** | Keep | M3 | بلا أثر | — |
@@ -295,7 +288,7 @@
 | **F-141** | **سجلّ عمليات ذرّي (JSON)** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/recovery.rs، core/src/journal/store/tests.rs (+2) · كود: core/src/downloader/batch.rs، core/src/downloader/mod.rs (+1) |
 | **F-142** | انتقالات مُقيّدة للعمليات والعناصر | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/journal/tests.rs · كود: core/src/journal/mod.rs |
 | **F-143** | **كشف مجلد عمليات غير منتهية** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/journal/tests.rs · كود: core/src/journal/mod.rs |
-| **F-144** | **القفل عبر العمليات** | Keep | M2 | بلا أثر | — |
+| **F-144** | **القفل عبر العمليات** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: src-tauri/src/commands/pack_tests.rs |
 | **F-145** | مركز العمليات (قراءة فقط) | Keep | M2 | بلا أثر | — |
 | **F-146** | **تقييم الأدلة — أعداد فقط** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/recovery.rs، core/src/modpack/recovery_tests.rs (+1) · كود: core/src/instances/recovery.rs، src-tauri/src/commands/pack.rs (+5) · اختبار (ذكر): src-tauri/src/commands/pack_tests.rs |
 | **F-147** | **تعليق كـ«مُهجر»** | Defer | later | مؤجَّل | — |
