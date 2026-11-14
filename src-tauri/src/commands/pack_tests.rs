@@ -323,7 +323,7 @@ fn interrupted_pack_record(
 }
 
 #[test]
-fn pack_plan_writes_nothing_and_cleans_up_staging() {
+fn spec_f069_pack_plan_writes_nothing_and_cleans_up_staging() {
     tauri::async_runtime::block_on(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("instance");
@@ -413,7 +413,7 @@ fn pack_plan_writes_nothing_and_cleans_up_staging() {
 /// there is `notFound` (the user chose a file), and a folder that canonicalizes
 /// to nothing is the `io` failure `resolve_dir` reports for every command.
 #[test]
-fn pack_plan_refuses_bad_paths_before_reading_anything() {
+fn spec_f069_pack_plan_refuses_bad_paths_before_reading_anything() {
     tauri::async_runtime::block_on(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("instance");
@@ -540,7 +540,7 @@ fn pack_plan_and_apply_refuse_an_unregistered_instance_root() {
 }
 
 #[test]
-fn pack_apply_installs_overrides_and_verified_downloads_over_a_real_channel() {
+fn spec_f068_pack_apply_installs_overrides_and_verified_downloads_over_a_real_channel() {
     tauri::async_runtime::block_on(async {
         let server = MockServer::start().await;
 
@@ -684,7 +684,7 @@ fn pack_apply_installs_overrides_and_verified_downloads_over_a_real_channel() {
 /// so the refusal event is this module's job — and the staging tree it
 /// started must not survive the refusal either.
 #[test]
-fn pack_apply_refuses_a_non_mrpack_file_ends_the_stream_and_cleans_staging() {
+fn spec_f072_pack_apply_refuses_a_non_mrpack_file_ends_the_stream_and_cleans_staging() {
     tauri::async_runtime::block_on(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("instance");
@@ -827,7 +827,7 @@ fn pack_apply_refuses_a_pack_file_that_changed_after_the_plan() {
 /// A request without a digest is malformed, not a changed file: the two
 /// refusals are different states to the user, so they carry different codes.
 #[test]
-fn pack_apply_refuses_a_request_without_a_pack_digest() {
+fn spec_f072_pack_apply_refuses_a_request_without_a_pack_digest() {
     tauri::async_runtime::block_on(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("instance");
@@ -885,7 +885,7 @@ fn pack_apply_refuses_a_request_without_a_pack_digest() {
 /// and the channel never spoke again. The seam passes the failure in, because
 /// no environment can be made to fail `Client::build` on demand.
 #[test]
-fn pack_apply_cleans_staging_and_ends_the_stream_when_it_fails_before_starting() {
+fn spec_f037_pack_apply_cleans_staging_and_ends_the_stream_when_it_fails_before_starting() {
     tauri::async_runtime::block_on(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("instance");
@@ -1231,7 +1231,7 @@ fn spec_f076_apply_clears_the_part_an_interrupted_commit_of_the_same_pack_left()
 /// committed (written 2, skipped 0 instead of written 1, skipped 1), and an
 /// event log in which the two runs alternate.
 #[test]
-fn pack_apply_serializes_two_runs_on_one_instance() {
+fn spec_f144_pack_apply_serializes_two_runs_on_one_instance() {
     tauri::async_runtime::block_on(async {
         let server = MockServer::start().await;
         let jar = jar_bytes();

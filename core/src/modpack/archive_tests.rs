@@ -56,7 +56,7 @@ fn open(bytes: &[u8]) -> (super::mrpack::Pack, Vec<crate::safety::inspect::Membe
 }
 
 #[test]
-fn mrpack_a_well_formed_pack_plans_one_download_per_index_file() {
+fn spec_f069_a_well_formed_pack_plans_one_download_per_index_file() {
     let bytes = zip_of(&[
         ("modrinth.index.json", &default_index()),
         ("overrides/config/x.toml", "a = 1"),
@@ -78,7 +78,7 @@ fn mrpack_a_well_formed_pack_plans_one_download_per_index_file() {
 }
 
 #[test]
-fn mrpack_an_archive_without_an_index_is_refused() {
+fn spec_f070_an_archive_without_an_index_is_refused() {
     let bytes = zip_of(&[("overrides/config/x.toml", "a = 1")]);
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
     assert!(matches!(
@@ -88,7 +88,7 @@ fn mrpack_an_archive_without_an_index_is_refused() {
 }
 
 #[test]
-fn mrpack_an_oversized_index_is_refused_before_it_is_read() {
+fn spec_f070_an_oversized_index_is_refused_before_it_is_read() {
     let bytes = zip_of(&[("modrinth.index.json", &default_index())]);
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
     match read_pack_bounded(&mut z, &ArchiveLimits::default(), 8) {
@@ -105,7 +105,7 @@ fn mrpack_an_oversized_index_is_refused_before_it_is_read() {
 }
 
 #[test]
-fn mrpack_a_traversing_override_member_is_refused_by_the_inspector() {
+fn spec_f072_a_traversing_override_member_is_refused_by_the_inspector() {
     // `inspect_zip` runs first and rejects the name outright, so the reader
     // never reaches the index. Two gates, and the outer one is the older.
     let bytes = zip_of(&[
@@ -211,7 +211,7 @@ fn spec_f074_remote_files_the_client_cannot_use_are_skipped_and_counted() {
 }
 
 #[test]
-fn mrpack_members_outside_a_declared_layer_are_not_installed() {
+fn spec_f069_members_outside_a_declared_layer_are_not_installed() {
     let bytes = zip_of(&[
         ("modrinth.index.json", &default_index()),
         ("random/payload.bin", "junk"),
@@ -222,7 +222,7 @@ fn mrpack_members_outside_a_declared_layer_are_not_installed() {
 }
 
 #[test]
-fn mrpack_an_override_wins_a_destination_the_index_also_names() {
+fn spec_f069_an_override_wins_a_destination_the_index_also_names() {
     let index = index_for("mods/x.jar", "");
     let bytes = zip_of(&[
         ("modrinth.index.json", &index),
@@ -243,7 +243,7 @@ fn mrpack_an_override_wins_a_destination_the_index_also_names() {
 }
 
 #[test]
-fn mrpack_an_index_file_may_not_replace_an_app_managed_file() {
+fn spec_f070_an_index_file_may_not_replace_an_app_managed_file() {
     for name in ["profile.json", "PROFILE.JSON", "instance.lock.json"] {
         let index = index_for(name, "");
         let bytes = zip_of(&[("modrinth.index.json", &index)]);
@@ -261,7 +261,7 @@ fn mrpack_an_index_file_may_not_replace_an_app_managed_file() {
 }
 
 #[test]
-fn mrpack_an_override_may_not_replace_an_app_managed_file() {
+fn spec_f072_an_override_may_not_replace_an_app_managed_file() {
     for member in ["overrides/profile.json", "overrides/instance.lock.json"] {
         let bytes = zip_of(&[("modrinth.index.json", &default_index()), (member, "{}")]);
         let (pack, inventory) = open(&bytes);
@@ -273,7 +273,7 @@ fn mrpack_an_override_may_not_replace_an_app_managed_file() {
 }
 
 #[test]
-fn mrpack_a_pack_may_not_write_into_the_staging_directory() {
+fn spec_f072_a_pack_may_not_write_into_the_staging_directory() {
     let index = index_for(".mm-staging/evil.jar", "");
     let bytes = zip_of(&[("modrinth.index.json", &index)]);
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
@@ -294,7 +294,7 @@ fn mrpack_a_pack_may_not_write_into_the_staging_directory() {
 }
 
 #[test]
-fn mrpack_a_file_entry_ending_in_a_slash_is_refused() {
+fn spec_f070_a_file_entry_ending_in_a_slash_is_refused() {
     let index = index_for("mods/", "");
     let bytes = zip_of(&[("modrinth.index.json", &index)]);
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
@@ -305,7 +305,7 @@ fn mrpack_a_file_entry_ending_in_a_slash_is_refused() {
 }
 
 #[test]
-fn mrpack_a_custom_layer_name_in_the_index_does_not_create_a_layer() {
+fn spec_f069_a_custom_layer_name_in_the_index_does_not_create_a_layer() {
     // Layer folders are the format's, not the index's: a `clientOverrides`
     // field pointing at `cli/` must not make `cli/` an override layer.
     let index = index_for("mods/sodium.jar", r#","clientOverrides":"cli""#);

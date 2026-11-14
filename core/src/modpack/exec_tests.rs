@@ -201,7 +201,7 @@ fn version_map(base: &str, sha512: &str, size: usize) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn mrpack_override_is_copied_with_its_bytes() {
+async fn spec_f068_override_is_copied_with_its_bytes() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -250,7 +250,7 @@ async fn mrpack_override_is_copied_with_its_bytes() {
 }
 
 #[tokio::test]
-async fn mrpack_override_is_copied_from_the_layer_the_plan_names() {
+async fn spec_f068_override_is_copied_from_the_layer_the_plan_names() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -296,7 +296,7 @@ async fn mrpack_override_is_copied_from_the_layer_the_plan_names() {
 }
 
 #[tokio::test]
-async fn mrpack_missing_override_is_refused() {
+async fn spec_f072_missing_override_is_refused() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -330,7 +330,7 @@ async fn mrpack_missing_override_is_refused() {
 }
 
 #[tokio::test]
-async fn mrpack_download_lands_hash_verified_from_the_provider() {
+async fn spec_f071_download_lands_hash_verified_from_the_provider() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     std::fs::create_dir_all(&staging).expect("staging");
@@ -408,7 +408,7 @@ async fn mrpack_download_lands_hash_verified_from_the_provider() {
 }
 
 #[tokio::test]
-async fn mrpack_wrong_hash_is_refused_and_leaves_no_file() {
+async fn spec_f071_wrong_hash_is_refused_and_leaves_no_file() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     std::fs::create_dir_all(&staging).expect("staging");
@@ -486,7 +486,7 @@ async fn mrpack_wrong_hash_is_refused_and_leaves_no_file() {
 }
 
 #[tokio::test]
-async fn mrpack_path_escaping_the_instance_is_refused() {
+async fn spec_f072_path_escaping_the_instance_is_refused() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -530,7 +530,7 @@ async fn mrpack_path_escaping_the_instance_is_refused() {
 }
 
 #[test]
-fn mrpack_dry_run_writes_nothing() {
+fn spec_f069_dry_run_writes_nothing() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -585,7 +585,7 @@ fn mrpack_dry_run_writes_nothing() {
 }
 
 #[test]
-fn mrpack_dry_run_refuses_an_escaping_path() {
+fn spec_f069_dry_run_refuses_an_escaping_path() {
     let plan = InstallPlan::new(vec![InstallOp::CopyOverride {
         safe_path: "mods/../../evil.txt".to_string(),
         source_layer: "overrides".to_string(),
@@ -597,7 +597,7 @@ fn mrpack_dry_run_refuses_an_escaping_path() {
 }
 
 #[tokio::test]
-async fn mrpack_callback_receives_the_terminal_event_last() {
+async fn spec_f037_callback_receives_the_terminal_event_last() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     let instance = dir.path().join("instance");
@@ -655,7 +655,7 @@ async fn mrpack_callback_receives_the_terminal_event_last() {
 }
 
 #[test]
-fn mrpack_dry_run_marks_destinations_that_will_be_overwritten() {
+fn spec_f069_dry_run_marks_destinations_that_will_be_overwritten() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     std::fs::create_dir_all(&staging).expect("staging");
@@ -698,7 +698,7 @@ fn mrpack_dry_run_marks_destinations_that_will_be_overwritten() {
 }
 
 #[tokio::test]
-async fn mrpack_a_stale_staging_directory_is_removed_before_apply() {
+async fn spec_f068_a_stale_staging_directory_is_removed_before_apply() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     write_fixture(&staging, "overrides/a.txt", b"a");
@@ -738,7 +738,7 @@ async fn mrpack_a_stale_staging_directory_is_removed_before_apply() {
 }
 
 #[tokio::test]
-async fn mrpack_overrides_extracted_into_the_staging_tree_survive_until_they_are_copied() {
+async fn spec_f068_overrides_extracted_into_the_staging_tree_survive_until_they_are_copied() {
     let dir = crate::test_tempdir();
     let instance = dir.path().join("instance");
     // The caller is allowed to extract the pack into the same scratch tree the
@@ -778,7 +778,7 @@ async fn mrpack_overrides_extracted_into_the_staging_tree_survive_until_they_are
 }
 
 #[tokio::test]
-async fn mrpack_a_plan_writing_an_app_managed_file_is_refused() {
+async fn spec_f072_a_plan_writing_an_app_managed_file_is_refused() {
     let dir = crate::test_tempdir();
     let staging = dir.path().join("staging");
     write_fixture(&staging, "overrides/profile.json", b"{}");

@@ -26,7 +26,7 @@ fn one_file() -> String {
 }
 
 #[test]
-fn mrpack_index_reads_the_documented_shape() {
+fn spec_f070_index_reads_the_documented_shape() {
     let raw = index_with(&one_file(), "");
     let pack = parse_index(raw.as_bytes()).expect("a well formed index");
 
@@ -43,7 +43,7 @@ fn mrpack_index_reads_the_documented_shape() {
 }
 
 #[test]
-fn mrpack_a_file_without_env_is_required_on_both_sides() {
+fn spec_f070_a_file_without_env_is_required_on_both_sides() {
     // Guessing "optional" here would let an install skip a dependency and
     // report success.
     let pack = parse_index(index_with(&one_file(), "").as_bytes()).expect("parse");
@@ -52,7 +52,7 @@ fn mrpack_a_file_without_env_is_required_on_both_sides() {
 }
 
 #[test]
-fn mrpack_env_is_carried_through_unchanged() {
+fn spec_f070_env_is_carried_through_unchanged() {
     let f = format!(
         r#"{{"path":"mods/x.jar","hashes":{{"sha1":"a","sha512":"{}"}},
                  "downloads":["https://cdn.modrinth.com/x.jar"],
@@ -65,7 +65,7 @@ fn mrpack_env_is_carried_through_unchanged() {
 }
 
 #[test]
-fn mrpack_a_traversing_path_is_refused() {
+fn spec_f070_a_traversing_path_is_refused() {
     // `path` is resolved against the instance directory. It is exactly as
     // untrusted as a ZIP member name, and goes through the same gate.
     for path in [
@@ -91,7 +91,7 @@ fn mrpack_a_traversing_path_is_refused() {
 }
 
 #[test]
-fn mrpack_a_file_with_no_download_is_refused() {
+fn spec_f070_a_file_with_no_download_is_refused() {
     let f = r#"{"path":"mods/x.jar","hashes":{"sha1":"a","sha512":"b"},"downloads":[]}"#;
     let raw = index_with(f, "");
     assert!(matches!(
@@ -101,7 +101,7 @@ fn mrpack_a_file_with_no_download_is_refused() {
 }
 
 #[test]
-fn mrpack_an_empty_sha512_is_refused() {
+fn spec_f070_an_empty_sha512_is_refused() {
     let f = r#"{"path":"mods/x.jar","hashes":{"sha1":"a","sha512":"  "},
                 "downloads":["https://x/y.jar"]}"#;
     let raw = index_with(f, "");
@@ -112,7 +112,7 @@ fn mrpack_an_empty_sha512_is_refused() {
 }
 
 #[test]
-fn mrpack_a_sha512_that_is_not_128_hex_characters_is_refused() {
+fn spec_f070_a_sha512_that_is_not_128_hex_characters_is_refused() {
     // The staging file name is derived from this hash before any hash gate
     // can run, so a value that is not a digest has no business reaching the
     // executor: `../`, a stray `/`, or just a wrong length must all go out
@@ -138,7 +138,7 @@ fn mrpack_a_sha512_that_is_not_128_hex_characters_is_refused() {
 }
 
 #[test]
-fn mrpack_a_128_hex_sha512_is_accepted_verbatim() {
+fn spec_f070_a_128_hex_sha512_is_accepted_verbatim() {
     let good = sha128('b');
     // Single braces: this is a plain string, not a format template. The
     // braces only had to be doubled where a `format!` was doing the
@@ -162,7 +162,7 @@ fn mrpack_a_128_hex_sha512_is_accepted_verbatim() {
 }
 
 #[test]
-fn mrpack_an_unknown_format_version_is_refused() {
+fn spec_f070_an_unknown_format_version_is_refused() {
     let raw = r#"{"formatVersion":99,"game":"minecraft","versionId":"v","name":"n","files":[]}"#;
     assert!(matches!(
         parse_index(raw.as_bytes()),
@@ -174,7 +174,7 @@ fn mrpack_an_unknown_format_version_is_refused() {
 }
 
 #[test]
-fn mrpack_a_non_minecraft_game_is_refused() {
+fn spec_f070_a_non_minecraft_game_is_refused() {
     let raw = r#"{"formatVersion":1,"game":"terraria","versionId":"v","name":"n","files":[]}"#;
     assert!(matches!(
         parse_index(raw.as_bytes()),
@@ -183,7 +183,7 @@ fn mrpack_a_non_minecraft_game_is_refused() {
 }
 
 #[test]
-fn mrpack_layer_names_come_from_the_format_not_the_index() {
+fn spec_f070_layer_names_come_from_the_format_not_the_index() {
     // The format fixes the folder names (`overrides`, `client-overrides`,
     // `server-overrides`). Some indexes also spell them out; those fields are
     // not part of the reader's contract, so a pack cannot point the planner at
@@ -197,14 +197,14 @@ fn mrpack_layer_names_come_from_the_format_not_the_index() {
 }
 
 #[test]
-fn mrpack_an_empty_pack_is_valid() {
+fn spec_f070_an_empty_pack_is_valid() {
     let raw = r#"{"formatVersion":1,"game":"minecraft","versionId":"v","name":"Empty","files":[]}"#;
     let pack = parse_index(raw.as_bytes()).expect("an empty pack is not an error");
     assert!(pack.files.is_empty());
 }
 
 #[test]
-fn mrpack_a_file_path_ending_in_a_slash_is_refused() {
+fn spec_f070_a_file_path_ending_in_a_slash_is_refused() {
     let path = one_file().replace("mods/sodium.jar", "mods/");
     let raw = index_with(&path, "");
     assert!(matches!(
@@ -214,7 +214,7 @@ fn mrpack_a_file_path_ending_in_a_slash_is_refused() {
 }
 
 #[test]
-fn mrpack_a_file_path_that_is_app_managed_is_refused() {
+fn spec_f070_a_file_path_that_is_app_managed_is_refused() {
     for name in ["profile.json", "PROFILE.JSON", "instance.lock.json"] {
         let path = one_file().replace("mods/sodium.jar", name);
         let raw = index_with(&path, "");
@@ -231,7 +231,7 @@ fn mrpack_a_file_path_that_is_app_managed_is_refused() {
 }
 
 #[test]
-fn mrpack_a_managed_file_name_with_a_part_suffix_is_refused() {
+fn spec_f070_a_managed_file_name_with_a_part_suffix_is_refused() {
     // `<name>.part` is reserved by the downloader's own protocol
     // (`safety::atomic`): a pack that plants `profile.json.part` makes the
     // application's next atomic write of `profile.json` fail forever with
@@ -256,7 +256,7 @@ fn mrpack_a_managed_file_name_with_a_part_suffix_is_refused() {
 }
 
 #[test]
-fn mrpack_a_file_path_inside_the_staging_directory_is_refused() {
+fn spec_f070_a_file_path_inside_the_staging_directory_is_refused() {
     let path = one_file().replace("mods/sodium.jar", ".mm-staging/sodium.jar");
     let raw = index_with(&path, "");
     assert!(matches!(
