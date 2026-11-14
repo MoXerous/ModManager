@@ -68,6 +68,12 @@ jobs:
       - name: Locale files are in sync
         run: pnpm i18n:check
 
+      # The feature-parity matrix is a reviewed claim about the old app's
+      # behaviour against the Rust implementation. A stale or unreviewed claim
+      # must fail the build, not ship.
+      - name: Feature parity matrix is up to date and fully reviewed
+        run: pnpm feature-parity:check
+
   # M1's gate (foundations.md §10.2): install a real mod set from the command
   # line, on both systems, with every hash verified. Nothing else here proves
   # that — the rest of the suite runs against wiremock, so the download path,

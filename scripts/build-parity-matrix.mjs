@@ -66,8 +66,9 @@ function parseFeatures(md) {
     rows.push({
       id,
       name: cells[1] || "",
-      domain: cells[3] || "",
-      decision: (cells[5] || "").replace(/\*/g, "").trim(),
+      // القرارُ بالنمط: للجدولين بنسختين، وعمودُ القرارِ ليس العمود نفسه فيهما.
+      domain: /[`/\\]/.test(cells[3] || "") ? "-" : cells[3] || "",
+      decision: (line.match(/\*\*(Keep|Defer|Drop)\*\*/) || [, ""])[1],
       phase: cells[6] || "",
     });
   }
