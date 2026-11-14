@@ -30,7 +30,8 @@ If sources conflict or something is missing: ask. Do not guess.
 
 - Shell: **Tauri 2**. Core: **Rust**. Frontend: **React + TypeScript (strict) + Vite**.
 - Styling: **Tailwind CSS 4** (CSS-first config, `@tailwindcss/vite`) + **shadcn/ui**.
-- Frontend libs: TanStack Query, TanStack Virtual, Zustand (local UI state only), Wouter, React Hook Form + Zod, i18next (Arabic/RTL + English), Motion, Lucide, cmdk, Biome.
+- Frontend libs: **radix-ui** (primitives), **cmdk** (command palette), **lucide-react** (icons), **class-variance-authority** + **`cn`** (Tailwind class merging), **tw-animate-css**, **i18next** + react-i18next (Arabic/RTL + English), **@fontsource/ibm-plex-*** (fonts).
+  - The stack decided at the start (TanStack Query/Virtual, Zustand, Wouter, React Hook Form + Zod, Motion, Biome) was **not** adopted: the app has no server-state layer to cache (the Rust core owns all I/O), no long virtualized list, and its routing/state needs are small enough for React state. **Do not add them back without an ADR.** The formatter/linter gate is `pnpm build` (tsc + vite); Biome is not installed.
 - Core crates: tokio, reqwest (rustls), serde, serde_json, toml, thiserror, tracing + tracing-appender, zip (inside `spawn_blocking`), sha1/sha2, rusqlite + rusqlite_migration, directories, clap, wiremock (tests).
 - Types across IPC: **ts-rs** (see ADR 0002). Progress streaming: **Tauri Channels**.
 - Tooling: Cargo workspace, pnpm, rustfmt, clippy, GitHub Actions.
@@ -56,6 +57,7 @@ If sources conflict or something is missing: ask. Do not guess.
 - **Tests first** for core logic. Test names carry the spec ID, e.g. `spec_f012_rejects_path_traversal`.
 - Do not add a dependency before checking its registry page (latest release date, downloads, license, maintenance). If you have no network access, say so and ask. Prefer std or ~100 lines of own code over a tiny unknown crate.
 - Do not invent API shapes. Check the official Modrinth / CurseForge docs. If you cannot, ask.
+- **Check the component registry before touching dependencies**: use `context7` (or the registry page) to confirm the latest release *and* the correct usage for the version in use — a version bump can change both. Record what you verified.
 - Never modify the old project, never run destructive commands, never commit secrets.
 - Filesystem-touching code and tests run first on temporary directories, never on real mod folders.
 - Use a filesystem that supports hard links (NTFS) when running filesystem tests on Windows.

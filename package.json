@@ -8,6 +8,7 @@
         "preview": "vite preview",
         "parity": "node scripts/build-parity-matrix.mjs",
         "parity:check": "node scripts/build-parity-matrix.mjs --check",
+        "i18n:check": "node scripts/check-i18n.mjs",
         "tauri": "tauri"
     },
     "dependencies": {
