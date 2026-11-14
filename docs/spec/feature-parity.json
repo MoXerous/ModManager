@@ -1,0 +1,722 @@
+{
+  "version": 1,
+  "source": "understand-skill feature-parity review (deepseek) + independent verification (glm)",
+  "specs": [
+    {
+      "id": "F-003",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\resolver\\graph\\mod.rs::select_best_version (lines 159-171: find() first compatible, alpha skip only)",
+        "D:\\latest_project\\app\\api\\modrinth_client.py::get_best_version (lines 422-446: allowed_types ladder + sorted(date_published))"
+      ],
+      "test": "spec_f050_select_best_skips_alpha_unless_allowed (core/src/resolver/graph/tests.rs)",
+      "note": "Old code verified at D:\\latest_project\\app\\api\\modrinth_client.py:435-446; the channel-ladder gap is real.",
+      "gap": "No release-channel ladder: the new select_best_version takes the first compatible version in provider order and only skips alpha unless allow_alpha; the old get_best_version iterated release > beta (allow_beta default true) > alpha and picked the newest of that channel by date_published, with a newest-of-all fallback. So a newer beta now beats an older stable, there is no allow_beta switch, and no sort by date_published.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-006",
+      "status": "present",
+      "evidence": [
+        "core/src/providers/mod.rs::Provider::get_versions_by_hashes",
+        "core/src/providers/modrinth.rs::get_versions_by_hashes",
+        "core/src/resolver/resolve/mod.rs::hash_lookup",
+        "core/src/modpack/exec.rs::PlanExecutor::resolved_urls"
+      ],
+      "test": "spec_f071_download_lands_hash_verified_from_the_provider (core/src/modpack/exec_tests.rs) · spec_f056_sha1_fallback_uses_hash_lookup (core/src/resolver/resolve/tests.rs)",
+      "note": "POST /version_files (and /version_files/update when a LatestFilter is given) returns whole Version values keyed by lowercased hash, so (project_id, version_id) survives; the resolver uses it for the SHA-1 pin (rejecting a version whose project_id differs) and the pack executor turns each pack file's SHA-512 into the provider's URL, degrading to the pack's own hash-gated URLs when the provider fails instead of blocking.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-009",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\providers\\modrinth.rs::server_delay_secs (line 210: httpdate::parse_http_date, duration_since unwrap_or(0.0))",
+        "D:\\latest_project\\app\\api\\modrinth_client.py::_server_retry_delay (lines 68-78: rolling 50-year window on '-' dates)",
+        "C:\\Users\\LOQ\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\httpdate-1.0.3\\src\\lib.rs (lines 50-52: 'Two digit years are mapped to dates between 1970 and 2069')"
+      ],
+      "test": null,
+      "note": "Verified the crate source itself: fixed 1970-2069 pivot, no rolling window, so the documented old edge case is not reproduced.",
+      "gap": "The rotating +/-50-year rule for RFC-850 dates is not implemented: httpdate 1.0.3 maps two-digit years into a fixed 1970-2069 window (crate docs line 51-52, date.rs), so 'Fri, 11-Sep-76' parses as 1976 (past => 0 s wait) where the old code's rolling window computes 2076 (future => the >10s fail-fast rule fires). Header order and strict numeric parsing match the old code; no test anywhere feeds an HTTP-date Retry-After.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-015",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\providers\\curseforge\\mod.rs::map_file",
+        "E:\\ModManager\\src-tauri\\src\\commands.rs::open_app_folder (line 192: opener().open_path)",
+        "E:\\ModManager\\src-tauri\\src\\commands.rs::open_instance_folder (line 827: opener().open_path)"
+      ],
+      "test": "spec_f014_null_download_url_is_empty_but_stays_listed (core/src/providers/curseforge/mod.rs)",
+      "note": "Workspace-wide grep for curseforge.com/open_url found only the API base constant; no page-URL builder or http(s) opener exists.",
+      "gap": "The data level is handled (null downloadUrl maps to \"\", files stay listed, plan entry blocked with the exact reason), but the spec's visible behaviour — opening the file's page in the browser — has no counterpart: nothing builds a CurseForge file/project page URL, and the only opener usages (commands.rs::open_app_folder, commands.rs::open_instance_folder) call opener().open_path on local folders, never a web URL.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-020",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\downloader\\batch.rs::execute_batch (lines 162-171: per-item emit, Started carries that file's done/total)",
+        "E:\\ModManager\\src-tauri\\src\\progress.rs::to_dto (per-item DTO only)",
+        "E:\\ModManager\\src\\app\\pages\\DownloadsPage.tsx (one card per item)"
+      ],
+      "test": "spec_f063_batch_lands_files_and_completes_the_journal_operation (core/src/downloader/batch_tests.rs)",
+      "note": "The Started{done,total} fields initially looked batch-level but are the individual file's byte progress, so the claim stands.",
+      "gap": "No aggregated batch progress: ItemProgress::Started{done,total} is per-file byte progress (p.done/p.total from DownloadProgress), every event is keyed by item_id, and grep for total_bytes/overall/aggregate/sum across core, src-tauri and src finds no batch-level downloaded/total or active/task counts. The old worker emitted one overall bar for the whole batch.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-022",
+      "status": "present",
+      "evidence": [
+        "core/src/downloader/client.rs::Downloader::verify_streamed",
+        "core/src/downloader/client.rs::Downloader::verify_and_commit",
+        "core/src/downloader/client.rs::hash_file",
+        "core/src/downloader/client.rs::check_file",
+        "core/src/downloader/client.rs::remove_part_quiet"
+      ],
+      "test": "spec_f034_hash_mismatch_deletes_part (core/src/downloader/client.rs)",
+      "note": "Both SHA-1 and SHA-512 are computed in a single streaming pass (sha1::Sha1 + sha2::Sha512 updated per chunk; the old app hashed the file twice) and compared case-insensitively; a mismatch deletes the .part and returns the typed DownloadError::HashMismatch, never the file.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-025",
+      "status": "present",
+      "evidence": [
+        "core/src/downloader/client.rs::Downloader::try_once",
+        "core/src/safety/atomic.rs::part_path",
+        "core/src/downloader/client.rs::Downloader::verify_and_commit"
+      ],
+      "test": "spec_f026_resume_appends_on_206 (core/src/downloader/client.rs)",
+      "note": "Resume state is the .part length sent as Range: bytes=N-, 206 appends, and a 200 (server ignoring Range) deletes the .part and starts over, with an extra 416 restart that the old app did not have; a .part already equal to expected_size skips the network entirely and goes straight to verifying.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-029",
+      "status": "present",
+      "evidence": [
+        "core/src/downloader/client.rs::Downloader::try_once (manual redirect loop, validate_url before every hop)",
+        "core/src/downloader/client.rs::validate_url",
+        "core/src/downloader/client.rs::Downloader::with_policy (redirect Policy::none)"
+      ],
+      "test": null,
+      "note": "reqwest auto-follow is disabled outright and every hop is joined, then validated with the same https/host/credential rules before the next request is sent, so an https->http downgrade cannot even be requested (stronger than the old manual loop, whose response.url check was advisory); the initial-URL rule is tested by spec_f031_rejects_non_https, but no test drives a redirect to a non-https target.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-036",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\dto.rs::ErrorCode (lines 56-87: no Cancelled variant)",
+        "E:\\ModManager\\src-tauri\\src\\commands.rs::execute_install_with (line 976: AtomicBool::new(false) never shared; line 1054: IpcError::io(e.to_string()))",
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no cancel command)"
+      ],
+      "test": "spec_f063_cancelling_before_the_first_byte_is_terminal_and_cancelled (core/src/downloader/batch_tests.rs)",
+      "note": "Verified end-to-end: the UI literally cannot trigger or distinguish a cancellation today.",
+      "gap": "Cancelled is a terminal state inside core (journal states, ItemProgress::Cancelled, history row 'cancelled'), but L-3's IpcError rule is absent: ErrorCode has no cancelled variant, execute_install_with maps every BatchError (including Cancelled) to IpcError::io, and the cancel AtomicBool is created at line 976 and never flipped — no IPC cancel command exists anywhere in src-tauri or src/lib/ipc.ts.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-038",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\downloader\\client.rs::open_part_guarded (lines 784-807: check then open, no recheck after open)",
+        "D:\\latest_project\\app\\services\\download_manager.py (lines 98-104: guard before open AND after open before write)"
+      ],
+      "test": null,
+      "note": "Old code verified: the second path_guard inside the open('a+b') context is the property the new code does not reproduce.",
+      "gap": "No post-open re-validation: the old download loop called path_guard(part_path) again after the handle was opened and before any write (download_manager.py:102-104), closing the check/open window; open_part_guarded checks symlink_metadata and then opens (with truncate on a fresh start) immediately after, so a link swapped in during that window is followed. The pre-open removal in try_once and the pre-rename recheck in commit_part do not cover the open-to-write window. No test asserts the race guard.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-040",
+      "status": "present",
+      "evidence": [
+        "src/app/pages/DownloadsPage.tsx (TABS = live | completed | history, role=tablist)",
+        "src/App.tsx (downloads route)",
+        "src/app/Shell.tsx::PAGE_IDS",
+        "src-tauri/src/commands.rs::list_download_history / clear_download_history",
+        "core/src/db/download_history.rs"
+      ],
+      "test": null,
+      "note": "Three tabs exactly as the reference page (in-progress rows come from the install Channel, completed/history read the download_history table with a debounced search and a two-step clear), and the live tab deliberately holds no state Rust does not also have — the journal is the truth after a restart.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-087",
+      "status": "present",
+      "evidence": [
+        "core/src/jar_reader/mod.rs::parse_quilt",
+        "core/src/jar_reader/mod.rs::quilt_minecraft_versions",
+        "core/src/jar_reader/mod.rs::read_local_mod_metadata",
+        "core/src/jar_reader/loader.rs::FIRST_WINS"
+      ],
+      "test": "spec_f085_reads_quilt_list_depends (core/src/jar_reader/tests.rs) · spec_f085_reads_quilt_map_depends",
+      "note": "quilt.mod.json is read from quilt_loader (id, version, metadata.name/description) with depends accepted as either a list of {id, versions|version} or a map keyed by 'minecraft', through the same 1 MiB capped, utf-8-sig text reader and the same strict first-wins table (fabric, quilt, neoforge, forge) as the old reader; typed serde structs replace the dict walking, and the module still carries no provider linkage (F-091).",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-150",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\logging\\sanitize.rs::sanitize (returns String, no Result)",
+        "E:\\ModManager\\core\\src\\logging\\mod.rs::init (raw rolling log only)",
+        "workspace grep for 'sanitize\\(' — only the definition and re-export"
+      ],
+      "test": null,
+      "note": "F-148's sanitizer is present and tested, but the F-150 behaviour is about a report flow that does not exist yet.",
+      "gap": "No report-writing path exists: sanitize/sanitize_with are called from nowhere outside their own module (workspace grep), sanitize returns String and is infallible by construction, and logging::init only writes the raw activity log. The old contract (a sanitizer failure aborts the report and never writes a raw one) has neither a code path nor a test — the fail-closed property cannot be exercised at all.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-121",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (lines 39-45: single read_lock; lines 111-186: confirm then swap, no re-verify)",
+        "E:\\ModManager\\src-tauri\\src\\commands.rs::check_instance_updates (read-only F-120 only)",
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no update-install command)"
+      ],
+      "test": "spec_f081_write_export_refuses_a_lock_that_moved_after_the_preview",
+      "note": "Verified the CLI swap path directly; the deferral is recorded in docs/todo.md lines 19/147/186 but features.md is authoritative.",
+      "gap": "The stale-plan gate exists only in the flows that exist: pack apply re-hashes the archive (PackChanged) and export compares expectedLockSha512 (InstanceChanged), both with tests. The CLI update is the only update-install path and it reads the lock once, prints rows, confirms and swaps without re-reading the lock, the instance target or the folder — no ticket, no context comparison. The GUI has no update-install command at all (only checkInstanceUpdates). docs/todo.md records F-121..F-124 as deliberately deferred to a later milestone, but features.md keeps them, so they stay gaps.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-122",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\cli\\src\\commands\\mod.rs::confirm_forced (line 174)",
+        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (line 111)"
+      ],
+      "test": null,
+      "note": "Workspace grep for the contract items found nothing in core, CLI, bridge or UI.",
+      "gap": "The five-item safety contract copy (timestamped backup, no permanent delete, unknown files untouched, changed-since-preview update skipped, never overwrite an unlinked existing file) is absent everywhere; the only confirmation is confirm_forced's count-only prompt 'Apply N change(s)? [y/N]'.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-123",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (lines 138-147: unconditional rename to backup)",
+        "E:\\ModManager\\core\\src\\instances (no profile backup module)"
+      ],
+      "test": null,
+      "note": "The per-file rename is not the old ask-first flow; no BackupChoice enum anywhere.",
+      "gap": "No Yes/No/Cancel backup decision exists; cli update.rs unconditionally renames each replaced old jar into the shared backup dir before placing the new one, with no prompt and no whole-profile backup path the Yes branch could call.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-124",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (lines 113-158: direct-to-mods download and swap)"
+      ],
+      "test": null,
+      "note": "Verified the download destination is the live mods folder.",
+      "gap": "No download-only mode: cli update.rs downloads straight into mods/ (line 122 targets mods.join(filename); the .part gives per-file atomicity but at the live destination) and there is no separate staging folder, no 'touch nothing installed' guarantee, and no journaled update operation to recover the swap.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-125",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\updates\\mod.rs::check_updates (module header: 'Installing a newer version is a separate flow ... deliberately not part of this module')",
+        "E:\\ModManager\\src-tauri\\src\\commands.rs::check_instance_updates"
+      ],
+      "test": null,
+      "note": "The updates module is the closest code and it explicitly excludes installation.",
+      "gap": "No target-version planner: core/src/updates/mod.rs implements only the read-only F-120 preview at the instance's current game version/loader; there is no per-mod current->target table, no game_version/loader write-back, and grep for target_version/planner across core, CLI and bridge finds only the modpack planner comments.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-126",
+      "status": "missing",
+      "evidence": [
+        "workspace grep for 'target_version|common_target|suggest' — only export/instance settings fields"
+      ],
+      "test": null,
+      "note": "Nothing to soften: the whole command and result contract is absent.",
+      "gap": "No common-target suggestion: no intersection of game_versions across projects, no loader-verified best-upgrade candidate, no sticky pinned targets; grep for suggest/common_target/target_version returns nothing relevant in core, CLI or src.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-127",
+      "status": "missing",
+      "evidence": [
+        "workspace grep for 'cleanup' — only pack staging and db cache cleanups"
+      ],
+      "test": null,
+      "note": "The cleanup-after-target-install behaviour and its 'unknown local files kept' report have no counterpart.",
+      "gap": "No target cleanup step exists, so nothing keeps and reports unknown local files during one; the nearest preserved-unknown behaviours are the removal flow's typed REMOVE gate and the pack apply's own-destinations-only rule.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-130",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\instances\\registry.rs (line 151: 'reconcile' only in a comment)",
+        "E:\\ModManager\\core\\src\\instances\\remove\\mod.rs::execute_remove (the only lock-entry dropper)"
+      ],
+      "test": null,
+      "note": "Confirmed the data-loss-risk feature with its mandatory dry-run does not exist.",
+      "gap": "No metadata-only prune/reconcile: lock entries are dropped only by explicit remove; scan_instance returns facts plus lock entries without reconciling them; grep for prune/reconcile in core finds one unrelated comment. No plan, no mandatory dry-run, no typed report.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-131",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\instances\\mod.rs::LocalContentFact",
+        "E:\\ModManager\\core\\src\\instances\\lock.rs::read_lock",
+        "E:\\ModManager\\src-tauri\\src\\dto.rs::LocalFactDto (project_id: Option<String>)"
+      ],
+      "test": null,
+      "note": "Guard is architectural only, exactly as reviewed; no f131 test found.",
+      "gap": "The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-132",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\resolver\\batch.rs::check (lines 37-52: RunCache::new(true) passed to resolve_dependency for the batch plan)",
+        "E:\\ModManager\\core\\src\\resolver\\cache.rs::RunCache (12-field ResolveKey + HashKey, enabled bypass)",
+        "E:\\ModManager\\core\\src\\resolver\\resolve\\tests.rs::spec_f058_cache_reuses_duplicate_resolve"
+      ],
+      "test": "spec_f058_cache_reuses_duplicate_resolve",
+      "note": "The reviewed note 'it serves the resolver, not a target planner' understates it: the batch install planner uses the same cache; the real gap is F-125's planner absence.",
+      "gap": "The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour.",
+      "review": "verified:overstated"
+    },
+    {
+      "id": "F-145",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\commands.rs::list_pending_creates",
+        "E:\\ModManager\\src-tauri\\src\\commands\\pack.rs::pending_pack_recoveries",
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no list-all-operations command)"
+      ],
+      "test": null,
+      "note": "Verified no command exposes unfinished DownloadBatch records; state.rs's DownloadBatch reference is test code.",
+      "gap": "No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-162",
+      "status": "present",
+      "evidence": [
+        "src/app/Shell.tsx::Shell (PAGE_IDS = instances|browse|modpack|downloads|settings, NAV)",
+        "src/App.tsx::App (page switch through document.startViewTransition)",
+        "src/app/pages/PlaceholderPage.tsx::PlaceholderPage",
+        "src/app/CommandPalette.tsx::CommandPalette",
+        "src/i18n/en.json::nav.instances|nav.browse|nav.modpack|nav.downloads|nav.settings"
+      ],
+      "test": null,
+      "note": "Five stacked destinations live in one React shell: a 56px icon rail that expands to 208px (persisted in preferences) plus a `1fr` content column, and `App` swaps the page inside a named view-transition region so the change cross-fades instead of remounting both trees; the old QStackedWidget became component state rather than Wouter routes, so browser back/forward and deep links do not exist (that was the dropped F-167), and the rail is RTL-aware via `border-e`/`ps-`/`ms-` plus mirrored PanelLeft/PanelRight glyphs.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-164",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src\\app\\pages\\BrowsePage.tsx::BrowsePage",
+        "E:\\ModManager\\src\\lib\\ipc.ts::searchProjects (the only browse call besides key status)"
+      ],
+      "test": null,
+      "note": "Grep for Inspector/ShowVersions/versions in src found nothing on the browse side.",
+      "gap": "No inspector: BrowsePage has search + facets + install plan dialog only; no project-details pane, no versions list or 'Show versions' action, no Selected/Favorites tabs, no context menu; clicking a card goes straight to the plan dialog.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-165",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\dto.rs::ProjectDto (lines 231-243: 9 fields)",
+        "E:\\ModManager\\src\\app\\pages\\BrowsePage.tsx::Card grid",
+        "grep 'Virtualizer|useVirtualizer|virtual' in src → no matches"
+      ],
+      "test": null,
+      "note": "Confirmed the DTO cannot rebuild the old columns without extension.",
+      "gap": "No 13-column table: results are a responsive card grid from the 9-field ProjectDto (id, slug, title, description, author, projectType, downloads, iconUrl, providerId); no column sorting, no per-row select/favourite checkboxes, no virtualiser (grep for Virtualizer/useVirtualizer in src returns nothing), and the wire DTO lacks followers, categories, published date, environment and resolved version.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-166",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src\\app\\pages\\BrowsePage.tsx::loadMore (line 235)",
+        "grep 'loadMore|IntersectionObserver|scroll|setTimeout|debounce' in BrowsePage.tsx → 4 hits, none a timer or observer"
+      ],
+      "test": null,
+      "note": "Offset paging with dedupe is careful, but the scroll-driven trigger and timer are absent.",
+      "gap": "Paging is click-driven only: explicit Load more button (BrowsePage.tsx:400), no IntersectionObserver/scroll listener, no 120ms debounce/coalescing timer (grep for setTimeout/debounce in the page finds none), no TanStack Query cache, and no request cancellation — only busy flags stop a second click while a superseded first-page request runs on.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-168",
+      "status": "missing",
+      "evidence": [
+        "grep 'Refresh|refresh|stale|watch' in InstanceDetails.tsx/InstancesPage.tsx → no matches",
+        "grep 'notify' in Cargo.lock → no matches"
+      ],
+      "test": null,
+      "note": "The old mark-dirty-and-tell behaviour has no counterpart, as reviewed.",
+      "gap": "No filesystem watcher and no staleness surface at all: the notify crate is not in Cargo.lock, InstanceDetails calls scanInstance only on mount and after mutations, there is no Refresh action on Installed Content or the instances list, and no 'content may be stale' hint.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-169",
+      "status": "present",
+      "evidence": [
+        "src/app/CommandPalette.tsx::CommandPalette (cmdk Command/CommandInput/CommandList/CommandGroup/CommandItem)",
+        "src/components/ui/command.tsx (shadcn command primitives wrapping cmdk)",
+        "src/app/Shell.tsx::Shell (Ctrl+K / Cmd+K toggles the palette, header button opens it)",
+        "src/components/Kbd.tsx::Kbd",
+        "src/i18n/en.json::palette.title|palette.description|palette.placeholder|palette.empty|palette.group.goTo|palette.hint.navigate|palette.hint.run|palette.escape|palette.shortcut"
+      ],
+      "test": null,
+      "note": "The palette is a real cmdk dialog (Ctrl/Cmd+K, Escape, arrow keys, Enter) whose items are built from the same NAV array as the rail, with `value` set to `id + translated label` so it filters in both scripts; it is RTL-first like the rest of the shell, and its command set is deliberately limited to the five destinations until mod/instance data sources exist.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-170",
+      "status": "present",
+      "evidence": [
+        "src/app/preferences.ts::THEMES (system|dark|light), applyToDocument, isDark, watchSystemTheme, usePreferences",
+        "src/main.tsx (applyToDocument before first paint, no flash of the wrong theme)",
+        "src/app/pages/SettingsPage.tsx::SettingsPage (settings.theme Segmented with theme.dark|theme.light|theme.system)",
+        "src/styles/theme.css (html.dark, color-scheme, tokens)",
+        "src/i18n/en.json::settings.theme|theme.system|theme.dark|theme.light"
+      ],
+      "test": null,
+      "note": "Theme is a validated preference (`localStorage` is read defensively, unknown values fall back), applied to `<html>` as a `dark` class plus `color-scheme` before the first paint, and a `matchMedia` listener re-applies it when the OS flips while 'system' is selected; the old app's single palette toggle became a three-way preference, and digit style (Western/Arabic-Indic) is a separate switch.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-173",
+      "status": "present",
+      "evidence": [
+        "src/app/i18n.ts (i18next + react-i18next, en/ar resources, Arabic plural categories, format hook for numerals)",
+        "src/app/preferences.ts::applyToDocument (root.lang, root.dir from Locale, DIRECTION map)",
+        "src/i18n/en.json + src/i18n/ar.json (all UI strings as keys; no hard-coded copy in components)",
+        "src/styles/theme.css (html[dir=\"rtl\"] leading, logical direction rules)",
+        "src/app/Shell.tsx (ps-/pe-/ms-/me- logical spacing, RTL-mirrored rail glyphs)",
+        "src/lib/format.ts (formatNumber/formatBytes with locale + numeral system)",
+        "scripts/check-i18n.mjs (key parity + Arabic plural-category check, wired as pnpm i18n:check in .github/workflows/ci.yml)"
+      ],
+      "test": "scripts/check-i18n.mjs (CI step: pnpm i18n:check)",
+      "note": "i18n is structural rather than retrofitted: every component reads keys through `useTranslation`, Arabic is the default locale and drives `dir=rtl` on `<html>`, layout uses logical padding/margin utilities and `dir=\"ltr\"`/`dir=\"auto\"` per field (paths and versions stay LTR inside RTL prose), and plural counts are formatted once in the interpolation hook so Arabic's six plural forms work; a CI script fails the build when the two locale files drift.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-174",
+      "status": "present",
+      "evidence": [
+        "src/app/Shell.tsx::Shell (grid-cols-[auto_1fr], width 56/208 rail, min-w-0 + overflow containment)",
+        "src/app/pages/BrowsePage.tsx (sm:grid-cols-2 lg:grid-cols-3)",
+        "src/app/pages/InstancesPage.tsx (grid-cols-1 sm:grid-cols-2 lg:grid-cols-3, expanded card spans sm:col-span-2 lg:col-span-3)",
+        "src/app/pages/InstanceExport.tsx (grid-cols-1 sm:grid-cols-2 fields, flex-wrap rows)",
+        "src-tauri/tauri.conf.json (window 1200x800, minWidth 900, minHeight 600)"
+      ],
+      "test": null,
+      "note": "Layout reflows rather than being laid out for one size: content grids step 1 -> 2 -> 3 columns at Tailwind's sm/lg breakpoints, an expanded instance card widens to the full grid, toolbars use `flex-wrap`, and the rail is a collapsible track whose width is the only thing that animates while the page resizes; reduced motion is honoured globally in theme.css and the whole arrangement mirrors under RTL.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-155",
+      "status": "present",
+      "evidence": [
+        "src/app/pages/InstanceExport.tsx::InstanceExport (preview -> plan review -> Write, every edit invalidates the plan)",
+        "src/lib/ipc.ts::planModpackExport / writeModpackExport / listExportFolders",
+        "src-tauri/src/commands/pack.rs::plan_modpack_export, write_modpack_export, list_export_folders",
+        "core/src/modpack/export.rs::collect_overrides / exclusion_reason / index_json / write_export_zip",
+        "core/src/modpack/export.rs::EXCLUDED_DIR_NAMES (13) / EXCLUDED_FILE_NAMES (6) / EXCLUDED_SUFFIXES (13) / SENSITIVE_NAME_TOKENS (12)",
+        "src/i18n/en.json::export.planTitle|export.action.plan|export.action.write|export.count.files|export.count.excluded|export.skip.*|export.excluded.*"
+      ],
+      "test": "spec_f081_plan_export_over_ipc_returns_the_review_and_writes_nothing",
+      "note": "Export is plan-then-write over IPC: `plan_modpack_export` resolves the lock through the provider and walks the chosen folders without writing, the review lists files, overrides, skipped projects and excluded paths with a translated reason per line, and `write_modpack_export` re-plans against the disk and refuses if the lock digest moved since the preview (`expectedLockSha512`), then writes a sibling temp zip and renames it over the target — a TOCTOU guard, an atomic publication and a `spawn_blocking` write that the old worker-thread exporter did not have; the carrier format is `.mrpack` (a documented decision in docs/spec/behaviors/import-export.md §8) rather than the old custom profile zip, and `saves`, `mods`, logs and the app's own staging trees are never offered as overrides.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-157",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\modpack\\export.rs::write_export_zip (lines 812-836: INDEX_ENTRY + overrides only)",
+        "E:\\ModManager\\core\\src\\modpack\\export.rs::index_json (pack contents only, no exclusions)"
+      ],
+      "test": null,
+      "note": "Verified the zip member list; the exclusion inventory never reaches the file.",
+      "gap": "No in-archive policy record: write_export_zip emits only modrinth.index.json plus overrides (no export_manifest.json); ExcludedEntry/SkipReason decisions are shown in the preview UI and then discarded, so the artefact cannot be machine-audited after it leaves the app.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-158",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (lines 50-52: legacy trio only)",
+        "E:\\ModManager\\core\\src\\legacy\\import.rs::plan_import (old home only)"
+      ],
+      "test": null,
+      "note": "plan_modpack_install is the pack installer, not the metadata-only export preview the spec row describes.",
+      "gap": "No archive import of the app's own export: the only import commands are the legacy old-home scan/plan/execute (F-181, reads app.sqlite3 + profile.json without extraction) and the .mrpack full install (F-068); there is no way to pick a profile-export zip, preview its manifest metadata-only, schema-check it, or create an instance from it.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-094",
+      "status": "present",
+      "evidence": [
+        "core/src/instances/mod.rs::detect_instance_roots (casefolded `.minecraft`/`minecraft` child + parent metadata ⇒ parent is the instance root)",
+        "core/src/instances/mod.rs::has_launcher_metadata (mmc-pack.json | instance.cfg | modrinth.index.json)",
+        "core/src/instances/registry.rs::link_instance",
+        "core/src/legacy/import.rs (same detection when importing an old profile root)"
+      ],
+      "test": "spec_f101_prism_child_uses_parent_root",
+      "note": "`detect_instance_roots` reproduces `_roots_for_selected_folder` exactly — selecting `<instance>/.minecraft` whose parent carries launcher metadata returns `(parent, selected)`, otherwise it takes the first existing `.minecraft` then `minecraft` child and falls back to the selection itself — and the pair is then persisted as two typed columns (`path`, `minecraft_root`) so no later caller has to re-derive the layout.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-095",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\src\\app\\pages\\InstanceDetails.tsx (line 115: 'Validate, repair, backup and restore are gone on purpose')",
+        "grep 'validate|severity' in core/src → no profile-validation code",
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no validate command)"
+      ],
+      "test": null,
+      "note": "features.md is authoritative: Keep stands, so missing confirmed with the source conflict noted.",
+      "gap": "No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-097",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\dto.rs::LocalFactDto (filename, rel_path, size, sha1, resource_type, disabled, project_id)",
+        "E:\\ModManager\\core\\src\\instances\\remove\\mod.rs::RemoveCandidate.external",
+        "E:\\ModManager\\core\\src\\jar_reader\\mod.rs::classify_local_resource_type"
+      ],
+      "test": "spec_f067_detects_disabled_suffix_and_segment",
+      "note": "Matches the reviewed split; no ownership verdict in the inventory view.",
+      "gap": "Two of the five classes exist: disabled is computed structurally in the scan, and managed/external ownership is derived only inside the removal preview (RemoveCandidate.external from the lock); the inventory view exposes only a lock-derived project_id per fact, with no ownership label, and the Duplicates and Incompatible classes are never computed.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-098",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\instances\\mod.rs::LocalContentFact",
+        "E:\\ModManager\\core\\src\\instances\\mod.rs::scan_mods"
+      ],
+      "test": null,
+      "note": "Confirmed as reviewed: the shape exists, the axes do not.",
+      "gap": "The struct-not-enum decision was taken (LocalContentFact's independent fields), but only two axes exist to compose: activation (disabled) and a resource type that is not the compatibility axis; ownership, duplicate and compatibility axes are never computed, so the documented managed+disabled+duplicate composition has nothing to compose and no test asserts coexistence.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-099",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\instances\\mod.rs::scan_mods (facts only, no cross-entry index)",
+        "grep 'duplicate' in core/src/instances → only DuplicatePath (instance registry)"
+      ],
+      "test": null,
+      "note": "Raw material exists, the behaviour does not.",
+      "gap": "Duplicate detection is absent: every scanned file gets a SHA-1 (sha1_of) but nothing compares two entries or (provider, project_id, version_id) identities; grep for duplicate in core/src/instances finds only registry DuplicatePath errors (instance registration, unrelated); no per-file duplicate list, no warning.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-100",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\instances\\record.rs::record_install (lines 131-143: writes sha1/sha512)",
+        "E:\\ModManager\\core\\src\\instances\\mod.rs::scan_mods (computes sha1, never compares)"
+      ],
+      "test": null,
+      "note": "Confirmed: a modified-but-still-locked jar is indistinguishable from an untouched one.",
+      "gap": "No hash-mismatch reconciliation: the recorded sha1/sha512 live in installed_mods (record.rs writes both) and the scan computes the local sha1, but no code path reads the recorded value back against the file; no hash_mismatch flag, no managed_hash_mismatch warning.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-108",
+      "status": "present",
+      "evidence": [
+        "core/src/instances/toggle/mod.rs::preview_toggle",
+        "core/src/instances/toggle/mod.rs::preview_one (top-level, already-disabled, `.jar`-only, symlink, outside-root and destination-collision guards with the legacy sentences)",
+        "core/src/instances/toggle/mod.rs::execute_toggle",
+        "src-tauri/src/commands.rs::preview_toggle / ::execute_toggle",
+        "src/app/pages/InstanceDetails.tsx::InstanceDetails (preview list showing `allowed: false` + reason, then confirm)",
+        "src/lib/ipc.ts::previewToggle / ::executeToggle"
+      ],
+      "test": "spec_f110_preview_disable_guards",
+      "note": "Enable/disable is rename-only (`std::fs::rename` to `.jar.disabled` and back, including the `disabled_mods/` return-to-top rule) behind a seven-guard preview that returns typed per-file verdicts and is re-checked at execution, so the whole flow is plan-then-execute as AGENTS.md §5.4 asks rather than the old single-shot dialog.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-109",
+      "status": "present",
+      "evidence": [
+        "core/src/instances/toggle/mod.rs::execute_toggle (first failure marks every remaining allowed entry `Skipped`, then walks `completed` in reverse)",
+        "core/src/instances/toggle/mod.rs::ToggleState (Success|Failed|Skipped|RolledBack|RollbackFailed|RollbackSkipped)"
+      ],
+      "test": "spec_f110_execute_rolls_back_reversed_on_failure",
+      "note": "Reverse-order rollback is implemented as a typed state machine: the first failure flips `failed`, every untouched allowed entry becomes `Skipped`, and completed renames are undone newest-first with `RollbackSkipped` when the disk moved underneath and `RollbackFailed` when the rename itself fails — the same five outcomes the Python version reported as strings, now an enum the UI can match.",
+      "gap": null,
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-113",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\modpack\\export.rs (line 509: exclusion name only)",
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no backup command)"
+      ],
+      "test": null,
+      "note": "The copy-only create_profile_update_backup behaviour is entirely absent, as reviewed.",
+      "gap": "No full profile backup: no command in generate_handler, no backup type or manifest schema; '.modrinth_bulk_downloader_profile_backups' survives only as an exclusion name in the pack exporter's EXCLUDED list.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-114",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\modpack\\export.rs (line 511: exclusion name only)",
+        "grep 'restore_manifest|restore_safety' → export.rs exclusions only"
+      ],
+      "test": null,
+      "note": "Confirmed the three protection layers and the typed confirmation are absent.",
+      "gap": "No restore at all: '.modrinth_bulk_downloader_restore_safety' appears only as an export exclusion name; no containment check, no blocked-entries preview, no move-aside, no restore_manifest.json, no RESTORE confirmation.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-115",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\commands\\pack.rs (line 1138: worlds excluded from pack export)",
+        "grep 'include_saves|Saves restore' → no matches"
+      ],
+      "test": null,
+      "note": "Confirmed; consequence of F-113/F-114 absence.",
+      "gap": "With the whole backup/restore pair absent, the opt-in saves copy (and its restore-side default refusal) has no home; saves/ appears only as a standard-dir name in instance creation and as an export exclusion.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-118",
+      "status": "missing",
+      "evidence": [
+        "grep 'level\\.dat|datapack_count|worlds' → only export exclusion comments/tests",
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no worlds command)"
+      ],
+      "test": null,
+      "note": "Confirmed entirely absent.",
+      "gap": "No read-only worlds preview: no worlds reader in core, no worlds command in generate_handler, no world folder enumeration, datapack count or level.dat read; saves/ is only named in export exclusion tests.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-075",
+      "status": "not-applicable",
+      "evidence": [
+        "core/src/modpack/exec.rs::PlanExecutor::apply (writes into a pre-existing registered instance in place)",
+        "core/src/modpack/exec.rs::apply_download (two-phase: `.part` → hash check → `commit_part` rename)",
+        "core/src/safety/atomic.rs::commit_part / ::write_part / ::write_atomic",
+        "docs/todo.md (design decision recorded: in-place apply, no backup, resume instead of rollback — explicitly divergent from the old atomic directory publish)"
+      ],
+      "test": null,
+      "note": "Superseded by a different design: the new engine never publishes a staged directory, it applies the pack inside an already registered instance and makes each individual file atomic (`<dest>.part` → SHA-512 check → bounded-retry rename), so there is no `renameat2(RENAME_NOREPLACE)` step and no directory that can appear twice.",
+      "gap": "The whole-directory no-replace publication (Windows `os.rename`, Linux `renameat2(RENAME_NOREPLACE)`) has no equivalent by design; per-file atomicity is the replacement, and it is weaker at exactly one point — a half-applied instance is a reachable state, handled by the journal-driven resume (F-076) instead of by refusing the publish.",
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-077",
+      "status": "not-applicable",
+      "evidence": [
+        "core/src/modpack/recovery.rs (module header: \"Resume, never rollback\")",
+        "core/src/modpack/recovery.rs::pending_pack_applies (verifies the archive SHA-512 against the record's pack block before offering resume)",
+        "core/src/modpack/exec.rs::clear_interrupted_parts (removes only `.part` files the journal names, never a foreign one)"
+      ],
+      "test": "spec_f080_recovery_refuses_a_pack_that_changed_since_the_plan",
+      "note": "Superseded: there is no rollback to guard, because a pack apply writes into the user's own instance and deleting its files would be destructive; the safety intent of the receipt check survives as a digest-bound resume — `pending_pack_applies` refuses to act unless the journal's `archive_sha512` matches the archive on disk.",
+      "gap": "The byte-exact `{schema, operation_id, final_root_basename, manifest_sha256, state}` marker and `rollback_mrpack_install` do not exist; if a rollback is ever reintroduced, its marker discipline would have to be ported.",
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-078",
+      "status": "present",
+      "evidence": [
+        "core/src/modpack/exec.rs::PlanExecutor::candidate_urls (provider URL first, then the pack's own `downloads[]` for the matching SHA-512, deduplicated)",
+        "core/src/modpack/exec.rs::PlanExecutor::apply_download (per-URL fresh staging, `continue` to the next candidate on transport error or hash mismatch, last error returned)",
+        "core/src/modpack/exec.rs::PlanExecutor::resolved_urls (one `get_versions_by_hashes` round trip for the whole plan)",
+        "docs/adr/0005-pack-url-policy.md"
+      ],
+      "test": null,
+      "note": "`apply_download` walks every candidate in order with a fresh staging file per attempt and keeps the last typed error, so a dead provider URL falls through to the pack's own link and a wrong-hash candidate is discarded rather than accepted — and because the digest comes from the index, the mirror is a locator, not a trust anchor.",
+      "gap": "Implemented but unpinned: no test drives a first-URL failure into a second-URL success (`spec_f071_download_lands_hash_verified_from_the_provider` only proves the provider URL is tried before the pack's decoy).",
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-079",
+      "status": "not-applicable",
+      "evidence": [
+        "core/src/downloader/client.rs::validate_url (https-only, credentials rejected, loopback only under the test flag)",
+        "core/src/modpack/exec.rs::apply_download (SHA-512 of the index is the gate before the rename)",
+        "docs/adr/0005-pack-url-policy.md (rejected the host allowlist explicitly: trust the hash, not the host)"
+      ],
+      "test": "spec_f031_rejects_non_https",
+      "note": "Deliberately superseded: the four-host exact-match allowlist was replaced by a weaker scheme check plus a stronger content check — any `https` host without embedded credentials is reachable, but the bytes must hash to the SHA-512 the plan pinned before anything is renamed into the instance.",
+      "gap": "No `.mrpack` host allowlist exists, so a pack can point at any HTTPS host; ADR 0005 argues this is not a security loss because the hash gate holds, but the `MRPACK_DOWNLOAD_HOSTS` restriction (and its no-subdomain rule) is gone.",
+      "review": "reviewed-only"
+    },
+    {
+      "id": "F-137",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\core\\src\\db\\mod.rs::open (lines 119-141: busy_timeout then gate then WAL then migrate)",
+        "E:\\ModManager\\core\\src\\db\\mod.rs::DbError (lines 17-28: raw Display propagation)",
+        "E:\\ModManager\\src-tauri\\src\\dto.rs::ErrorCode (no busy variant)"
+      ],
+      "test": "spec_f140_wal_busy_fk_set_and_persistent",
+      "note": "Verified the pragma order and error types; no busy mapping anywhere.",
+      "gap": "Fail-closed on busy is real (busy_timeout(5000) first in open(), then the gate, WAL assertion, then a transactional to_latest that aborts leaving no .bak), but the 'busy' answer does not exist: DbError::Migration/Sql propagate raw rusqlite Display, ErrorCode has no busy/database code, and the only busy-related test asserts the pragma is set — no lock-scenario test drives a held writer.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-138",
+      "status": "missing",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\state.rs::AppState::open (line 59: map_err(|e| e.to_string()))",
+        "E:\\ModManager\\core\\src\\db\\mod.rs::DbError (raw chain Display)"
+      ],
+      "test": null,
+      "note": "Confirmed: the _safe_error_message counterpart does not exist.",
+      "gap": "No migration-message sanitizer: a failed migration surfaces as raw rusqlite/io Display through AppState::open's e.to_string(), with no stage tag, no schema versions and no filename-only sentence; privacy is met only incidentally (no message interpolates a path), while the diagnosable old message is gone and no test asserts a path never appears.",
+      "review": "verified:confirmed"
+    },
+    {
+      "id": "F-139",
+      "status": "partial",
+      "evidence": [
+        "E:\\ModManager\\src-tauri\\src\\lib.rs::run (line 21: AppState::open()? inside .setup)",
+        "E:\\ModManager\\src-tauri\\src\\main.rs::main (no exit-code handling)",
+        "E:\\ModManager\\src-tauri\\tauri.conf.json (window declared in config, created before setup)"
+      ],
+      "test": null,
+      "note": "Verified the open site and main() — no exit-code 2 path exists.",
+      "gap": "The DB is opened exactly once before any command runs and a failure aborts startup loudly, but it happens inside Tauri's .setup after the config-declared window already exists, the error leaves through Tauri's expect as a generic panic, and there is no pre-window gate, no ErrorCode/dialog, and no exit code 2.",
+      "review": "verified:confirmed"
+    }
+  ]
+}

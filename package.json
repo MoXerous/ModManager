@@ -9,6 +9,8 @@
         "parity": "node scripts/build-parity-matrix.mjs",
         "parity:check": "node scripts/build-parity-matrix.mjs --check",
         "i18n:check": "node scripts/check-i18n.mjs",
+        "feature-parity": "node scripts/build-feature-parity.mjs",
+        "feature-parity:check": "node scripts/build-feature-parity.mjs --check",
         "tauri": "tauri"
     },
     "dependencies": {
