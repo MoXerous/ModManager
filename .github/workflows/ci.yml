@@ -62,6 +62,12 @@ jobs:
       - name: Spec traceability matrix is up to date
         run: pnpm parity:check
 
+      # No hard-coded UI strings: every key the code asks for must exist in
+      # en.json, and every English key must have an Arabic counterpart
+      # (Arabic plural forms count as the counterpart).
+      - name: Locale files are in sync
+        run: pnpm i18n:check
+
   # M1's gate (foundations.md §10.2): install a real mod set from the command
   # line, on both systems, with every hash verified. Nothing else here proves
   # that — the rest of the suite runs against wiremock, so the download path,
