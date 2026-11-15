@@ -141,7 +141,7 @@
 | **F-034** | حذف `.part` عند فشل التحقق | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/safety/atomic.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
 | **F-035** | الإيقاف المؤقت / الاستئناف / الإلغاء | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
 | **F-036** | **الإلغاء حالة مستقلة لا نجاح** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/batch_tests.rs، core/src/downloader/client.rs (+4) · كود: core/src/downloader/batch.rs، core/src/downloader/client.rs (+6) · اختبار (ذكر): core/src/downloader/batch_tests.rs، src-tauri/src/commands/channel_tests.rs (+2) |
-| **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/channel_tests.rs (+1) |
+| **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/channel_tests.rs (+1) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs |
 | **F-038** | حارس سباق الروابط الرمزية | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs، core/src/safety/atomic.rs (+1) · كود: core/src/downloader/client.rs، core/src/modpack/exec.rs (+5) |
 | **F-039** | التنزيل بالتوازي | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/downloader/mod.rs (+1) |
 | **F-040** | صفحة التنزيلات (3 تبويبات) | Keep | M2 | بلا أثر | — |
