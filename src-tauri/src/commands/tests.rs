@@ -246,6 +246,7 @@ fn spec_f019_every_error_code_is_translated_in_both_locales() {
         ErrorCode::Timeout,
         ErrorCode::Io,
         ErrorCode::NewerSchema,
+        ErrorCode::LinkOrReparse,
     ];
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

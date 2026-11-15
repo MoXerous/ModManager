@@ -60,6 +60,7 @@ use crate::journal::{
 };
 use crate::providers::{HashAlgo, Provider};
 use crate::safety::atomic::{commit_part, part_path, write_part, AtomicError};
+use crate::safety::guard::is_link_or_reparse;
 use crate::safety::path::{safe_member_name, NameError};
 
 /// How many times removing the staging directory is retried. A scanner or an
@@ -1167,9 +1168,9 @@ fn destination(instance_root: &Path, rel: &str) -> Result<PathBuf, ExecError> {
 }
 
 /// A pre-existing symlink or NTFS junction between the root and the target
-/// would redirect the write outside the instance. `extract.rs` has the same
-/// check; it is private there, and a one-screen helper is cheaper than making
-/// the safety module's internals public.
+/// would redirect the write outside the instance. The rule itself lives in
+/// [`crate::safety::guard`], shared with archive extraction and the
+/// downloader (`F-038`).
 fn reject_link_ancestors(instance_root: &Path, dest: &Path) -> Result<(), ExecError> {
     let mut ancestor = dest.parent();
     while let Some(a) = ancestor {
@@ -1182,25 +1183,6 @@ fn reject_link_ancestors(instance_root: &Path, dest: &Path) -> Result<(), ExecEr
         ancestor = a.parent();
     }
     Ok(())
-}
-
-fn is_link_or_reparse(path: &Path) -> bool {
-    match path.symlink_metadata() {
-        Ok(meta) => {
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                meta.file_type().is_symlink()
-                    || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
-            }
-            #[cfg(not(windows))]
-            {
-                meta.file_type().is_symlink()
-            }
-        }
-        Err(_) => false,
-    }
 }
 
 /// Sibling-named staging file, built only from hex characters of the hash.

@@ -134,7 +134,16 @@ fn exec_error(e: &ExecError) -> IpcError {
         // user's input: the same words the journal's own errors get.
         E::Journal(j) => super::journal_error(j),
         // Corrupt or tampered bytes, a failed rename, a failing disk.
-        E::HashMismatch { .. } | E::Atomic(_) | E::Download(_) | E::Io { .. } => IpcError::io(e),
+        E::HashMismatch { .. } | E::Io { .. } => IpcError::io(e),
+        // A link or reparse point sits where the bytes would land (`F-038`).
+        // It arrives as the download refusal or as the commit-time atomic
+        // refusal wrapped in it; the UI must tell it apart from a network
+        // or disk failure, so it gets its own code.
+        E::Download(mm_core::downloader::client::DownloadError::LinkOrReparse(_))
+        | E::Atomic(mm_core::safety::atomic::AtomicError::LinkOrReparse(_)) => {
+            IpcError::new(ErrorCode::LinkOrReparse, e)
+        }
+        E::Atomic(_) | E::Download(_) => IpcError::io(e),
     }
 }
 

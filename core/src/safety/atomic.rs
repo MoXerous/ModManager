@@ -24,6 +24,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::safety::guard;
+
 /// Bounded rename retries for antivirus/indexer locks (`ERROR_SHARING_VIOLATION`).
 const RENAME_RETRIES: u32 = 5;
 const RENAME_WAIT_MS: u64 = 50;
@@ -41,6 +43,13 @@ pub enum AtomicError {
     ShareViolation(PathBuf),
     #[error("a `.part` file already exists at {}, and it is not provably ours; refusing to replace it", .0.display())]
     StalePart(PathBuf),
+    /// `F-038`: the part about to be committed is a link or reparse point.
+    #[error("refusing to commit a link or reparse point at {}", .0.display())]
+    LinkOrReparse(PathBuf),
+    /// No verified no-follow flag on this target; committing would follow a
+    /// link, so nothing is committed.
+    #[error("this platform has no verified no-follow open flag; refusing to commit unguarded")]
+    UnsupportedPlatform,
 }
 
 /// Sibling part path: same directory, so rename stays on one volume.
@@ -60,15 +69,30 @@ pub fn part_path(dest: &Path) -> PathBuf {
 /// resume from it, which is exactly what the downloader does. A caller that
 /// owns the part and wants it gone on failure says so itself — that is what
 /// [`write_atomic`] does.
+///
+/// `F-038`: the part is re-opened with the same no-follow flags the writer
+/// used and the *handle* is validated, then the path is checked again
+/// immediately before the rename. A link swapped in after the streaming
+/// handle was closed is therefore refused instead of being published as the
+/// destination — the write-through the old app re-checked at this same point.
 pub fn commit_part(part: &Path, dest: &Path) -> Result<(), AtomicError> {
     // write:true: FlushFileBuffers fails on read-only handles (Windows).
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(part)
-        .map_err(|e| io_err("open", part, e))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true);
+    let f = guard::open_no_follow(part, &mut opts).map_err(|e| match e {
+        guard::GuardError::UnsupportedPlatform => AtomicError::UnsupportedPlatform,
+        guard::GuardError::LinkOrReparse(p) => AtomicError::LinkOrReparse(p),
+        guard::GuardError::Io(e) => io_err("open", part, e),
+    })?;
+    // The bytes being synced are the bytes on the handle we just validated,
+    // not whatever the name points at now.
     f.sync_all().map_err(|e| io_err("sync", part, e))?;
     drop(f);
+    // The handle is gone (Windows cannot rename an open file), so judge the
+    // name once more before it becomes the destination.
+    if guard::is_link_or_reparse(part) {
+        return Err(AtomicError::LinkOrReparse(part.to_path_buf()));
+    }
     rename_retry(part, dest)
 }
 
@@ -248,6 +272,39 @@ mod tests {
         commit_part(&part, &dest).expect("commits");
         assert_eq!(std::fs::read(&dest).expect("read"), b"verified bytes");
         assert!(!part.exists(), "the part is renamed, not copied");
+    }
+
+    #[test]
+    fn spec_f038_commit_refuses_a_link_at_the_part_path() {
+        // The part is verified and then committed by name. A link swapped in
+        // after the streaming handle was closed used to be re-opened by path
+        // (following it) and renamed into place: the destination became a
+        // link and the report said "success". The commit now validates the
+        // handle it opens and the name right before the rename.
+        let dir = crate::test_tempdir();
+        let dest = dir.path().join("a.jar");
+        let part = part_path(&dest);
+        let outside = dir.path().join("outside.bin");
+        std::fs::write(&outside, b"victim").expect("fixture");
+        #[cfg(unix)]
+        if std::os::unix::fs::symlink(&outside, &part).is_err() {
+            return; // no symlink privilege on this host
+        }
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&outside, &part).is_err() {
+            return; // no symlink privilege on this host
+        }
+        let err = commit_part(&part, &dest).expect_err("a link must not be committed");
+        assert!(matches!(err, AtomicError::LinkOrReparse(_)), "got {err:?}");
+        assert!(
+            !dest.exists(),
+            "nothing may be published at the destination"
+        );
+        assert_eq!(
+            std::fs::read(&outside).expect("read"),
+            b"victim",
+            "the link's target must not receive the commit"
+        );
     }
 
     #[test]

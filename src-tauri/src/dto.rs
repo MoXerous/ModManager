@@ -82,6 +82,11 @@ pub enum ErrorCode {
     /// `retry_after_seconds` يحمل الأوقات؛ الواجهة لا تحلّل نصًا.
     Timeout,
     Io,
+    /// `F-038`: a symlink or NTFS junction sits where the bytes would land.
+    /// Not a network failure and not invalid input: the destination tree
+    /// holds a link the user must remove (or choose another folder) before
+    /// a retry can succeed.
+    LinkOrReparse,
     /// مخطط القفل أحدث من المدعوم (§5.10) — لا تُعرض قائمة فارغة.
     NewerSchema,
 }

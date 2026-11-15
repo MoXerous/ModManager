@@ -5,5 +5,6 @@
 
 pub mod atomic;
 pub mod extract;
+pub mod guard;
 pub mod inspect;
 pub mod path;

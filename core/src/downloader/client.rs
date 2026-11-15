@@ -14,6 +14,7 @@ use tokio::sync::Semaphore;
 
 use crate::downloader::retry;
 use crate::safety::atomic::{self, AtomicError};
+use crate::safety::guard;
 
 /// Redirects the old app follows by hand (`downloads.md` §7).
 const REDIRECT_CODES: &[u16] = &[301, 302, 303, 307, 308];
@@ -96,6 +97,9 @@ pub enum DownloadError {
     NoSpace,
     #[error("transport: {0}")]
     Transport(String),
+    /// `F-038`: a symlink or reparse point sits where the bytes would land.
+    #[error("refusing to write through a link or reparse point at {}", .0.display())]
+    LinkOrReparse(PathBuf),
     #[error(transparent)]
     Atomic(#[from] AtomicError),
     #[error("io {op} on {}", path.display())]
@@ -218,17 +222,22 @@ impl Downloader {
         use reqwest::StatusCode;
 
         let part = atomic::part_path(&req.dest);
+        // Spec §8 path guard (F-038): the ancestors are part of the path the
+        // bytes travel through. A junction planted at `mods/` redirects every
+        // file written "inside" it, so every component on the way is judged —
+        // the whole-path walk the old app ran before each write.
+        if let Some(link) = guard::link_in_ancestors(&req.dest) {
+            return Err(DownloadError::LinkOrReparse(link));
+        }
         if let Some(parent) = req.dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| io_err("create_dir", parent, e))?;
         }
-        // Spec §8 path guard: a pre-placed symlink at the part path is
-        // removed (the link only) and the part starts fresh.
-        if part
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            std::fs::remove_file(&part).map_err(|e| io_err("remove", &part, e))?;
+        // Spec §8 path guard (F-038), defence in depth: a link or reparse
+        // point at the part path is refused before the resume reads, never
+        // followed. `open_part_guarded` checks the path again and then the
+        // opened handle itself.
+        if guard::is_link_or_reparse(&part) {
+            return Err(DownloadError::LinkOrReparse(part));
         }
         // Resume state from the existing `.part` (F-035): oversized part is
         // discarded, matching part proceeds to verification below.
@@ -779,31 +788,53 @@ fn transport(e: reqwest::Error) -> DownloadError {
     DownloadError::Transport(e.to_string())
 }
 
-/// Open the `.part` with a post-open symlink recheck (spec §8): a link
-/// swapped in between check and open is removed and the open retried once.
+/// Open the `.part` for writing with the `F-038` guard: the path is checked
+/// once more, then the *handle* is opened and validated.
 fn open_part_guarded(part: &Path, append: bool) -> Result<std::fs::File, DownloadError> {
-    for _ in 0..2 {
-        if part
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            std::fs::remove_file(part).map_err(|e| io_err("remove", part, e))?;
-            continue;
-        }
-        return std::fs::OpenOptions::new()
-            .create(true)
-            .append(append)
-            .write(true)
-            .truncate(!append)
-            .open(part)
-            .map_err(|e| io_err("open", part, e));
+    if guard::is_link_or_reparse(part) {
+        return Err(DownloadError::LinkOrReparse(part.to_path_buf()));
     }
-    Err(io_err(
-        "open",
-        part,
-        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "symlink race"),
-    ))
+    open_part_handle(part, append)
+}
+
+/// Open, then validate the handle — the half that closes the check/open race
+/// (`docs/spec/behaviors/downloads.md` §8): the final component is never
+/// followed, and what we hold is inspected before a single byte is written.
+fn open_part_handle(part: &Path, append: bool) -> Result<std::fs::File, DownloadError> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true)
+        .append(append)
+        .write(true)
+        .truncate(!append);
+    // Fail closed (`F-038`): a platform with no verified no-follow flag gets
+    // no open at all — opening anyway would follow a planted link silently.
+    // `do_not_follow` only ever fails with `UnsupportedPlatform`.
+    if guard::do_not_follow(&mut opts).is_err() {
+        return Err(DownloadError::Internal(
+            "no verified no-follow open flag on this platform; refusing to open unguarded",
+        ));
+    }
+    let file = match opts.open(part) {
+        Ok(file) => file,
+        Err(e) => {
+            // Unix `O_NOFOLLOW` fails the open outright instead of handing
+            // back a handle to the link; the path says which we hit.
+            if guard::is_link_or_reparse(part) {
+                let _ = std::fs::remove_file(part);
+                return Err(DownloadError::LinkOrReparse(part.to_path_buf()));
+            }
+            return Err(io_err("open", part, e));
+        }
+    };
+    if guard::handle_is_link_or_reparse(&file) {
+        // Close first: Windows refuses to unlink a file with an open handle.
+        drop(file);
+        // Best effort: a directory junction is not removable as a file, and
+        // that must not mask the refusal.
+        let _ = std::fs::remove_file(part);
+        return Err(DownloadError::LinkOrReparse(part.to_path_buf()));
+    }
+    Ok(file)
 }
 
 fn header_str(h: &reqwest::header::HeaderMap, k: reqwest::header::HeaderName) -> Option<String> {
@@ -1347,6 +1378,269 @@ mod tests {
         let out = dl.download(&r, &mut go, &still).await.expect("valid zip");
         assert_eq!(out.status, DownloadStatus::Success);
         assert_eq!(std::fs::read(&out.path).expect("read"), body);
+    }
+
+    /// Where bytes written through a planted link would land.
+    enum Landed {
+        File(PathBuf),
+        Dir(PathBuf),
+    }
+
+    /// Plant a link at `at` that points outside the instance directory.
+    ///
+    /// Unix: a dangling symlink to `outside/victim.bin`. Windows: the same
+    /// file symlink when the host grants `SeCreateSymbolicLinkPrivilege`,
+    /// otherwise an NTFS **junction** to `outside/` — a junction is a reparse
+    /// point too and `FileType::is_symlink` does not report it, so the guard
+    /// must not be leaning on `is_symlink` alone. `None` means the host allows
+    /// neither, which is this repo's convention for privileged fixtures
+    /// (`instances/remove/tests.rs`, `journal/store/tests.rs`).
+    fn plant_link(at: &Path, outside: &Path) -> Option<Landed> {
+        let victim = outside.join("victim.bin");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&victim, at).ok()?;
+            Some(Landed::File(victim))
+        }
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_file(&victim, at).is_ok() {
+                return Some(Landed::File(victim));
+            }
+            // Junctions need no privilege: `cmd /C mklink /J` succeeds where
+            // `symlink_file` is denied.
+            let made = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(at)
+                .arg(outside)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            made.then(|| Landed::Dir(outside.to_path_buf()))
+        }
+    }
+
+    /// Plant a DIRECTORY link at `at` pointing at the real directory `dir`.
+    ///
+    /// Unix: a symlink (needs no privilege). Windows: a directory symlink
+    /// when the host grants the privilege, otherwise an NTFS **junction**
+    /// via `mklink /J`, which needs none — a junction is a reparse point
+    /// `FileType::is_symlink` does not report. `false` = the host allows
+    /// neither, the skip convention for privileged fixtures.
+    fn plant_dir_link(at: &Path, dir: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir, at).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(dir, at).is_ok() {
+                return true;
+            }
+            let made = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(at)
+                .arg(dir)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            made
+        }
+    }
+
+    /// The whole point of the guard: nothing may appear on the far side.
+    fn assert_nothing_landed(landed: &Landed) {
+        match landed {
+            Landed::File(p) => assert!(
+                !p.exists(),
+                "bytes were written through the link to {}",
+                p.display()
+            ),
+            Landed::Dir(d) => assert_eq!(
+                std::fs::read_dir(d).expect("ls outside").count(),
+                0,
+                "bytes were written through the link into {}",
+                d.display()
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn spec_f038_a_symlink_at_the_destination_is_refused() {
+        // End to end through the download path: the `.part` the stream is
+        // about to write into is a link pointing outside the instance, so the
+        // download must end in the typed refusal with nothing landing beyond
+        // the link.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/k.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"payload"))
+            .mount(&server)
+            .await;
+        let dir = crate::test_tempdir();
+        let instance = dir.path().join("instance").join("mods");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&instance).expect("instance");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let r = DownloadRequest {
+            url: format!("{}/k.bin", server.uri()),
+            dest: instance.join("k.bin"),
+            expected_size: None,
+            sha1_hex: None,
+            sha512_hex: None,
+            allow_insecure_loopback: true,
+        };
+        let part = crate::safety::atomic::part_path(&r.dest);
+        let Some(landed) = plant_link(&part, &outside) else {
+            return; // host grants neither a file symlink nor a junction
+        };
+        let dl = Downloader::new(2).expect("client");
+        let err = dl
+            .download(&r, &mut go, &still)
+            .await
+            .expect_err("a link at the part path must be refused");
+        assert!(
+            matches!(err, DownloadError::LinkOrReparse(ref p) if p == &part),
+            "got {err:?}"
+        );
+        assert_nothing_landed(&landed);
+        assert!(!r.dest.exists(), "no artifact was committed");
+        assert_eq!(
+            server.received_requests().await.expect("count").len(),
+            0,
+            "the refusal happens before the body is streamed"
+        );
+    }
+
+    /// The ancestors are part of the write path too: a directory link at
+    /// `mods/` redirects every file written "inside" it, junction or not, so
+    /// the whole ancestor chain is judged before anything is created.
+    #[tokio::test]
+    async fn spec_f038_a_link_in_the_destination_ancestors_is_refused() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/m.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"payload"))
+            .mount(&server)
+            .await;
+        let dir = crate::test_tempdir();
+        let instance = dir.path().join("instance");
+        std::fs::create_dir_all(&instance).expect("instance");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let mods = instance.join("mods");
+        if !plant_dir_link(&mods, &outside) {
+            return; // host grants neither a directory symlink nor a junction
+        }
+        let r = DownloadRequest {
+            url: format!("{}/m.bin", server.uri()),
+            dest: mods.join("m.bin"),
+            expected_size: None,
+            sha1_hex: None,
+            sha512_hex: None,
+            allow_insecure_loopback: true,
+        };
+        let dl = Downloader::new(2).expect("client");
+        let err = dl
+            .download(&r, &mut go, &still)
+            .await
+            .expect_err("a link above the destination must be refused");
+        assert!(
+            matches!(err, DownloadError::LinkOrReparse(ref p) if p == &mods),
+            "got {err:?}"
+        );
+        assert!(
+            std::fs::read_dir(&outside)
+                .expect("ls outside")
+                .next()
+                .is_none(),
+            "bytes were written through the ancestor link into {}",
+            outside.display()
+        );
+        assert!(!r.dest.exists(), "no artifact was committed");
+        assert_eq!(
+            server.received_requests().await.expect("count").len(),
+            0,
+            "the refusal happens before the body is streamed"
+        );
+    }
+
+    #[test]
+    fn spec_f038_a_handle_opened_on_a_reparse_point_is_rejected() {
+        // The race itself (path checked, link swapped in before `open`) is
+        // not determinisable in a unit test, so this asserts the half that
+        // closes it: open first, then judge the *handle*. The link is already
+        // sitting at the path when the handle is opened — exactly the state
+        // the window would produce.
+        let dir = crate::test_tempdir();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let part = dir.path().join("k.bin.part");
+        let Some(landed) = plant_link(&part, &outside) else {
+            return; // host grants neither a file symlink nor a junction
+        };
+        // Direct assertion of the post-open rule first: a handle opened on
+        // the planted path without following it is the link itself, not its
+        // target. On Unix the equivalent open is refused by `O_NOFOLLOW`, so
+        // the handle rule there is "must be a regular file" (asserted below).
+        let mut direct = std::fs::OpenOptions::new();
+        direct.read(true);
+        let _ = crate::safety::guard::do_not_follow(&mut direct);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // `do_not_follow` set `FILE_FLAG_OPEN_REPARSE_POINT`; the junction
+            // fallback is a DIRECTORY reparse point, and `CreateFileW` refuses
+            // any directory without `FILE_FLAG_BACKUP_SEMANTICS`. Both flags
+            // are passed together (a second `custom_flags` call replaces the
+            // first), and a host that still refuses the open makes the test
+            // skip cleanly — the repo's convention for privileged fixtures —
+            // instead of panicking on the `.expect` the old version had.
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            if matches!(landed, Landed::Dir(_)) {
+                direct.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+            }
+            let Ok(handle) = direct.open(&part) else {
+                return; // the host refuses this kind of open; skip, never panic
+            };
+            assert!(
+                crate::safety::guard::handle_is_link_or_reparse(&handle),
+                "the handle must be the link, not the file it points at"
+            );
+        }
+        #[cfg(unix)]
+        assert!(
+            direct.open(&part).is_err(),
+            "O_NOFOLLOW refuses the symlink at open time"
+        );
+        let err = open_part_handle(&part, false).expect_err("the opened handle is refused");
+        assert!(
+            matches!(err, DownloadError::LinkOrReparse(ref p) if p == &part),
+            "got {err:?}"
+        );
+        assert_nothing_landed(&landed);
+        // Unix never hands out a handle to a symlink (`O_NOFOLLOW` fails the
+        // open, asserted above through the same typed refusal), so the handle
+        // rule there is "must be a regular file" and is pinned directly.
+        #[cfg(unix)]
+        {
+            let as_dir = dir.path().join("d.part");
+            std::fs::create_dir(&as_dir).expect("dir");
+            let handle = std::fs::File::open(&as_dir).expect("dir handle");
+            assert!(
+                crate::safety::guard::handle_is_link_or_reparse(&handle),
+                "a directory handle must not be written through"
+            );
+            let plain = dir.path().join("plain.part");
+            std::fs::write(&plain, b"bytes").expect("fixture");
+            let handle = std::fs::File::open(&plain).expect("file handle");
+            assert!(!crate::safety::guard::handle_is_link_or_reparse(&handle));
+        }
     }
 
     #[tokio::test]
