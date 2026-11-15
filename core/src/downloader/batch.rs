@@ -42,6 +42,25 @@ pub enum ItemProgress {
     Cancelled,
 }
 
+/// F-020: the batch's own totals, beside the per-item events.
+///
+/// One file's `done`/`total` cannot produce the overall bar the old app
+/// showed, so the batch reports what the whole batch has: bytes settled across
+/// every item, against the sum of every item's size. `total` is `None` when
+/// any size is unknown — a bar that guesses would be a lie.
+///
+/// `terminal` is the batch's explicit final answer (F-020): it fires after
+/// the loop AND on every error or cancel path. It cannot be inferred from
+/// `done == total` — an unknown total never satisfies that, so the final
+/// event would be swallowable by the throttle and the bar would hang — and a
+/// batch that stops early must still tell the UI it stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchProgress {
+    pub done: u64,
+    pub total: Option<u64>,
+    pub terminal: bool,
+}
+
 /// One file to fetch, already resolved by `resolve_and_plan`.
 #[derive(Debug, Clone)]
 pub struct BatchItem {
@@ -84,6 +103,11 @@ pub enum BatchError {
 /// `on_progress` is called for every item event. Returning `Err(Cancelled)`
 /// stops the batch cleanly: the item in flight keeps its `.part` so a retry
 /// resumes rather than restarting, and every item already landed stays landed.
+///
+/// `on_batch` (F-020) is called with the batch's own totals: once before the
+/// first item, on every download chunk, and after every item settles. It is a
+/// separate callback because the aggregate is not about one file, and the
+/// per-item contract above stays exactly as it was.
 pub async fn execute_batch(
     downloader: &Downloader,
     write: &mut (dyn FnMut(JournalOp) -> Result<OperationRecord, JournalError> + Send),
@@ -91,6 +115,7 @@ pub async fn execute_batch(
     items: &[BatchItem],
     cancel: Arc<AtomicBool>,
     on_progress: &mut (dyn FnMut(&str, ItemProgress) + Send),
+    on_batch: &mut (dyn FnMut(BatchProgress) + Send),
 ) -> Result<Vec<PathBuf>, BatchError> {
     let journal_items: Vec<OperationItem> = items
         .iter()
@@ -116,10 +141,41 @@ pub async fn execute_batch(
     let _ = &record;
     write(JournalOp::Operation(OperationState::Running))?;
 
+    // F-020: the batch reports its own totals beside the per-item events.
+    // `Option<u64>` sums to `None` when one size is unknown.
+    let batch_total: Option<u64> = items.iter().map(|i| i.size).sum();
+    let mut settled_bytes: u64 = 0;
+    // F-020: the reported `done` is a HIGH-WATER mark. A resume that is
+    // restarted (the server ignores `Range`, or answers 416) resets one
+    // file's `done` to zero while the settled bytes stay put, so a plain
+    // `settled_bytes + p.done` would move the bar BACKWARDS — and a bar that
+    // rewinds is a lie. Progress may stall while the restart re-fetches; it
+    // may never go down.
+    let mut high_water: u64 = 0;
+    on_batch(BatchProgress {
+        done: 0,
+        total: batch_total,
+        terminal: false,
+    });
+
     let mut landed: Vec<PathBuf> = Vec::with_capacity(items.len());
     for item in items {
         if cancel.load(Ordering::Relaxed) {
-            let _ = write(JournalOp::Operation(OperationState::Cancelled))?;
+            // F-036: the cancellation stands whatever the journal says. A
+            // write failure here used to be either swallowed or propagated
+            // in place of the cancel — both wrong. It is recorded, and the
+            // cancel is still the answer the caller gets.
+            if let Err(e) = write(JournalOp::Operation(OperationState::Cancelled)) {
+                tracing::warn!(
+                    error = %e,
+                    "could not record the cancelled operation state; the cancellation stands"
+                );
+            }
+            on_batch(BatchProgress {
+                done: high_water,
+                total: batch_total,
+                terminal: true,
+            });
             return Err(BatchError::Cancelled);
         }
 
@@ -139,7 +195,16 @@ pub async fn execute_batch(
         // where a crash caught it, which is the whole reason it is written.
         let mut last_phase: Option<ItemState> = None;
         let mut journal_err: Option<BatchError> = None;
+        // The in-flight item's latest byte count, for the batch totals.
+        let mut current_done: u64 = 0;
         let mut emit = |p: DownloadProgress| {
+            // F-036: a flipped flag must END the download, not park it. The
+            // downloader polls this callback from its pause loop too, and
+            // only a `Break` turns the flip into the cancelled status that
+            // keeps the `.part` for a retry to resume.
+            if cancel.load(Ordering::Relaxed) {
+                return ControlFlow::Break(());
+            }
             if journal_err.is_some() {
                 return ControlFlow::Continue(());
             }
@@ -148,6 +213,16 @@ pub async fn execute_batch(
                 DownloadPhase::Verifying => ItemState::Verifying,
                 DownloadPhase::Committing => ItemState::Committing,
             };
+            // F-020: every chunk moves the batch bar, even when the per-item
+            // event is a suppressed repeat. The high-water mark keeps the
+            // bar honest across a restarted resume (see the comment above).
+            current_done = p.done;
+            high_water = high_water.max(settled_bytes + p.done);
+            on_batch(BatchProgress {
+                done: high_water,
+                total: batch_total,
+                terminal: false,
+            });
             if last_phase == Some(next) {
                 return ControlFlow::Continue(());
             }
@@ -175,17 +250,48 @@ pub async fn execute_batch(
 
         let result = downloader.download(&req, &mut emit, &is_cancelled).await;
         if let Some(e) = journal_err {
+            // F-020: the batch stops here, so it says so — the terminal event
+            // fires on the error path too, not only after a clean loop.
+            on_batch(BatchProgress {
+                done: high_water,
+                total: batch_total,
+                terminal: true,
+            });
             return Err(e);
         }
         match result {
             Ok(outcome) => {
                 let item_state = match outcome.status {
                     DownloadStatus::Cancelled => {
-                        let _ = write(JournalOp::Item {
+                        // F-036: the operation itself must read as cancelled,
+                        // not stay `running` — a record stuck at running is
+                        // offered as unfinished work after a restart, and a
+                        // cancelled batch has no unfinished work to offer.
+                        // F-036 (journal): a write failure is recorded, never
+                        // swallowed and never allowed to replace the
+                        // cancellation as the caller's answer.
+                        if let Err(e) = write(JournalOp::Item {
                             item_id: item.item_id.clone(),
                             state: ItemState::Cancelled,
-                        })?;
+                        }) {
+                            tracing::warn!(
+                                error = %e,
+                                item_id = %item.item_id,
+                                "could not record the cancelled item; the cancellation stands"
+                            );
+                        }
+                        if let Err(e) = write(JournalOp::Operation(OperationState::Cancelled)) {
+                            tracing::warn!(
+                                error = %e,
+                                "could not record the cancelled operation state; the cancellation stands"
+                            );
+                        }
                         on_progress(&item.item_id, ItemProgress::Cancelled);
+                        on_batch(BatchProgress {
+                            done: high_water,
+                            total: batch_total,
+                            terminal: true,
+                        });
                         return Err(BatchError::Cancelled);
                     }
                     DownloadStatus::Skipped => ItemState::Skipped,
@@ -209,6 +315,20 @@ pub async fn execute_batch(
                     landed.push(landed_path);
                 }
                 on_progress(&item.item_id, reported);
+                // F-020: the settled item's bytes fold into the batch totals.
+                // A skipped file was already on disk, so its size counts as
+                // done; a file with no declared size contributes what it
+                // actually moved.
+                settled_bytes += match item_state {
+                    ItemState::Skipped | ItemState::Completed => item.size.unwrap_or(current_done),
+                    _ => current_done,
+                };
+                high_water = high_water.max(settled_bytes);
+                on_batch(BatchProgress {
+                    done: high_water,
+                    total: batch_total,
+                    terminal: false,
+                });
             }
             Err(e) => {
                 // One bad file fails its own item, not the whole batch: the
@@ -223,6 +343,22 @@ pub async fn execute_batch(
                         message: e.to_string(),
                     },
                 );
+                // F-020: whatever the failed file moved still counts.
+                settled_bytes += current_done;
+                high_water = high_water.max(settled_bytes);
+                on_batch(BatchProgress {
+                    done: high_water,
+                    total: batch_total,
+                    terminal: false,
+                });
+                // F-020: the batch stops on the failure, so the terminal
+                // event fires here too — an error is exactly when the bar
+                // would otherwise freeze.
+                on_batch(BatchProgress {
+                    done: high_water,
+                    total: batch_total,
+                    terminal: true,
+                });
                 return Err(BatchError::Download {
                     item_id: item.item_id.clone(),
                     message: e.to_string(),
@@ -232,5 +368,14 @@ pub async fn execute_batch(
     }
 
     let _ = write(JournalOp::Operation(OperationState::Completed))?;
+    // F-020: the loop is over and the batch succeeded — the terminal event
+    // is explicit, because `done == total` never holds when the total is
+    // unknown and a swallowed final event would leave the bar short.
+    high_water = high_water.max(settled_bytes);
+    on_batch(BatchProgress {
+        done: high_water,
+        total: batch_total,
+        terminal: true,
+    });
     Ok(landed)
 }

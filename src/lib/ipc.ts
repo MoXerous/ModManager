@@ -228,6 +228,18 @@ export async function executeInstall(
   });
 }
 
+/**
+ * F-036. Asks the install currently running to stop.
+ *
+ * `true` when an install was registered — this plants the flag the batch
+ * checks, and the cancelled batch then reports itself through the channel and
+ * through the `cancelled` error the install promise rejects with. Asking with
+ * nothing running is a normal race, so the answer is data, not an error.
+ */
+export function cancelActiveInstall(): Promise<boolean> {
+  return invoke<boolean>('cancel_active_install');
+}
+
 // --- download history (F-152, F-153) ------------------------------------
 //
 // The queue is a channel and dies with the window; this is the part that

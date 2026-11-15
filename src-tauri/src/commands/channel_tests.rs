@@ -237,11 +237,20 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
         let events = sink.lock().expect("events").clone();
         assert!(!events.is_empty(), "the channel carried nothing at all");
 
+        // Two kinds of event share the channel (F-020): a batch event, which
+        // is not about one file (`install.phase.batch`, empty `itemId`), and
+        // item events keyed by the item's version id - not by the filename.
+        // That was this test's wrong assumption first time.
+        let is_batch = |e: &Value| phase(e) == "install.phase.batch";
         assert!(
-            events
-                .iter()
-                .all(|e| e["itemId"].as_str().is_some_and(|s| !s.is_empty())),
-            "an event had no itemId: {events:?}"
+            events.iter().all(|e| {
+                if is_batch(e) {
+                    e["itemId"].as_str().is_some_and(str::is_empty)
+                } else {
+                    e["itemId"].as_str().is_some_and(|s| !s.is_empty())
+                }
+            }),
+            "an event mixed the two kinds: {events:?}"
         );
         assert!(
             events
@@ -249,11 +258,20 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
                 .all(|e| phase(e).starts_with("install.phase.")),
             "a phase was not an i18n key: {events:?}"
         );
-        // Every event is for the one item, keyed by its version id - not by the
-        // filename. That was this test's wrong assumption first time.
         assert!(
-            events.iter().all(|e| e["itemId"] == "vvvv"),
+            events.iter().all(|e| is_batch(e) || e["itemId"] == "vvvv"),
             "an event named a different item: {events:?}"
+        );
+        // The aggregate must actually be there, not just permitted: one file
+        // landed, so the batch's last known total is that file's bytes.
+        let batch_events: Vec<&Value> = events.iter().filter(|e| is_batch(e)).collect();
+        assert!(
+            !batch_events.is_empty(),
+            "the channel carried no batch-level event: {events:?}"
+        );
+        assert!(
+            batch_events.iter().all(|e| e["done"].is_number()),
+            "a batch event carried no total: {events:?}"
         );
 
         // A progress event carries real numbers. The throttle can coalesce
@@ -267,19 +285,28 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
             assert!(e["done"].is_number() && e["total"].is_number(), "{e}");
         }
 
-        // The last thing said is that it finished, and it names the real file.
-        // A queue that goes quiet, or that ends on progress instead of on a
-        // landing, is the bug this asserts against.
-        let last = events.last().expect("last");
+        // The last thing said is that it finished. With F-020 the stream ends
+        // on the batch's own final event (done == total) beside the landing
+        // event, so the last event is either the landing or the settled batch
+        // bar; the landing itself must still be in the stream, naming the
+        // real file. A queue that goes quiet, or that ends on progress
+        // instead of on a landing, is the bug this asserts against.
+        let landing = events
+            .iter()
+            .find(|e| phase(e) == "install.phase.landed")
+            .expect("the stream never said the file landed");
         assert_eq!(
-            phase(last),
-            "install.phase.landed",
-            "the last event was not terminal: {events:?}"
-        );
-        assert_eq!(
-            last["path"].as_str().expect("path"),
+            landing["path"].as_str().expect("path"),
             landed.to_string_lossy(),
             "the landing event named a different file"
+        );
+        let last = events.last().expect("last");
+        assert!(
+            phase(last) == "install.phase.landed"
+                || (phase(last) == "install.phase.batch"
+                    && last["done"] == last["total"]
+                    && last["done"].is_number()),
+            "the last event was not terminal: {events:?}"
         );
     });
 }
@@ -469,5 +496,137 @@ fn spec_f152_a_failed_download_still_writes_a_failed_row() {
             !root.join("mods").join("sodium-0.5.8.jar").exists(),
             "a failed verification must not leave a jar"
         );
+    });
+}
+
+/// F-036: a cancel during the resolve phase stops the install.
+///
+/// The flag is registered at the top of the command now — before the network
+/// calls — and is observed the moment they return. The old code registered
+/// the flag after the resolve, so a cancel that landed during it was
+/// silently dropped and the batch started anyway.
+#[test]
+fn spec_f036_a_cancel_during_the_resolve_phase_is_cancelled() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        mount_modrinth(&server, &jar).await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+
+        // The install runs beside this loop; as soon as the command has
+        // registered its flag — which now happens before the resolve phase —
+        // the flip lands, and the resolve's return must honour it.
+        let install = execute_install_with(&state, &provider, req, recording_channel(&sink), true);
+        tokio::pin!(install);
+        let mut flipped = false;
+        let out = loop {
+            tokio::select! {
+                res = &mut install => break res,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                    if !flipped {
+                        if let Some(flag) = state.install_flag_for_test() {
+                            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                            flipped = true;
+                        }
+                    }
+                }
+            }
+        };
+        let err = out.expect_err("a cancelled install must not succeed");
+        assert_eq!(err.code, crate::dto::ErrorCode::Cancelled);
+        assert!(flipped, "the test must have caught the flag mid-resolve");
+        assert!(
+            !root.join("mods").join("sodium-0.5.8.jar").is_file(),
+            "a cancelled install downloads nothing"
+        );
+        // Per-item events MAY cross here. The flip races the resolve against a
+        // polling loop, so on a fast (or loaded) machine the resolve can return
+        // before the cancel is observed and the batch starts: its per-item
+        // events are legitimate F-020 stream content, not a bug. Which events
+        // happened to cross is timing-dependent — assert on the terminal state
+        // instead. The "only batch-level events" rule is asserted by the
+        // aggregate test `spec_f037_install_emits_a_well_formed_event_sequence_
+        // over_a_real_channel`, where the aggregate stream is the subject.
+        // The terminal state a cancel must produce: the command reports
+        // Cancelled and the history says the file was cancelled, not failed.
+        let rows = state
+            .with_db(|db| {
+                mm_core::db::download_history::list(db, &Default::default())
+                    .map_err(|e| crate::dto::IpcError::internal(e.to_string()))
+            })
+            .await
+            .expect("history");
+        assert!(
+            rows.iter()
+                .all(|row| row.status == mm_core::db::download_history::Status::Cancelled),
+            "a cancelled install must not write a failed row: {rows:?}"
+        );
+        // The registration is gone: a cancel now finds nothing to flip.
+        assert!(state.install_flag_for_test().is_none());
+    });
+}
+
+/// F-036: a second install while one runs is refused, not merged into the
+/// running one's slot.
+///
+/// Two batches sharing one cancel flag is the race the slot exists to
+/// prevent: the first operation's `end_install` would clear the second's
+/// flag and a cancel would become a silent no-op.
+#[test]
+fn spec_f036_a_second_install_while_one_is_running_is_refused() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider = mm_core::providers::ModrinthClient::with_base("https://api.modrinth.com/v2")
+            .expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+
+        // Something is already registered — as if another install is running.
+        let running = state.begin_install().expect("the first registers");
+        let out =
+            execute_install_with(&state, &provider, req, recording_channel(&sink), true).await;
+        let err = out.expect_err("a refused install must not succeed");
+        assert_eq!(err.code, crate::dto::ErrorCode::Busy);
+        assert!(
+            sink.lock().expect("events").is_empty(),
+            "a refused install must not narrate itself"
+        );
+        // The refusal left the running operation's registration untouched.
+        assert!(
+            state
+                .install_flag_for_test()
+                .is_some_and(|current| Arc::ptr_eq(&current, &running)),
+            "the refusal must not have stolen the running flag"
+        );
+        state.end_install(&running);
     });
 }

@@ -20,7 +20,7 @@ import {
 import { cn } from 'cn';
 import { ErrorState, LoadingState } from '../../components/state';
 import { formatBytes } from '../../lib/format';
-import { buildInstallPlan, executeInstall, toIpcError } from '../../lib/ipc';
+import { buildInstallPlan, cancelActiveInstall, executeInstall, toIpcError } from '../../lib/ipc';
 
 /** `install.phase.*` keys that are a file's final answer. */
 const SETTLED = new Set([
@@ -117,6 +117,11 @@ export function InstallPlanDialog({
   }, [open, project, instance, gameVersion, loader, attempt]);
 
   const onEvent = (event: InstallEventDto) => {
+    // F-020: the batch event is not about one file; this dialog's rows are
+    // per-entry, and the queue page owns the overall bar.
+    if (event.phase === 'install.phase.batch') {
+      return;
+    }
     setPhases((prev) => {
       const prior = prev[event.itemId];
       // The terminal event is the truth about a file; a late chunk must not
@@ -126,6 +131,11 @@ export function InstallPlanDialog({
       }
       return { ...prev, [event.itemId]: event };
     });
+  };
+
+  /** F-036: plants the flag; the batch stops itself between chunks. */
+  const cancelInstall = () => {
+    void cancelActiveInstall();
   };
 
   const confirm = () => {
@@ -146,7 +156,14 @@ export function InstallPlanDialog({
       onEvent,
     )
       .then(onInstalled)
-      .catch((e) => setError(toIpcError(e)))
+      .catch((e) => {
+        const err = toIpcError(e);
+        // F-036: the user's own stop is not an error to shout about — the
+        // row already says "cancelled" where it happened.
+        if (err.code !== 'cancelled') {
+          setError(err);
+        }
+      })
       .finally(() => setInstalling(false));
   };
 
@@ -250,8 +267,24 @@ export function InstallPlanDialog({
         </div>
 
         <DialogFooter className="shrink-0">
-          <Button type="button" variant="outline" onClick={onClose} disabled={installing}>
-            {t('state.action.cancel')}
+          {/* F-036: stopping the batch and closing the dialog are two
+              different actions, and they get two different buttons. While
+              the batch runs, closing is not even offered — it would hide
+              the only place that says what is happening while the batch
+              keeps writing to disk — so "cancel" here can only ever mean
+              "stop the install", never "close". */}
+          {installing && (
+            <Button type="button" variant="outline" onClick={cancelInstall}>
+              {t('state.action.cancel')}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={installing}
+          >
+            {t('state.action.close')}
           </Button>
           <Button
             type="button"

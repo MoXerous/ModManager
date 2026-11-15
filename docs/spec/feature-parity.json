@@ -56,16 +56,16 @@
     },
     {
       "id": "F-020",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\downloader\\batch.rs::execute_batch (lines 162-171: per-item emit, Started carries that file's done/total)",
-        "E:\\ModManager\\src-tauri\\src\\progress.rs::to_dto (per-item DTO only)",
-        "E:\\ModManager\\src\\app\\pages\\DownloadsPage.tsx (one card per item)"
+        "core/src/downloader/batch.rs::execute_batch",
+        "src-tauri/src/progress.rs::batch_to_dto",
+        "src/app/pages/DownloadsPage.tsx::BatchBar"
       ],
-      "test": "spec_f063_batch_lands_files_and_completes_the_journal_operation (core/src/downloader/batch_tests.rs)",
-      "note": "The Started{done,total} fields initially looked batch-level but are the individual file's byte progress, so the claim stands.",
-      "gap": "No aggregated batch progress: ItemProgress::Started{done,total} is per-file byte progress (p.done/p.total from DownloadProgress), every event is keyed by item_id, and grep for total_bytes/overall/aggregate/sum across core, src-tauri and src finds no batch-level downloaded/total or active/task counts. The old worker emitted one overall bar for the whole batch.",
-      "review": "verified:confirmed"
+      "test": "spec_f020_batch_progress_totals_cover_all_items",
+      "note": "مغلق: شريطٌ مجمَّعٌ للدفعة على القناة نفسها (حدثٌ مستقلّ per-item يبقى سليمًا)، بمجموعٍ علويٍّ لا يرجع للخلف عند إعادة البدء، وإشارةِ ختاميةٍ صريحةٍ تصل حتى على مسارَي الخطأ والإلغاء، وواجهةٌ تمسح الشريط عند الفشل.",
+      "gap": null,
+      "review": "fixed-f036-f020: reviewed, adversarially challenged, six findings fixed"
     },
     {
       "id": "F-022",
@@ -110,16 +110,19 @@
     },
     {
       "id": "F-036",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\dto.rs::ErrorCode (lines 56-87: no Cancelled variant)",
-        "E:\\ModManager\\src-tauri\\src\\commands.rs::execute_install_with (line 976: AtomicBool::new(false) never shared; line 1054: IpcError::io(e.to_string()))",
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no cancel command)"
+        "core/src/downloader/batch.rs::execute_batch",
+        "core/src/downloader/client.rs::download",
+        "src-tauri/src/commands.rs::execute_install_with",
+        "src-tauri/src/commands.rs::install_batch_error",
+        "src-tauri/src/state.rs::begin_install",
+        "src-tauri/src/dto.rs::ErrorCode::Cancelled"
       ],
-      "test": "spec_f063_cancelling_before_the_first_byte_is_terminal_and_cancelled (core/src/downloader/batch_tests.rs)",
-      "note": "Verified end-to-end: the UI literally cannot trigger or distinguish a cancellation today.",
-      "gap": "Cancelled is a terminal state inside core (journal states, ItemProgress::Cancelled, history row 'cancelled'), but L-3's IpcError rule is absent: ErrorCode has no cancelled variant, execute_install_with maps every BatchError (including Cancelled) to IpcError::io, and the cancel AtomicBool is created at line 976 and never flipped — no IPC cancel command exists anywhere in src-tauri or src/lib/ipc.ts.",
-      "review": "verified:confirmed"
+      "test": "spec_f036_cancelling_mid_download_is_cancelled_not_failed",
+      "note": "مغلق: الإلغاءُ حالةٌ ختاميةٌ مستقلّة برمز IPC خاصّ (لا io)، وأمرُ IPC حقيقيٌّ يقلبُ علمًا لهويةٍ (لا تُسرَق خانةُ عمليةٍ أخرى)، والعَلَمُ يُلاحَظ أثناء طورِ الحلّ وفي نومِ إعادة المحاولة، وسجلُّ التاريخ يفرّق الإلغاءَ عن الفشل، والواجهةُ تعرض زرَّ إلغاءٍ وترجمةً لكلا الرمزين.",
+      "gap": null,
+      "review": "fixed-f036-f020: reviewed, adversarially challenged, six findings fixed"
     },
     {
       "id": "F-038",

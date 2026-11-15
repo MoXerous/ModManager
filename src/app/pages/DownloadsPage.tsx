@@ -8,6 +8,7 @@ import type { IpcError } from '../../bindings/IpcError';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState } from '../../components/state';
 import {
+  cancelActiveInstall,
   clearDownloadHistory,
   type DownloadHistoryStatus,
   executeInstall,
@@ -59,6 +60,9 @@ export function DownloadsPage() {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<Tab>(() => takeDownloadsTab() ?? 'live');
   const [rows, setRows] = useState<Row[]>([]);
+  // F-020: the batch's own event, so the queue shows ONE overall bar beside
+  // the per-file cards. `null` until the first batch event arrives.
+  const [batch, setBatch] = useState<InstallEventDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState('');
@@ -79,6 +83,13 @@ export function DownloadsPage() {
   const readId = useRef(0);
 
   const onEvent = useCallback((e: InstallEventDto) => {
+    // F-020: the batch event is not about one file — empty `itemId` and the
+    // batch phase key are the contract — so it feeds the overall bar, never
+    // the per-file cards.
+    if (e.phase === 'install.phase.batch') {
+      setBatch(e);
+      return;
+    }
     setRows((prev) => {
       const existing = prev.find((r) => r.itemId === e.itemId);
       // A terminal row is the truth about that file. A later stray progress
@@ -120,10 +131,27 @@ export function DownloadsPage() {
     setBusy(true);
     setError(null);
     setRows([]);
+    setBatch(null);
     executeInstall(req, onEvent)
-      .catch((e) => setError(toIpcError(e)))
+      .catch((e) => {
+        const err = toIpcError(e);
+        // F-036: a stop the user asked for is not an error to shout about —
+        // the rows already say "cancelled" where it happened.
+        if (err.code !== 'cancelled') {
+          setError(err);
+        }
+        // F-020: the run is over, so the overall bar goes with it. A batch
+        // that stopped early must not leave the aggregate bar frozen at its
+        // last crossing — the queue's rows carry what did happen.
+        setBatch(null);
+      })
       .finally(() => setBusy(false));
   }, [gameVersion, loader, provider, target, projects, onEvent]);
+
+  /** F-036: plants the flag; the batch stops itself between chunks. */
+  const cancelInstall = useCallback(() => {
+    void cancelActiveInstall();
+  }, []);
 
   /** Reads the log for the open tab. The tab is the filter; the field is the text. */
   const loadHistory = useCallback((status: DownloadHistoryStatus | undefined, term: string) => {
@@ -209,6 +237,13 @@ export function DownloadsPage() {
           <Button type="button" onClick={start} disabled={busy || !hasVersion}>
             {t('install.start')}
           </Button>
+          {/* F-036: visible only while a batch is in flight; the flag is what
+              the running install reads, and the run reports its own stop. */}
+          {busy && (
+            <Button type="button" variant="outline" onClick={cancelInstall}>
+              {t('state.action.cancel')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -217,6 +252,9 @@ export function DownloadsPage() {
           <ErrorState error={error} />
         </div>
       )}
+
+      {/* F-020: one bar for the whole batch, fed by the batch's own event. */}
+      {batch && <BatchBar event={batch} />}
 
       <div className="grid grid-cols-1 gap-3 px-5 pb-5 pt-4 sm:grid-cols-2 lg:grid-cols-3">
         {rows.map((r) => {
@@ -497,3 +535,46 @@ const TERMINAL = new Set([
   'install.phase.cancelled',
 ]);
 const terminal = (phase: string) => TERMINAL.has(phase);
+
+/**
+ * F-020: the one bar for the whole batch.
+ *
+ * `total` is `null` when any file's size was unknown, and a bar that guesses
+ * is a lie — the same rule the per-file cards follow. The numbers cross as
+ * bigint, so `Number()` is exact only because byte counts stay far below it.
+ */
+function BatchBar({ event }: { event: InstallEventDto }) {
+  const { t } = useTranslation();
+  const done = event.done === null ? null : Number(event.done);
+  const total = event.total === null ? null : Number(event.total);
+  const pct =
+    total !== null && total > 0 && done !== null ? Math.min(100, (done / total) * 100) : null;
+  return (
+    <div className="px-5 pt-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-caption text-muted-foreground">{t(event.phase)}</span>
+        {total !== null && done !== null && (
+          <span dir="ltr" className="font-mono text-caption text-muted-foreground">
+            {formatBytes(done)} / {formatBytes(total)}
+          </span>
+        )}
+      </div>
+      <div
+        role="progressbar"
+        aria-label={t(event.phase)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct ?? undefined}
+        className="mt-1 h-1.5 overflow-hidden rounded-chip bg-surface-sunken"
+      >
+        <div
+          className="h-full bg-primary"
+          style={{
+            width: pct === null ? '0%' : `${pct}%`,
+            transition: 'width 120ms linear',
+          }}
+        />
+      </div>
+    </div>
+  );
+}

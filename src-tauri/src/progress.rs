@@ -95,6 +95,24 @@ pub fn to_dto(item_id: &str, p: &ItemProgress) -> InstallEventDto {
     }
 }
 
+/// F-020: the batch's own event, beside the per-item stream.
+///
+/// `item_id` is empty on purpose: this event is not about one file, and the
+/// phase key is what the UI branches on. `done`/`total` are the batch totals;
+/// `total` is `None` when any item's size was unknown.
+pub const BATCH_PHASE: &str = "install.phase.batch";
+
+pub fn batch_to_dto(p: &mm_core::downloader::BatchProgress) -> InstallEventDto {
+    InstallEventDto {
+        item_id: String::new(),
+        phase: BATCH_PHASE.to_string(),
+        done: Some(p.done),
+        total: p.total,
+        path: None,
+        message: None,
+    }
+}
+
 /// Whether a modpack phase ends the run.
 ///
 /// The throttle must never hold one of these back: `DONE` and `FAILED` are how
@@ -202,6 +220,72 @@ mod tests {
                 d.phase
             );
         }
+    }
+
+    /// F-020: the batch's own event is a key like every other phase, and it
+    /// carries the batch totals — not one file's bytes.
+    #[test]
+    fn spec_f020_the_batch_event_is_a_key_and_carries_the_batch_totals() {
+        let dto = batch_to_dto(&mm_core::downloader::BatchProgress {
+            done: 5,
+            total: Some(10),
+            terminal: false,
+        });
+        assert_eq!(dto.phase, "install.phase.batch");
+        assert!(dto.phase.starts_with("install.phase."), "not a key");
+        assert_eq!(dto.done, Some(5));
+        assert_eq!(dto.total, Some(10));
+        // Not about one file: the empty item id is the UI's cue to leave the
+        // per-item rows alone.
+        assert_eq!(dto.item_id, "");
+        assert_eq!(dto.path, None);
+        assert_eq!(dto.message, None);
+        // An unknown total stays unknown; a bar that guesses would be a lie.
+        let unknown = batch_to_dto(&mm_core::downloader::BatchProgress {
+            done: 5,
+            total: None,
+            terminal: false,
+        });
+        assert_eq!(unknown.total, None);
+    }
+
+    /// F-020: the terminal batch event is EXPLICIT (`terminal` field), not
+    /// inferred from `done == total` — which never holds for an unknown
+    /// total — so the throttle can let it through and the bar can always
+    /// learn the batch ended, on success, failure and cancel alike.
+    #[test]
+    fn spec_f020_the_terminal_batch_event_is_a_field_not_an_inference() {
+        let mut t = ProgressThrottle::new();
+        let now = Instant::now();
+        // A progress event well inside the interval, then the terminal one:
+        // the terminal event must cross even then.
+        assert!(t.allows(
+            mm_core::downloader::BatchProgress {
+                done: 5,
+                total: None,
+                terminal: false,
+            }
+            .terminal,
+            now
+        ));
+        assert!(!t.allows(
+            mm_core::downloader::BatchProgress {
+                done: 6,
+                total: None,
+                terminal: false,
+            }
+            .terminal,
+            now + Duration::from_millis(10)
+        ));
+        assert!(t.allows(
+            mm_core::downloader::BatchProgress {
+                done: 7,
+                total: None,
+                terminal: true,
+            }
+            .terminal,
+            now + Duration::from_millis(20)
+        ));
     }
 
     /// The modpack channel reuses this throttle, so the properties that matter

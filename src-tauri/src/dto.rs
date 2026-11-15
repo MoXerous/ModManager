@@ -89,6 +89,15 @@ pub enum ErrorCode {
     LinkOrReparse,
     /// مخطط القفل أحدث من المدعوم (§5.10) — لا تُعرض قائمة فارغة.
     NewerSchema,
+    /// F-036: the user cancelled the operation. Not an IO failure and not a
+    /// failure at all: the batch stopped by request, the files that already
+    /// landed stay landed, and the in-flight file keeps its `.part` so a
+    /// retry resumes rather than restarting.
+    Cancelled,
+    /// F-036: an install was started while another one is still registered.
+    /// Refused on purpose — two batches sharing one cancel flag would break
+    /// both — and the UI tells the user to wait for, or stop, the running one.
+    Busy,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -794,6 +803,10 @@ pub struct InstallRequest {
 /// `phase` is an i18n key rather than a word, so core decides what is true and
 /// the UI decides how to say it. `Option` without `skip_serializing_if` is
 /// required-nullable in this house convention (ADR 0002).
+///
+/// F-020: `phase = "install.phase.batch"` marks the batch's own event, with
+/// the batch totals in `done`/`total` and an empty `item_id` — not one file's
+/// progress, and the per-item rows must not consume it.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

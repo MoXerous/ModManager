@@ -19,19 +19,19 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 89 | 89 |
+| مُختبَر بمعرّف المواصفة | 91 | 91 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
 | إشارة في الوثائق فقط | 1 | 1 |
-| بلا أثر | 53 | 53 |
+| بلا أثر | 51 | 51 |
 
-**89 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **54** بلا أثرٍ قابلٍ للتتبّع.
+**91 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **52** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
-| M1 | 72 | 57 | 3 | 12 |
+| M1 | 72 | 59 | 3 | 10 |
 | M2 | 38 | 12 | 2 | 24 |
 | M3 | 41 | 19 | 4 | 18 |
 | later | 1 | 1 | 0 | 0 |
@@ -46,11 +46,9 @@
 | **F-006** | تحميل بالهاش | providers | M1 |
 | **F-009** | **قاعدة السنة الدوّارة** | providers | M1 |
 | **F-015** | حالة `downloadUrl: null` عند CurseForge | providers | M3 |
-| **F-020** | تنزيل جماعي بتقدّم مجمَّع | downloads | M1 |
 | **F-022** | التحقق SHA-1 + SHA-512 | downloads | M1 |
 | **F-025** | الاستئناف عبر `Range` | downloads | M1 |
 | **F-029** | التحقق من كل وجهة إعادة توجيه | downloads | M1 |
-| **F-036** | **الإلغاء حالة مستقلة لا نجاح** | downloads | M1 |
 | **F-040** | صفحة التنزيلات (3 تبويبات) | downloads | M2 |
 | **F-075** | **نشر ذرّي بلا استبدال** | modpacks | M3 |
 | **F-077** | التراجع **يرفض بلا إيصال مطابق** | modpacks | M3 |
@@ -126,7 +124,7 @@
 
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
-| **F-020** | تنزيل جماعي بتقدّم مجمَّع | Keep | M1 | بلا أثر | — |
+| **F-020** | تنزيل جماعي بتقدّم مجمَّع | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/batch_tests.rs، src-tauri/src/progress.rs · كود: core/src/downloader/batch.rs، src-tauri/src/commands.rs (+5) · اختبار (ذكر): core/src/downloader/batch_tests.rs، src-tauri/src/commands/channel_tests.rs |
 | **F-021** | ملف `.part` ثم إعادة تسمية ذرّية | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs، core/src/safety/atomic.rs · كود: core/src/safety/atomic.rs |
 | **F-022** | التحقق SHA-1 + SHA-512 | Keep | M1 | بلا أثر | — |
 | **F-023** | فحص المساحة قبل الطلب | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs |
@@ -142,8 +140,8 @@
 | **F-033** | **عدم الكتابة فوق ملف مستخدم** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs |
 | **F-034** | حذف `.part` عند فشل التحقق | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/safety/atomic.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
 | **F-035** | الإيقاف المؤقت / الاستئناف / الإلغاء | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
-| **F-036** | **الإلغاء حالة مستقلة لا نجاح** | Keep | M1 | بلا أثر | — |
-| **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/channel_tests.rs (+1) |
+| **F-036** | **الإلغاء حالة مستقلة لا نجاح** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/batch_tests.rs، core/src/downloader/client.rs (+4) · كود: core/src/downloader/batch.rs، core/src/downloader/client.rs (+6) · اختبار (ذكر): core/src/downloader/batch_tests.rs، src-tauri/src/commands/channel_tests.rs (+2) |
+| **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/channel_tests.rs (+1) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs |
 | **F-038** | حارس سباق الروابط الرمزية | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs، core/src/safety/atomic.rs (+1) · كود: core/src/downloader/client.rs، core/src/modpack/exec.rs (+5) |
 | **F-039** | التنزيل بالتوازي | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/downloader/mod.rs (+1) |
 | **F-040** | صفحة التنزيلات (3 تبويبات) | Keep | M2 | بلا أثر | — |

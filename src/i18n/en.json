@@ -72,6 +72,8 @@
   "error.io": "A file or network operation failed.",
   "error.linkOrReparse": "A link or junction was found where the file would be written. Remove it, or choose a different folder, and try again.",
   "error.newerSchema": "This data was written by a newer version of the app.",
+  "error.cancelled": "The install was stopped by your request. Files that already landed stay in place.",
+  "error.busy": "Another install is already running. Wait for it to finish, or stop it first.",
 
   "page.instances.emptyTitle": "No instances yet",
   "page.instances.emptyBody": "Create an instance or link an existing folder.",
@@ -245,6 +247,7 @@
   "install.phase.skipped": "Already present",
   "install.phase.failed": "Failed",
   "install.phase.cancelled": "Cancelled",
+  "install.phase.batch": "Overall progress",
   "install.start": "Install",
   "install.installed": "{{count}} installed",
   "install.installed_one": "{{count}} installed",
