@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use crate::dto::{
     AppInfo, AppPathsDto, CheckUpdatesRequest, CreateInstancePlanDto, CreateInstanceRequest,
@@ -885,6 +886,20 @@ pub async fn execute_install_with(
     use mm_core::downloader::{BatchItem, Downloader};
     use mm_core::resolver::resolve_and_plan;
 
+    // F-036: the flag is registered BEFORE anything else — including the
+    // resolve phase — so a cancel that lands while the network calls are in
+    // flight is observed the moment they return. A flag registered after the
+    // resolve would stop nothing: the cancel would come and go before
+    // anything polls it. A second install while one runs is refused, never
+    // merged into the running slot.
+    let cancel = state
+        .begin_install()
+        .map_err(|e| IpcError::new(ErrorCode::Busy, e))?;
+    // Every exit below drops the registration by construction: the resolve
+    // phase can fail through plain `?` long before the batch starts, and a
+    // guard makes each of those returns clean up anyway.
+    let _guard = crate::state::InstallGuard::new(state, cancel.clone());
+
     if req.projects.is_empty() {
         return Err(IpcError::invalid_input("no projects given"));
     }
@@ -925,6 +940,16 @@ pub async fn execute_install_with(
     )
     .await
     .map_err(|e| IpcError::from_resolve(&e))?;
+
+    // F-036: the resolve phase cannot poll the flag itself, so the flip is
+    // observed the moment the network calls return — a cancel during resolve
+    // stops here instead of starting a batch nobody asked for.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(IpcError::new(
+            ErrorCode::Cancelled,
+            "cancelled during the resolve phase",
+        ));
+    }
 
     // Entries carry the identity; `versions` carries the file. An entry with no
     // downloadable file is skipped rather than guessed at.
@@ -987,10 +1012,10 @@ pub async fn execute_install_with(
     }
     std::fs::create_dir_all(&target).map_err(IpcError::io)?;
     let downloader = Downloader::new(3).map_err(|e| IpcError::internal(e.to_string()))?;
-    // F-036: the flag is registered on the state so `cancel_active_install`
-    // can flip it while this batch is in flight; it is dropped again when the
-    // batch settles.
-    let cancel = state.begin_install();
+    // F-036: the flag was registered at the top of this function, before the
+    // resolve phase, so `cancel_active_install` can flip it from the very
+    // first network call on. The `_guard` above drops it on every exit; this
+    // explicit end narrows the window to the batch's own tail.
     let journal = state.journal_handle();
     let mut throttle = crate::progress::ProgressThrottle::new();
     let mut installed: Vec<String> = Vec::new();
@@ -1050,13 +1075,13 @@ pub async fn execute_install_with(
             let _ = on_event.send(dto);
         };
         // F-020: the batch's own bar, beside the per-item stream. Its own
-        // throttle, because the two streams must not starve each other: a
-        // terminal batch event (every known byte done) is never held back,
-        // or the overall bar would stop short of where the batch ended.
+        // throttle, because the two streams must not starve each other: the
+        // terminal batch event is explicit now (F-020's `terminal` field),
+        // and it is never held back — a swallowed final event would leave the
+        // bar short of where the batch ended, or frozen on a cancel.
         let mut batch_throttle = crate::progress::ProgressThrottle::new();
         let mut batch_emit = |p: mm_core::downloader::BatchProgress| {
-            let terminal = p.total == Some(p.done);
-            if !batch_throttle.allows(terminal, std::time::Instant::now()) {
+            if !batch_throttle.allows(p.terminal, std::time::Instant::now()) {
                 return;
             }
             let _ = on_event.send(crate::progress::batch_to_dto(&p));
@@ -1066,12 +1091,12 @@ pub async fn execute_install_with(
             &mut write,
             &target,
             &items,
-            cancel,
+            cancel.clone(),
             &mut emit,
             &mut batch_emit,
         )
         .await;
-        state.end_install();
+        state.end_install(&cancel);
 
         // The log is written even when the batch stopped early: a failure is
         // the row a user is most likely to look for. If the write itself fails

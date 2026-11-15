@@ -229,6 +229,7 @@ mod tests {
         let dto = batch_to_dto(&mm_core::downloader::BatchProgress {
             done: 5,
             total: Some(10),
+            terminal: false,
         });
         assert_eq!(dto.phase, "install.phase.batch");
         assert!(dto.phase.starts_with("install.phase."), "not a key");
@@ -243,8 +244,48 @@ mod tests {
         let unknown = batch_to_dto(&mm_core::downloader::BatchProgress {
             done: 5,
             total: None,
+            terminal: false,
         });
         assert_eq!(unknown.total, None);
+    }
+
+    /// F-020: the terminal batch event is EXPLICIT (`terminal` field), not
+    /// inferred from `done == total` — which never holds for an unknown
+    /// total — so the throttle can let it through and the bar can always
+    /// learn the batch ended, on success, failure and cancel alike.
+    #[test]
+    fn spec_f020_the_terminal_batch_event_is_a_field_not_an_inference() {
+        let mut t = ProgressThrottle::new();
+        let now = Instant::now();
+        // A progress event well inside the interval, then the terminal one:
+        // the terminal event must cross even then.
+        assert!(t.allows(
+            mm_core::downloader::BatchProgress {
+                done: 5,
+                total: None,
+                terminal: false,
+            }
+            .terminal,
+            now
+        ));
+        assert!(!t.allows(
+            mm_core::downloader::BatchProgress {
+                done: 6,
+                total: None,
+                terminal: false,
+            }
+            .terminal,
+            now + Duration::from_millis(10)
+        ));
+        assert!(t.allows(
+            mm_core::downloader::BatchProgress {
+                done: 7,
+                total: None,
+                terminal: true,
+            }
+            .terminal,
+            now + Duration::from_millis(20)
+        ));
     }
 
     /// The modpack channel reuses this throttle, so the properties that matter

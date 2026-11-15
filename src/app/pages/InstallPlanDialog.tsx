@@ -267,16 +267,24 @@ export function InstallPlanDialog({
         </div>
 
         <DialogFooter className="shrink-0">
-          {/* F-036: while a batch is in flight this button cancels the install
-              instead of closing the dialog — closing would hide the only
-              place that says what is happening, and the batch would keep
-              writing to disk with nothing on screen about it. */}
+          {/* F-036: stopping the batch and closing the dialog are two
+              different actions, and they get two different buttons. While
+              the batch runs, closing is not even offered — it would hide
+              the only place that says what is happening while the batch
+              keeps writing to disk — so "cancel" here can only ever mean
+              "stop the install", never "close". */}
+          {installing && (
+            <Button type="button" variant="outline" onClick={cancelInstall}>
+              {t('state.action.cancel')}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
-            onClick={installing ? cancelInstall : onClose}
+            onClick={onClose}
+            disabled={installing}
           >
-            {t('state.action.cancel')}
+            {t('state.action.close')}
           </Button>
           <Button
             type="button"

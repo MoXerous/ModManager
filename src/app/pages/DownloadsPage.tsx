@@ -140,6 +140,10 @@ export function DownloadsPage() {
         if (err.code !== 'cancelled') {
           setError(err);
         }
+        // F-020: the run is over, so the overall bar goes with it. A batch
+        // that stopped early must not leave the aggregate bar frozen at its
+        // last crossing — the queue's rows carry what did happen.
+        setBatch(null);
       })
       .finally(() => setBusy(false));
   }, [gameVersion, loader, provider, target, projects, onEvent]);

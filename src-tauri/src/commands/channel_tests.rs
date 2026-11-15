@@ -498,3 +498,120 @@ fn spec_f152_a_failed_download_still_writes_a_failed_row() {
         );
     });
 }
+
+/// F-036: a cancel during the resolve phase stops the install.
+///
+/// The flag is registered at the top of the command now — before the network
+/// calls — and is observed the moment they return. The old code registered
+/// the flag after the resolve, so a cancel that landed during it was
+/// silently dropped and the batch started anyway.
+#[test]
+fn spec_f036_a_cancel_during_the_resolve_phase_is_cancelled() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        mount_modrinth(&server, &jar).await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+
+        // The install runs beside this loop; as soon as the command has
+        // registered its flag — which now happens before the resolve phase —
+        // the flip lands, and the resolve's return must honour it.
+        let install = execute_install_with(&state, &provider, req, recording_channel(&sink), true);
+        tokio::pin!(install);
+        let mut flipped = false;
+        let out = loop {
+            tokio::select! {
+                res = &mut install => break res,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                    if !flipped {
+                        if let Some(flag) = state.install_flag_for_test() {
+                            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                            flipped = true;
+                        }
+                    }
+                }
+            }
+        };
+        let err = out.expect_err("a cancelled install must not succeed");
+        assert_eq!(err.code, crate::dto::ErrorCode::Cancelled);
+        assert!(flipped, "the test must have caught the flag mid-resolve");
+        assert!(
+            !root.join("mods").join("sodium-0.5.8.jar").is_file(),
+            "a cancelled install downloads nothing"
+        );
+        assert!(
+            sink.lock()
+                .expect("events")
+                .iter()
+                .all(|e| { e["itemId"].as_str().is_some_and(str::is_empty) }),
+            "only batch-level events may cross: {sink:?}"
+        );
+        // The registration is gone: a cancel now finds nothing to flip.
+        assert!(state.install_flag_for_test().is_none());
+    });
+}
+
+/// F-036: a second install while one runs is refused, not merged into the
+/// running one's slot.
+///
+/// Two batches sharing one cancel flag is the race the slot exists to
+/// prevent: the first operation's `end_install` would clear the second's
+/// flag and a cancel would become a silent no-op.
+#[test]
+fn spec_f036_a_second_install_while_one_is_running_is_refused() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider = mm_core::providers::ModrinthClient::with_base("https://api.modrinth.com/v2")
+            .expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+
+        // Something is already registered — as if another install is running.
+        let running = state.begin_install().expect("the first registers");
+        let out =
+            execute_install_with(&state, &provider, req, recording_channel(&sink), true).await;
+        let err = out.expect_err("a refused install must not succeed");
+        assert_eq!(err.code, crate::dto::ErrorCode::Busy);
+        assert!(
+            sink.lock().expect("events").is_empty(),
+            "a refused install must not narrate itself"
+        );
+        // The refusal left the running operation's registration untouched.
+        assert!(
+            state
+                .install_flag_for_test()
+                .is_some_and(|current| Arc::ptr_eq(&current, &running)),
+            "the refusal must not have stolen the running flag"
+        );
+        state.end_install(&running);
+    });
+}

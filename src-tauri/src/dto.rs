@@ -94,6 +94,10 @@ pub enum ErrorCode {
     /// landed stay landed, and the in-flight file keeps its `.part` so a
     /// retry resumes rather than restarting.
     Cancelled,
+    /// F-036: an install was started while another one is still registered.
+    /// Refused on purpose — two batches sharing one cancel flag would break
+    /// both — and the UI tells the user to wait for, or stop, the running one.
+    Busy,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

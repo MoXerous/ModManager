@@ -204,7 +204,18 @@ impl Downloader {
                 Ok(o) => return Ok(o),
                 Err(e) if e.retryable() && attempt < self.policy.max_attempts => {
                     let wait = retry::retry_delay_secs(attempt, &e.retry_headers(), &self.policy);
+                    // F-036: a long `Retry-After` is exactly when a user
+                    // cancels. The backoff sleep must observe the flag on
+                    // both sides of it, and answer the same cancelled STATUS
+                    // a mid-stream cancel does: the `.part` stays for a
+                    // resume, and cancel is never an error (spec §12).
+                    if is_paused() {
+                        return Ok(cancelled_outcome(&req));
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
+                    if is_paused() {
+                        return Ok(cancelled_outcome(&req));
+                    }
                 }
                 Err(e) => return Err(e),
             }
@@ -885,6 +896,16 @@ fn io_err(op: &'static str, path: &Path, source: std::io::Error) -> DownloadErro
     }
 }
 
+/// F-036: cancel during the retry backoff is the same terminal STATUS a
+/// mid-stream cancel is: the `.part` (if any) stays for a resume, and the
+/// caller reports a cancelled batch, not a failed one.
+fn cancelled_outcome(req: &DownloadRequest) -> DownloadOutcome {
+    DownloadOutcome {
+        status: DownloadStatus::Cancelled,
+        path: atomic::part_path(&req.dest),
+    }
+}
+
 /// Delete the `.part` if present, but always report the ORIGINAL error:
 /// a locked-file cleanup failure must not mask the verification failure.
 fn remove_part_quiet(part: &Path, original: DownloadError) -> DownloadError {
@@ -1078,6 +1099,66 @@ mod tests {
         assert_eq!(out.status, DownloadStatus::Success);
         assert!(t0.elapsed() >= std::time::Duration::from_secs(1));
         assert_eq!(server.received_requests().await.expect("count").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn spec_f036_cancel_during_the_retry_backoff_is_a_cancelled_status() {
+        // The flag flips while the backoff sleep is running: the poll AFTER
+        // the sleep must end the download, not the retry after it.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rb.bin"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "30"))
+            .mount(&server)
+            .await;
+        // A short cap on the delay keeps the test fast; the Retry-After of 30
+        // is clamped to it, and the point is the poll around the sleep.
+        let policy = retry::RetryPolicy {
+            max_attempts: 2,
+            base_secs: 0.05,
+            max_secs: 0.1,
+        };
+        let dl = Downloader::with_policy(2, policy).expect("client");
+        let (_dir, r) = setup(&server, "rb.bin");
+        let dest = r.dest.clone();
+        static POLLS: AtomicUsize = AtomicUsize::new(0);
+        // First poll (before the sleep): still going. Every later poll
+        // (after the sleep): cancelled.
+        let paused = || POLLS.fetch_add(1, Ordering::SeqCst) >= 1;
+        let out = dl
+            .download(&r, &mut go, &paused)
+            .await
+            .expect("cancel is a status");
+        assert_eq!(out.status, DownloadStatus::Cancelled);
+        // The retry never happened: the backoff poll caught the flip.
+        assert_eq!(server.received_requests().await.expect("count").len(), 1);
+        assert!(!dest.exists(), "nothing committed after a cancel");
+    }
+
+    #[tokio::test]
+    async fn spec_f036_a_flag_set_before_the_backoff_poll_cancels_immediately() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rc.bin"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "30"))
+            .mount(&server)
+            .await;
+        let policy = retry::RetryPolicy {
+            max_attempts: 2,
+            ..Default::default()
+        };
+        let dl = Downloader::with_policy(2, policy).expect("client");
+        let (_dir, r) = setup(&server, "rc.bin");
+        let paused = || true;
+        let out = dl
+            .download(&r, &mut go, &paused)
+            .await
+            .expect("cancel is a status");
+        assert_eq!(out.status, DownloadStatus::Cancelled);
+        // One failed attempt, then the pre-sleep poll ends it: no second
+        // request, and no backoff sleep at all.
+        assert_eq!(server.received_requests().await.expect("count").len(), 1);
     }
 
     #[tokio::test]
