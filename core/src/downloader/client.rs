@@ -1383,6 +1383,10 @@ mod tests {
     /// Where bytes written through a planted link would land.
     enum Landed {
         File(PathBuf),
+        // Only the Windows branch of `plant_link` can produce it (the NTFS
+        // junction fallback); on Unix the variant is never constructed, and an
+        // unused variant is a `dead_code` error under `-D warnings` in CI.
+        #[allow(dead_code)]
         Dir(PathBuf),
     }
 
