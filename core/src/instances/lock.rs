@@ -32,6 +32,16 @@ pub struct LockEntry {
     /// value reads as empty, which every consumer already handles for `sha1`.
     #[serde(default)]
     pub sha512: String,
+    /// The Minecraft versions the *provider* declared for this version when it
+    /// was installed (Modrinth `game_versions`). Recorded because it is
+    /// evidence no scan can recover later without a network call: the jar may
+    /// declare a range, or nothing at all, and the catalogue's answer is what
+    /// settles whether the file belongs in this instance (F-097).
+    ///
+    /// `default` again: a lock written before this field existed reads as
+    /// "nothing recorded", and the scan falls back to the jar's own metadata.
+    #[serde(default)]
+    pub game_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

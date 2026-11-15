@@ -429,8 +429,8 @@ pub struct LocalFactDto {
     pub duplicate_keys: Vec<DuplicateKeyDto>,
     /// Compatibility axis: `compatible` | `incompatible` | `unknown`.
     pub compatibility: String,
-    /// Why: `noTarget` | `unproven` | `gameVersion` | `loader`; `null` when
-    /// the file is compatible.
+    /// Why: `noTarget` | `unproven` | `range` | `gameVersion` | `loader`;
+    /// `null` when the file is compatible.
     pub compatibility_reason: Option<String>,
     /// The game version or loader the reason names.
     pub compatibility_target: Option<String>,

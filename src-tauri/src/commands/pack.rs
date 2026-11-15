@@ -724,6 +724,10 @@ fn downloaded_records(
                 file_name: file_name_of(&w.safe_path),
                 sha1: String::new(),
                 sha512,
+                // A pack index declares the pack's target, not a per-file
+                // version: there is nothing truthful to record here, and no
+                // scan will invent one (F-097).
+                game_versions: Vec::new(),
             })
         })
         .collect()

@@ -334,6 +334,7 @@ fn spec_f111_disabled_file_keeps_lock_ownership() {
         filename: name.to_string(),
         sha1: "00".to_string(),
         sha512: "ff".to_string(),
+        game_versions: Vec::new(),
     };
 
     assert!(lock_entry_for_name(&[entry("a.jar")], "a.jar").is_some());
@@ -364,6 +365,7 @@ fn spec_f111_remove_candidates_mark_only_unlocked_files_external() {
                 filename: "known.jar".to_string(),
                 sha1: String::new(),
                 sha512: String::new(),
+                game_versions: Vec::new(),
             }],
         },
     )
@@ -572,6 +574,7 @@ fn spec_f097_scan_snapshot_carries_the_axes_the_class_and_the_warnings() {
                 // the install that wrote the record.
                 sha1: "0000000000000000000000000000000000000000".to_string(),
                 sha512: String::new(),
+                game_versions: Vec::new(),
             }],
         },
     )

@@ -43,8 +43,8 @@ duplicateKeys: Array<DuplicateKeyDto>,
  */
 compatibility: string, 
 /**
- * Why: `noTarget` | `unproven` | `gameVersion` | `loader`; `null` when
- * the file is compatible.
+ * Why: `noTarget` | `unproven` | `range` | `gameVersion` | `loader`;
+ * `null` when the file is compatible.
  */
 compatibilityReason: string | null, 
 /**

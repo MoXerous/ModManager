@@ -45,8 +45,14 @@ pub struct LocalContentFact {
     pub project_id: String,
     pub version_id: String,
     /// What the archive itself declares (`fabric.mod.json` and friends): the
-    /// only local evidence the compatibility axis has (F-097).
+    /// fallback evidence for the compatibility axis (F-097).
     pub game_versions: Vec<String>,
+    /// The provider's declared game versions, recorded in the lock when the
+    /// file was installed. Preferred over the archive's own declaration,
+    /// because it is what the catalogue promised and no scan can recover it
+    /// offline. Empty for a file with no managed record and for a lock written
+    /// before this evidence was captured (F-097).
+    pub recorded_game_versions: Vec<String>,
     pub loaders: Vec<Loader>,
     /// Ownership axis: managed (and how it was proven) or external/unknown.
     pub ownership: Ownership,
@@ -83,6 +89,7 @@ impl LocalContentFact {
             project_id: String::new(),
             version_id: String::new(),
             game_versions: Vec::new(),
+            recorded_game_versions: Vec::new(),
             loaders: Vec::new(),
             ownership: Ownership::External,
             duplicate_keys: Vec::new(),

@@ -170,6 +170,7 @@ fn spec_f101_lock_roundtrip_and_rejects_newer_schema() {
             filename: "a.jar".to_string(),
             sha1: "00".to_string(),
             sha512: "ff".to_string(),
+            game_versions: Vec::new(),
         }],
     };
     write_lock(&p, &lock).expect("write");
@@ -194,6 +195,7 @@ fn spec_f128_write_lock_is_atomic_and_survives_stale_temp() {
         filename: name.to_string(),
         sha1: "00".to_string(),
         sha512: "ff".to_string(),
+        game_versions: Vec::new(),
     };
 
     write_lock(
@@ -269,6 +271,7 @@ fn lock_entry(filename: &str, project: &str, version: &str, sha1: &str) -> LockE
         filename: filename.to_string(),
         sha1: sha1.to_string(),
         sha512: String::new(),
+        game_versions: Vec::new(),
     }
 }
 
@@ -458,6 +461,122 @@ fn spec_f097_compatibility_needs_positive_metadata() {
             "case {label} produced the wrong compatibility verdict"
         );
     }
+}
+
+/// F-097: the provider's declaration, recorded in the lock at install time, is
+/// the evidence the scan prefers. A jar that declares `1.21.1` in a `1.21.1`
+/// instance is *compatible* by its own metadata — and still incompatible when
+/// the version record that installed it said `1.20.1`, because that is what
+/// the catalogue promised for this file.
+#[test]
+fn spec_f097_recorded_provider_versions_are_preferred_over_the_jar() {
+    let mut f = fact("recorded.jar", "h");
+    f.game_versions = vec!["1.21.1".to_string()];
+    let mut entry = lock_entry("recorded.jar", "proj", "v1", "h");
+    entry.game_versions = vec!["1.20.1".to_string()];
+
+    let snapshot = classify_content(
+        vec![f],
+        &LockFile {
+            entries: vec![entry],
+        },
+        &target("1.21.1", ""),
+    );
+
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Incompatible(CompatibilityReason::GameVersion {
+            target: "1.21.1".to_string(),
+        }),
+        "the recorded provider declaration is the evidence that settles this"
+    );
+}
+
+/// F-097: a recorded *range* is not discarded silently and not read as proof.
+/// `>=1.21` cannot be judged without a range parser (a later slice), so the
+/// answer is unknown — with a reason that says a range arrived — never
+/// "compatible" and never "incompatible".
+#[test]
+fn spec_f097_a_recorded_version_range_is_unknown_with_its_reason() {
+    let mut f = fact("range.jar", "h");
+    // The jar's own metadata would call this file compatible; the record is
+    // what the scan must answer from.
+    f.game_versions = vec!["1.20.1".to_string()];
+    let mut entry = lock_entry("range.jar", "proj", "v1", "h");
+    entry.game_versions = vec![">=1.21".to_string()];
+
+    let snapshot = classify_content(
+        vec![f],
+        &LockFile {
+            entries: vec![entry],
+        },
+        &target("1.20.1", ""),
+    );
+
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Unknown(CompatibilityReason::Range),
+        "an unjudgeable recorded range is unknown, with the reason"
+    );
+    assert_eq!(snapshot.facts[0].class(), ContentClass::Managed);
+}
+
+/// F-097: the fallback half. A managed record with no recorded versions — an
+/// instance installed by an older build — leaves the archive's own metadata in
+/// charge, exactly as before this evidence existed.
+#[test]
+fn spec_f097_a_managed_file_with_nothing_recorded_falls_back_to_its_jar() {
+    let mut f = fact("jar-only.jar", "h");
+    f.game_versions = vec!["1.20".to_string()];
+    let lock = LockFile {
+        entries: vec![lock_entry("jar-only.jar", "proj", "v1", "h")],
+    };
+
+    let snapshot = classify_content(vec![f], &lock, &target("1.21.1", ""));
+
+    assert_eq!(snapshot.facts[0].ownership, Ownership::ManagedBySha1);
+    assert!(snapshot.facts[0].recorded_game_versions.is_empty());
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Incompatible(CompatibilityReason::GameVersion {
+            target: "1.21.1".to_string(),
+        }),
+        "with nothing recorded, the jar's declaration is the evidence"
+    );
+}
+
+/// F-097: a lock written before the provider's declaration was recorded must
+/// still scan. The absent field reads as "nothing recorded" (never a crash),
+/// and the file is judged by its jar, exactly like an unrecorded one.
+#[test]
+fn spec_f097_a_lock_without_recorded_game_versions_still_scans() {
+    let d = crate::test_tempdir();
+    let p = d.path().join("instance.lock.json");
+    std::fs::write(
+        &p,
+        r#"{"schema_version":1,"entries":[{"provider":"modrinth","project_id":"p",
+        "slug":"s","version_id":"v","filename":"legacy.jar","sha1":"h","sha512":"f"}]}"#,
+    )
+    .expect("write an older lock");
+
+    let lock = read_lock(&p).expect("a lock from an older build must still parse");
+    assert_eq!(lock.entries.len(), 1);
+    assert!(
+        lock.entries[0].game_versions.is_empty(),
+        "an absent value is 'nothing recorded', not an error"
+    );
+
+    let mut f = fact("legacy.jar", "h");
+    f.game_versions = vec!["1.20".to_string()];
+    let snapshot = classify_content(vec![f], &lock, &target("1.21.1", ""));
+
+    assert_eq!(snapshot.facts[0].ownership, Ownership::ManagedBySha1);
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Incompatible(CompatibilityReason::GameVersion {
+            target: "1.21.1".to_string(),
+        })
+    );
 }
 
 /// F-097: the axis is only real if the scan feeds it. The jar's own metadata is

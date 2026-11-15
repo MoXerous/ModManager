@@ -145,6 +145,7 @@ fn entry(provider: &str, project_id: &str, version_id: &str) -> LockEntry {
         filename: format!("{project_id}.jar"),
         sha1: hex40('a'),
         sha512: hex128('b'),
+        game_versions: Vec::new(),
     }
 }
 

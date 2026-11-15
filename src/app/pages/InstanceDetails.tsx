@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { Trans, useTranslation } from 'react-i18next';
 
 import type { InstanceSnapshotDto } from '../../bindings/InstanceSnapshotDto';
 import type { IpcError } from '../../bindings/IpcError';
+import type { LocalFactDto } from '../../bindings/LocalFactDto';
 import type { TogglePlanDto } from '../../bindings/TogglePlanDto';
 import type { UpdatePreviewDto } from '../../bindings/UpdatePreviewDto';
 import type { UpdateStatusDto } from '../../bindings/UpdateStatusDto';
@@ -56,6 +58,26 @@ function statusClass(status: UpdateStatusDto): string {
     case 'unsupported':
       return 'text-status-warning';
   }
+}
+
+/**
+ * F-097: the class label carries its evidence as a tooltip, the way the old
+ * app gave every class a reason string. External/unknown says *why* nothing
+ * owns the file (no record by SHA-1, project or version); a compatibility
+ * reason is added when one exists, because the two answer different questions
+ * and a tooltip can hold both.
+ */
+function classTitle(m: LocalFactDto, t: TFunction): string | undefined {
+  const parts: string[] = [];
+  if (m.class === 'externalUnknown') {
+    parts.push(t('details.classTip.externalUnknown'));
+  }
+  if (m.compatibilityReason) {
+    parts.push(
+      t(`details.compat.${m.compatibilityReason}`, { target: m.compatibilityTarget ?? '' }),
+    );
+  }
+  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 /**
@@ -411,11 +433,27 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
                 key={`${w.kind}:${w.relPath ?? ''}:${w.key ?? ''}`}
                 className="text-caption text-status-warning"
               >
-                {w.kind === 'managedHashMismatch'
-                  ? t('details.warn.managedHashMismatch', { name: w.relPath ?? '' })
-                  : t(`details.warn.duplicateLocalIdentity.${w.keyKind ?? 'project'}`, {
-                      key: w.key ?? '',
-                    })}
+                {/* F-097/F-099/F-100: the filename and the identity key are
+                    latin technical tokens inside an Arabic sentence. A bare
+                    `{{token}}` reverses them in RTL (`sha1:da39…` reads
+                    `…39ad:1ahs`), so each one is isolated with `bdi dir="ltr"`. */}
+                {w.kind === 'managedHashMismatch' ? (
+                  <Trans
+                    i18nKey="details.warn.managedHashMismatch"
+                    values={{ name: w.relPath ?? '' }}
+                    components={{ token: <bdi dir="ltr" className="font-mono" /> }}
+                  />
+                ) : (
+                  <Trans
+                    i18nKey={
+                      w.keyKind === 'sha1'
+                        ? 'details.warn.duplicateLocalIdentity.sha1'
+                        : 'details.warn.duplicateLocalIdentity.project'
+                    }
+                    values={{ key: w.key ?? '' }}
+                    components={{ token: <bdi dir="ltr" className="font-mono" /> }}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -506,18 +544,27 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
                     {m.relPath}
                   </span>
                 )}
+                {/* F-099: the keys are the evidence for the Duplicate class, so
+                    they belong on the row that carries it — not only in the
+                    folder-wide warning above. */}
+                {m.duplicateKeys.length > 0 && (
+                  <span
+                    className="flex flex-wrap items-center gap-x-2 text-caption text-status-warning"
+                    title={t('details.duplicateKeys')}
+                  >
+                    {m.duplicateKeys.map((k) => (
+                      <bdi key={k.key} dir="ltr" className="font-mono">
+                        {k.key}
+                      </bdi>
+                    ))}
+                  </span>
+                )}
               </span>
               {/* F-097: the derived class, and why when it is a compatibility
                   verdict. The axes stay in the data; this is only the label. */}
               <span
                 className={cn('shrink-0 text-caption', classClass(m.class))}
-                title={
-                  m.compatibilityReason
-                    ? t(`details.compat.${m.compatibilityReason}`, {
-                        target: m.compatibilityTarget ?? '',
-                      })
-                    : undefined
-                }
+                title={classTitle(m, t)}
               >
                 {t(`details.class.${m.class}`)}
               </span>

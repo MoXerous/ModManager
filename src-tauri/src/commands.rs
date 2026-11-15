@@ -998,6 +998,11 @@ pub async fn execute_install_with(
             size: Some(file.size),
             sha1_hex: file.sha1.clone(),
             sha512_hex: file.sha512.clone(),
+            // The provider's own declaration, straight from the version record
+            // that resolved this entry. Not the jar's: reading the archive here
+            // would be a second parse of bytes the resolver never opened, and
+            // the jar may only carry a range (F-097).
+            game_versions: version.game_versions.clone(),
             allow_insecure_loopback,
         });
     }
@@ -1135,6 +1140,7 @@ pub async fn execute_install_with(
             file_name: item.filename.clone(),
             sha1: item.sha1_hex.clone().unwrap_or_default(),
             sha512: item.sha512_hex.clone().unwrap_or_default(),
+            game_versions: item.game_versions.clone(),
         })
         .collect();
     state

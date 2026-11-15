@@ -311,6 +311,50 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
     });
 }
 
+/// F-097: the provider's declared game versions must reach the lock through the
+/// real install path. This is the half the scan cannot recover later: once the
+/// batch is done there is no network call left to ask, and the jar may declare
+/// a range or nothing. The chain is provider version record -> batch item ->
+/// installed record -> lock entry, and only the end of it is observable here.
+#[test]
+fn spec_f097_install_records_the_provider_declared_game_versions() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        mount_modrinth(&server, &jar).await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("instance");
+        std::fs::create_dir_all(root.join("mods")).expect("mkdir");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("db");
+        register_instance(&db, &root);
+        let state = AppState::from_db(db);
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let req = InstallRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            projects: vec!["sodium".to_string()],
+            provider: "modrinth".to_string(),
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        };
+        execute_install_with(&state, &provider, req, recording_channel(&sink), true)
+            .await
+            .expect("install failed");
+
+        let lock = mm_core::instances::read_lock(&root.join("instance.lock.json"))
+            .expect("the install left no lock");
+        let entry = lock.entries.first().expect("one file, one entry");
+        assert_eq!(
+            entry.game_versions,
+            vec!["1.21.1".to_string()],
+            "the version record's declaration must be written down at install time"
+        );
+    });
+}
+
 /// Isolates the resolver from the rest of the command. When an install says
 /// "nothing to install" this is where the answer is: it names which ladder
 /// rung refused the version, instead of leaving the message to be guessed at.

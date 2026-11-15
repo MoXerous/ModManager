@@ -161,6 +161,7 @@ fn entry(
         filename: filename.to_string(),
         sha1: sha1.to_string(),
         sha512: sha512.to_string(),
+        game_versions: Vec::new(),
     }
 }
 

@@ -62,6 +62,11 @@ pub enum CompatibilityReason {
     /// ranges. `>=1.20` is a claim about a set, not a list, so it never proves
     /// an exclusion.
     Unproven,
+    /// A *recorded* provider declaration is only a range (`>=1.20`, `1.20.x`,
+    /// `[1.20.1,1.21.2)`). Judging it needs the range parser this slice does
+    /// not have, so the verdict is unknown — the reason travels so the screen
+    /// can say why, and the range is never silently dropped.
+    Range,
     /// The archive's declared versions do not include the instance's.
     GameVersion { target: String },
     /// The archive's declared loader is not the instance's.
@@ -74,6 +79,7 @@ impl CompatibilityReason {
         match self {
             CompatibilityReason::NoTarget => "noTarget",
             CompatibilityReason::Unproven => "unproven",
+            CompatibilityReason::Range => "range",
             CompatibilityReason::GameVersion { .. } => "gameVersion",
             CompatibilityReason::Loader { .. } => "loader",
         }
@@ -84,7 +90,9 @@ impl CompatibilityReason {
         match self {
             CompatibilityReason::GameVersion { target }
             | CompatibilityReason::Loader { target } => Some(target),
-            CompatibilityReason::NoTarget | CompatibilityReason::Unproven => None,
+            CompatibilityReason::NoTarget
+            | CompatibilityReason::Unproven
+            | CompatibilityReason::Range => None,
         }
     }
 }
@@ -260,6 +268,7 @@ pub fn classify_content(
             fact.provider = entry.provider.clone();
             fact.project_id = entry.project_id.clone();
             fact.version_id = entry.version_id.clone();
+            fact.recorded_game_versions = entry.game_versions.clone();
         }
     }
 
@@ -279,6 +288,14 @@ pub fn classify_content(
         fact.ownership = matched
             .map(|(_, ownership)| ownership)
             .unwrap_or(Ownership::External);
+        // The entry that proved ownership speaks for the file: a byte-identical
+        // file can be recorded under another name, and the name lookup above
+        // would then have found nothing.
+        if let Some((entry, _)) = matched {
+            if !entry.game_versions.is_empty() {
+                fact.recorded_game_versions = entry.game_versions.clone();
+            }
+        }
         fact.duplicate_keys = own_keys.into_iter().filter(|key| shared(key)).collect();
         fact.compatibility = compatibility(fact, target);
         fact.hash_mismatch = match matched {
@@ -370,15 +387,34 @@ fn compatibility(fact: &LocalContentFact, target: &ContentTarget) -> Compatibili
         return Compatibility::Unknown(CompatibilityReason::NoTarget);
     }
 
-    let declared: Vec<&str> = fact
-        .game_versions
+    // The provider's recorded declaration wins over the archive's own: it is
+    // what the catalogue promised when the file was installed, and it is the
+    // only evidence that survives an archive declaring a range or nothing.
+    // Falls back to the jar when nothing was recorded — a lock from an older
+    // version, or a file this app never installed.
+    let recorded = fact
+        .recorded_game_versions
+        .iter()
+        .any(|value| !value.trim().is_empty());
+    let evidence = if recorded {
+        &fact.recorded_game_versions
+    } else {
+        &fact.game_versions
+    };
+    let declared: Vec<&str> = evidence
         .iter()
         .map(|value| value.trim())
         .filter(|value| is_exact_version(value))
         .collect();
     if !game.is_empty() {
         if declared.is_empty() {
-            return Compatibility::Unknown(CompatibilityReason::Unproven);
+            // A recorded range is a real claim about a set of versions, not an
+            // empty declaration: it stays unknown and says which it was.
+            return Compatibility::Unknown(if recorded {
+                CompatibilityReason::Range
+            } else {
+                CompatibilityReason::Unproven
+            });
         }
         if !declared.contains(&game) {
             return Compatibility::Incompatible(CompatibilityReason::GameVersion {

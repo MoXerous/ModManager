@@ -52,6 +52,7 @@ fn entry(filename: &str, version_id: &str, sha512: &str, sha1: &str) -> LockEntr
         filename: filename.to_string(),
         sha1: sha1.to_string(),
         sha512: sha512.to_string(),
+        game_versions: Vec::new(),
     }
 }
 

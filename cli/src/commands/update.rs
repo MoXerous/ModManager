@@ -20,6 +20,9 @@ struct UpdateRow {
     size: u64,
     sha1: Option<String>,
     sha512: Option<String>,
+    /// The provider's declared Minecraft versions for the new version: the
+    /// lock records them so a later scan can judge the file offline (F-097).
+    game_versions: Vec<String>,
 }
 
 pub async fn update(
@@ -82,6 +85,7 @@ pub async fn update(
                         size: f.size,
                         sha1: f.sha1.clone(),
                         sha512: f.sha512.clone(),
+                        game_versions: v.game_versions.clone(),
                     });
                 }
             }
@@ -170,6 +174,7 @@ pub async fn update(
             filename: landed,
             sha1: r.sha1.clone().unwrap_or_default(),
             sha512: r.sha512.clone().unwrap_or_default(),
+            game_versions: r.game_versions.clone(),
         });
     }
     let path = lock_path(ctx)?;
