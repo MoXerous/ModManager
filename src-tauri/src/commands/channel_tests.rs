@@ -237,11 +237,20 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
         let events = sink.lock().expect("events").clone();
         assert!(!events.is_empty(), "the channel carried nothing at all");
 
+        // Two kinds of event share the channel (F-020): a batch event, which
+        // is not about one file (`install.phase.batch`, empty `itemId`), and
+        // item events keyed by the item's version id - not by the filename.
+        // That was this test's wrong assumption first time.
+        let is_batch = |e: &Value| phase(e) == "install.phase.batch";
         assert!(
-            events
-                .iter()
-                .all(|e| e["itemId"].as_str().is_some_and(|s| !s.is_empty())),
-            "an event had no itemId: {events:?}"
+            events.iter().all(|e| {
+                if is_batch(e) {
+                    e["itemId"].as_str().is_some_and(str::is_empty)
+                } else {
+                    e["itemId"].as_str().is_some_and(|s| !s.is_empty())
+                }
+            }),
+            "an event mixed the two kinds: {events:?}"
         );
         assert!(
             events
@@ -249,11 +258,20 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
                 .all(|e| phase(e).starts_with("install.phase.")),
             "a phase was not an i18n key: {events:?}"
         );
-        // Every event is for the one item, keyed by its version id - not by the
-        // filename. That was this test's wrong assumption first time.
         assert!(
-            events.iter().all(|e| e["itemId"] == "vvvv"),
+            events.iter().all(|e| is_batch(e) || e["itemId"] == "vvvv"),
             "an event named a different item: {events:?}"
+        );
+        // The aggregate must actually be there, not just permitted: one file
+        // landed, so the batch's last known total is that file's bytes.
+        let batch_events: Vec<&Value> = events.iter().filter(|e| is_batch(e)).collect();
+        assert!(
+            !batch_events.is_empty(),
+            "the channel carried no batch-level event: {events:?}"
+        );
+        assert!(
+            batch_events.iter().all(|e| e["done"].is_number()),
+            "a batch event carried no total: {events:?}"
         );
 
         // A progress event carries real numbers. The throttle can coalesce
@@ -267,19 +285,28 @@ fn spec_f037_install_emits_a_well_formed_event_sequence_over_a_real_channel() {
             assert!(e["done"].is_number() && e["total"].is_number(), "{e}");
         }
 
-        // The last thing said is that it finished, and it names the real file.
-        // A queue that goes quiet, or that ends on progress instead of on a
-        // landing, is the bug this asserts against.
-        let last = events.last().expect("last");
+        // The last thing said is that it finished. With F-020 the stream ends
+        // on the batch's own final event (done == total) beside the landing
+        // event, so the last event is either the landing or the settled batch
+        // bar; the landing itself must still be in the stream, naming the
+        // real file. A queue that goes quiet, or that ends on progress
+        // instead of on a landing, is the bug this asserts against.
+        let landing = events
+            .iter()
+            .find(|e| phase(e) == "install.phase.landed")
+            .expect("the stream never said the file landed");
         assert_eq!(
-            phase(last),
-            "install.phase.landed",
-            "the last event was not terminal: {events:?}"
-        );
-        assert_eq!(
-            last["path"].as_str().expect("path"),
+            landing["path"].as_str().expect("path"),
             landed.to_string_lossy(),
             "the landing event named a different file"
+        );
+        let last = events.last().expect("last");
+        assert!(
+            phase(last) == "install.phase.landed"
+                || (phase(last) == "install.phase.batch"
+                    && last["done"] == last["total"]
+                    && last["done"].is_number()),
+            "the last event was not terminal: {events:?}"
         );
     });
 }

@@ -2,10 +2,11 @@
 //! tested against both rather than against a mock of either.
 
 use super::*;
+use crate::downloader::BatchProgress;
 use crate::downloader::Downloader;
 use crate::downloader::JournalOp;
 use crate::journal::{ItemState, Journal, OperationKind, OperationRecord, OperationState};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// A real zip, because the downloader refuses to commit anything that is not an
@@ -119,6 +120,7 @@ async fn spec_f063_batch_lands_files_and_completes_the_journal_operation() {
             std::slice::from_ref(&it),
             no_cancel(),
             &mut |id, p| seen.push((id.to_string(), p)),
+            &mut |_: BatchProgress| {},
         )
         .await;
         let _ = &sha1;
@@ -231,6 +233,7 @@ async fn spec_f063_the_journal_is_not_locked_while_a_download_runs() {
                     contended = true;
                 }
             },
+            &mut |_: BatchProgress| {},
         )
         .await;
         assert!(r.is_ok(), "batch failed: {r:?}");
@@ -258,6 +261,7 @@ async fn spec_f063_cancelling_before_the_first_byte_is_terminal_and_cancelled() 
         std::slice::from_ref(&it),
         cancelled,
         &mut |_, _| {},
+        &mut |_: BatchProgress| {},
     )
     .await
     .expect_err("must stop");
@@ -277,5 +281,152 @@ async fn spec_f063_cancelling_before_the_first_byte_is_terminal_and_cancelled() 
     assert!(
         j.discover().unfinished().next().is_none(),
         "a cancelled record must not be offered as unfinished"
+    );
+}
+
+/// F-020: the batch reports its own totals beside the per-item events.
+///
+/// The old app showed ONE bar for the whole batch; per-file bytes alone cannot
+/// reproduce it. The total is the sum of every item's size (`None` when one is
+/// unknown), and `done` folds each settled item in — a skipped file was
+/// already on disk, so its bytes count as done too.
+#[tokio::test]
+async fn spec_f020_batch_progress_totals_cover_all_items() {
+    let dir = crate::test_tempdir();
+    let (j, _holder) = jrnl(dir.path());
+    let mods = dir.path().join("mods");
+    std::fs::create_dir_all(&mods).expect("mkdir");
+    let d = Downloader::new(2).expect("downloader");
+    let server = wiremock::MockServer::start().await;
+    let body_a = zip_bytes("META-INF/MANIFEST.MF", &[b'a'; 64]);
+    let body_b = zip_bytes("META-INF/MANIFEST.MF", &[b'b'; 128]);
+    for (name, body) in [("/a.jar", &body_a), ("/b.jar", &body_b)] {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(name))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_bytes(body.clone())
+                    .insert_header("content-type", "application/java-archive"),
+            )
+            .mount(&server)
+            .await;
+    }
+    let mut a = item(dir.path(), "a.jar", &body_a);
+    a.url = format!("{}/a.jar", server.uri());
+    let mut b = item(dir.path(), "b.jar", &body_b);
+    b.url = format!("{}/b.jar", server.uri());
+    let expected_total = body_a.len() as u64 + body_b.len() as u64;
+
+    let mut batch: Vec<BatchProgress> = Vec::new();
+    let r = execute_batch(
+        &d,
+        &mut writer(&j),
+        &mods,
+        &[a, b],
+        no_cancel(),
+        &mut |_, _| {},
+        &mut |p| batch.push(p),
+    )
+    .await;
+    assert!(r.is_ok(), "batch failed: {r:?}");
+    assert!(mods.join("a.jar").is_file());
+    assert!(mods.join("b.jar").is_file());
+
+    // The totals name the whole batch, not one file.
+    assert!(
+        !batch.is_empty(),
+        "a batch with no batch-level event cannot show an overall bar"
+    );
+    for p in &batch {
+        assert_eq!(p.total, Some(expected_total), "total must cover both items");
+    }
+    assert_eq!(batch[0].done, 0, "the batch starts with nothing done");
+    assert_eq!(
+        batch.last().expect("events").done,
+        expected_total,
+        "the last event must count every byte of both files"
+    );
+    // Monotone: the bar never rewinds.
+    for pair in batch.windows(2) {
+        assert!(pair[1].done >= pair[0].done, "batch done went backwards");
+    }
+}
+
+/// F-036: a cancel that lands mid-download is its own terminal state.
+///
+/// The flag is flipped from inside the progress callback, so the download is
+/// genuinely in flight. The batch must answer `Cancelled` — not a download
+/// failure — journal the operation as cancelled, and record the in-flight
+/// item as cancelled, because the history must tell a cancellation apart from
+/// a failure.
+#[tokio::test]
+async fn spec_f036_cancelling_mid_download_is_cancelled_not_failed() {
+    let dir = crate::test_tempdir();
+    let (j, _holder) = jrnl(dir.path());
+    let mods = dir.path().join("mods");
+    std::fs::create_dir_all(&mods).expect("mkdir");
+    let d = Downloader::new(1).expect("downloader");
+    let server = wiremock::MockServer::start().await;
+    let body = zip_bytes("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n");
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/a.jar"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_bytes(body.clone())
+                .insert_header("content-type", "application/java-archive"),
+        )
+        .mount(&server)
+        .await;
+    let mut it = item(dir.path(), "a.jar", &body);
+    it.url = format!("{}/a.jar", server.uri());
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flip = cancel.clone();
+    let mut flipped = false;
+    let mut saw_cancelled_event = false;
+    let err = execute_batch(
+        &d,
+        &mut writer(&j),
+        &mods,
+        std::slice::from_ref(&it),
+        cancel,
+        &mut |_id, p| {
+            if let ItemProgress::Cancelled = p {
+                saw_cancelled_event = true;
+            }
+            // Flip on the first progress event: the request is in flight.
+            if !flipped {
+                flipped = true;
+                flip.store(true, Ordering::Relaxed);
+            }
+        },
+        &mut |_| {},
+    )
+    .await
+    .expect_err("a cancelled batch must stop");
+    assert!(
+        matches!(err, BatchError::Cancelled),
+        "a mid-flight cancel must be Cancelled, got {err:?}"
+    );
+    assert!(
+        saw_cancelled_event,
+        "the in-flight item must report its own cancelled event"
+    );
+    assert!(
+        !mods.join("a.jar").is_file(),
+        "a cancelled download must not commit"
+    );
+
+    let rec = j
+        .discover()
+        .records()
+        .next()
+        .cloned()
+        .expect("a cancelled batch is still recorded");
+    assert_eq!(rec.state, OperationState::Cancelled);
+    assert_eq!(
+        rec.items[0].state,
+        ItemState::Cancelled,
+        "the in-flight item is cancelled, not failed"
     );
 }

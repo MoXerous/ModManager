@@ -72,6 +72,7 @@
   "error.io": "فشلت عملية ملف أو شبكة.",
   "error.linkOrReparse": "وُجد رابط رمزي أو نقطة إعادة تحليل (junction) في المسار الذي كان الملف سيُكتب فيه. أزِل الرابط أو اختر مجلدًا آخر ثم أعد المحاولة.",
   "error.newerSchema": "كُتبت هذه البيانات بإصدار أحدث من التطبيق.",
+  "error.cancelled": "أُوقِف التثبيت بناءً على طلبك. الملفات التي اكتملت بقيت في مكانها.",
 
   "page.instances.emptyTitle": "لا توجد مثيلات بعد",
   "page.instances.emptyBody": "أنشئ مثيلًا أو اربط مجلدًا قائمًا.",
@@ -261,6 +262,7 @@
   "install.phase.skipped": "موجود مسبقًا",
   "install.phase.failed": "فشل",
   "install.phase.cancelled": "أُلغي",
+  "install.phase.batch": "التقدّم الإجمالي",
   "install.start": "تثبيت",
   "install.installed": "مثبَّت {{count}}",
   "install.installed_zero": "مثبَّت {{count}}",

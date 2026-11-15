@@ -43,6 +43,7 @@ pub fn run() {
             commands::app_paths,
             commands::open_app_folder,
             commands::execute_install,
+            commands::cancel_active_install,
             commands::list_download_history,
             commands::clear_download_history,
             commands::curseforge_key_status,

@@ -6,5 +6,9 @@
  * `phase` is an i18n key rather than a word, so core decides what is true and
  * the UI decides how to say it. `Option` without `skip_serializing_if` is
  * required-nullable in this house convention (ADR 0002).
+ *
+ * F-020: `phase = "install.phase.batch"` marks the batch's own event, with
+ * the batch totals in `done`/`total` and an empty `item_id` — not one file's
+ * progress, and the per-item rows must not consume it.
  */
 export type InstallEventDto = { itemId: string, phase: string, done: bigint | null, total: bigint | null, path: string | null, message: string | null, };

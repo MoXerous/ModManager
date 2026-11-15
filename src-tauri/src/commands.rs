@@ -853,6 +853,20 @@ pub async fn execute_install(
     execute_install_with(state.inner(), provider.as_ref(), req, on_event, false).await
 }
 
+/// F-036: asks the install currently running to stop.
+///
+/// `true` when one was registered. The answer is data, not an error: asking
+/// with nothing running is a normal race between the click and the batch's
+/// own end, and there is nothing for the UI to show for it.
+///
+/// The cancelled batch reports itself through the channel
+/// (`install.phase.cancelled`) and the promise (`error.cancelled`); this
+/// command only plants the flag the batch checks.
+#[tauri::command]
+pub fn cancel_active_install(state: tauri::State<'_, AppState>) -> Result<bool, IpcError> {
+    Ok(state.cancel_active_install())
+}
+
 /// The body of `execute_install`, with the provider and the state as parameters.
 ///
 /// The seam exists so the whole command - resolve, journal, download, hash,
@@ -973,7 +987,10 @@ pub async fn execute_install_with(
     }
     std::fs::create_dir_all(&target).map_err(IpcError::io)?;
     let downloader = Downloader::new(3).map_err(|e| IpcError::internal(e.to_string()))?;
-    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // F-036: the flag is registered on the state so `cancel_active_install`
+    // can flip it while this batch is in flight; it is dropped again when the
+    // batch settles.
+    let cancel = state.begin_install();
     let journal = state.journal_handle();
     let mut throttle = crate::progress::ProgressThrottle::new();
     let mut installed: Vec<String> = Vec::new();
@@ -1032,6 +1049,18 @@ pub async fn execute_install_with(
             // caller could do about it — not an error worth failing the install.
             let _ = on_event.send(dto);
         };
+        // F-020: the batch's own bar, beside the per-item stream. Its own
+        // throttle, because the two streams must not starve each other: a
+        // terminal batch event (every known byte done) is never held back,
+        // or the overall bar would stop short of where the batch ended.
+        let mut batch_throttle = crate::progress::ProgressThrottle::new();
+        let mut batch_emit = |p: mm_core::downloader::BatchProgress| {
+            let terminal = p.total == Some(p.done);
+            if !batch_throttle.allows(terminal, std::time::Instant::now()) {
+                return;
+            }
+            let _ = on_event.send(crate::progress::batch_to_dto(&p));
+        };
         let batch = mm_core::downloader::execute_batch(
             &downloader,
             &mut write,
@@ -1039,8 +1068,10 @@ pub async fn execute_install_with(
             &items,
             cancel,
             &mut emit,
+            &mut batch_emit,
         )
         .await;
+        state.end_install();
 
         // The log is written even when the batch stopped early: a failure is
         // the row a user is most likely to look for. If the write itself fails
@@ -1051,7 +1082,7 @@ pub async fn execute_install_with(
             Ok(_) => history?,
             Err(e) => {
                 drop(history);
-                return Err(IpcError::io(e.to_string()));
+                return Err(install_batch_error(&e));
             }
         }
     }
@@ -1091,6 +1122,19 @@ pub async fn execute_install_with(
         installed,
         skipped,
     })
+}
+
+/// One `BatchError` in one place, so plan and execute cannot disagree (F-036).
+///
+/// `Cancelled` is the user's own terminal state, not a failing disk: it gets
+/// its own code and the UI translates it as such. Journal and download
+/// failures stay `io`, which is what they are.
+fn install_batch_error(e: &mm_core::downloader::BatchError) -> IpcError {
+    match e {
+        mm_core::downloader::BatchError::Cancelled => IpcError::new(ErrorCode::Cancelled, e),
+        mm_core::downloader::BatchError::Journal(_)
+        | mm_core::downloader::BatchError::Download { .. } => IpcError::io(e.to_string()),
+    }
 }
 
 /// What a history row needs that only the resolved plan knows.
@@ -1274,6 +1318,8 @@ pub(crate) mod diagnostics_tests;
 pub(crate) mod export_tests;
 #[cfg(test)]
 pub(crate) mod history_tests;
+#[cfg(test)]
+pub(crate) mod install_tests;
 #[cfg(test)]
 pub(crate) mod legacy_tests;
 #[cfg(test)]

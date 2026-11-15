@@ -175,3 +175,44 @@ fn spec_f152_a_long_failure_is_cut_on_characters() {
         .chars()
         .all(|c| c == 'ف' || c == 'ش' || c == 'ل' || c == ' '));
 }
+
+/// F-036: a cancelled batch and a failed one must read differently in the log.
+///
+/// The user's own stop is `cancelled`; only a real failure is `failed`. A
+/// queue that records a cancellation as a failure tells the user their files
+/// are broken when they simply pressed stop.
+#[test]
+fn spec_f036_a_cancelled_batch_is_distinct_from_a_failed_one() {
+    let rows = history_rows(
+        &seeds(&["v1", "v2"]),
+        &[
+            ("v1".to_string(), ItemProgress::Cancelled),
+            (
+                "v2".to_string(),
+                ItemProgress::Failed {
+                    message: "hash mismatch".to_string(),
+                },
+            ),
+        ],
+        "1.21.1",
+        "fabric",
+        1,
+    );
+
+    assert_eq!(rows.len(), 2);
+    let cancelled = rows
+        .iter()
+        .find(|r| r.version_id.as_deref() == Some("v1"))
+        .expect("the cancelled row");
+    assert_eq!(cancelled.status, Status::Cancelled);
+    assert_eq!(
+        cancelled.message, "",
+        "a cancellation carries no failure text"
+    );
+    let failed = rows
+        .iter()
+        .find(|r| r.version_id.as_deref() == Some("v2"))
+        .expect("the failed row");
+    assert_eq!(failed.status, Status::Failed);
+    assert_eq!(failed.message, "hash mismatch");
+}

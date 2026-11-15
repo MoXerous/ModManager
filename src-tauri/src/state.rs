@@ -9,7 +9,8 @@
 //! The operation journal is held beside it for the same reason, and is opened
 //! once against the resolved platform directories.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use mm_core::db::Db;
 use mm_core::journal::Journal;
@@ -26,6 +27,14 @@ pub struct AppState {
     /// Resolved platform roots. Every command that needs a directory asks here
     /// instead of trusting a path from the webview (§5.2).
     paths: Paths,
+    /// F-036: the cancel flag of the install currently running, if any.
+    ///
+    /// One slot, not a map: the journal operation id only exists once the
+    /// batch has started writing, so there is nothing the webview could
+    /// address a mid-flight cancel by. The install registers its own flag on
+    /// `begin_install` and the slot is dropped when the batch settles; two
+    /// installs started at once share the slot, and the later one wins it.
+    install_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     /// Test seam: the private journal store this state owns.
     ///
     /// `None` in production, where the journal is the app's own directory.
@@ -61,6 +70,7 @@ impl AppState {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(paths.operations_dir()))),
             paths,
+            install_cancel: Arc::new(Mutex::new(None)),
             // Production owns no private store: the journal is the app's own
             // directory, and it outlives the state.
             #[cfg(test)]
@@ -94,6 +104,7 @@ impl AppState {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(root.path()))),
             paths,
+            install_cancel: Arc::new(Mutex::new(None)),
             owned_journal_root: Some(Arc::new(root)),
             owned_config_root: Some(Arc::new(config_root)),
         }
@@ -143,6 +154,52 @@ impl AppState {
     /// `execute_batch`'s callback is for.
     pub fn journal_handle(&self) -> Arc<Mutex<Journal>> {
         self.journal.clone()
+    }
+
+    /// F-036: registers the flag of the install about to run and hands it back.
+    ///
+    /// `execute_install` calls this just before the first byte moves: the
+    /// journal operation id does not exist yet at that point, so the slot is
+    /// the only thing a cancel command can address.
+    ///
+    /// A poisoned lock is recovered from, not panicked on: the value inside is
+    /// always a plain `Option`, and a cancel must never take the app down.
+    pub fn begin_install(&self) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut slot = self
+            .install_cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *slot = Some(flag.clone());
+        flag
+    }
+
+    /// F-036: flips the running install's flag. `true` when one was running.
+    ///
+    /// The answer is data, not an error: asking to cancel with nothing
+    /// running is a normal race between the click and the batch's own end.
+    pub fn cancel_active_install(&self) -> bool {
+        let slot = self
+            .install_cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match slot.as_ref() {
+            Some(flag) => {
+                flag.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// F-036: drops the registration once the batch has settled, whatever the
+    /// outcome. A stale flag left behind would "cancel" an install that has
+    /// not started yet.
+    pub fn end_install(&self) {
+        *self
+            .install_cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     /// Runs `f` against the database on a blocking thread.
