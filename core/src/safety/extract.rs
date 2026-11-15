@@ -12,6 +12,7 @@ use thiserror::Error;
 use zip::ZipArchive;
 
 use crate::safety::atomic::{self, AtomicError};
+use crate::safety::guard::is_link_or_reparse;
 use crate::safety::inspect::{ArchiveLimits, InspectError, MemberInfo};
 
 /// Windows MAX_PATH: joined paths beyond it fail mid-tree.
@@ -47,28 +48,6 @@ pub enum ExtractError {
     Empty,
     #[error("member `{0}` ends with the `.part` suffix reserved for atomic writes")]
     ReservedPartSuffix(String),
-}
-
-/// A pre-existing symlink or reparse point (e.g. NTFS junction) inside the
-/// destination would redirect writes outside it. `is_symlink` alone misses
-/// junctions, so on Windows the reparse-point attribute is checked too.
-fn is_link_or_reparse(p: &Path) -> bool {
-    match p.symlink_metadata() {
-        Ok(m) => {
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                m.file_type().is_symlink()
-                    || (m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
-            }
-            #[cfg(not(windows))]
-            {
-                m.file_type().is_symlink()
-            }
-        }
-        Err(_) => false,
-    }
 }
 
 fn io_err(op: &'static str, path: &Path, source: std::io::Error) -> ExtractError {
@@ -144,7 +123,8 @@ pub fn extract_safely<R: Read + Seek>(
         if target.as_os_str().len() > MAX_JOINED_PATH_LEN {
             return Err(ExtractError::TooLong(target));
         }
-        // Refuse to write through a pre-existing symlink or junction (TOCTOU).
+        // Refuse to write through a pre-existing symlink or junction (TOCTOU):
+        // the shared rule in `safety::guard` (F-038) is the same one.
         let mut anc = target.parent();
         while let Some(a) = anc {
             if a == dest {

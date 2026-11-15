@@ -70,6 +70,7 @@
   "error.rateLimited": "Too many requests. Try again later.",
   "error.timeout": "The request timed out.",
   "error.io": "A file or network operation failed.",
+  "error.linkOrReparse": "A link or junction was found where the file would be written. Remove it, or choose a different folder, and try again.",
   "error.newerSchema": "This data was written by a newer version of the app.",
 
   "page.instances.emptyTitle": "No instances yet",
