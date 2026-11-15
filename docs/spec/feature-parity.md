@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 17 |
+| حاضر — مُراجَع | 19 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 16 |
+| جزئي — مُراجَع | 14 |
 | مفقود — مُراجَع | 19 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**35** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**33** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -29,8 +29,6 @@
 | **F-003** | `get_best_version` | providers | جزئي — مُراجَع | No release-channel ladder: the new select_best_version takes the first compatible version in provider order and only skips alpha unless allow_alpha; the old get_best_version iterated release > beta (allow_beta default true) > alpha and picked the newest of that channel by date_published, with a newest-of-all fallback. So a newer beta now beats an older stable, there is no allow_beta switch, and no sort by date_published. |
 | **F-009** | **قاعدة السنة الدوّارة** | providers | جزئي — مُراجَع | The rotating +/-50-year rule for RFC-850 dates is not implemented: httpdate 1.0.3 maps two-digit years into a fixed 1970-2069 window (crate docs line 51-52, date.rs), so 'Fri, 11-Sep-76' parses as 1976 (past => 0 s wait) where the old code's rolling window computes 2076 (future => the >10s fail-fast rule fires). Header order and strict numeric parsing match the old code; no test anywhere feeds an HTTP-date Retry-After. |
 | **F-015** | حالة `downloadUrl: null` عند CurseForge | providers | جزئي — مُراجَع | The data level is handled (null downloadUrl maps to "", files stay listed, plan entry blocked with the exact reason), but the spec's visible behaviour — opening the file's page in the browser — has no counterpart: nothing builds a CurseForge file/project page URL, and the only opener usages (commands.rs::open_app_folder, commands.rs::open_instance_folder) call opener().open_path on local folders, never a web URL. |
-| **F-020** | تنزيل جماعي بتقدّم مجمَّع | downloads | جزئي — مُراجَع | No aggregated batch progress: ItemProgress::Started{done,total} is per-file byte progress (p.done/p.total from DownloadProgress), every event is keyed by item_id, and grep for total_bytes/overall/aggregate/sum across core, src-tauri and src finds no batch-level downloaded/total or active/task counts. The old worker emitted one overall bar for the whole batch. |
-| **F-036** | **الإلغاء حالة مستقلة لا نجاح** | downloads | جزئي — مُراجَع | Cancelled is a terminal state inside core (journal states, ItemProgress::Cancelled, history row 'cancelled'), but L-3's IpcError rule is absent: ErrorCode has no cancelled variant, execute_install_with maps every BatchError (including Cancelled) to IpcError::io, and the cancel AtomicBool is created at line 976 and never flipped — no IPC cancel command exists anywhere in src-tauri or src/lib/ipc.ts. |
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | مفقود — مُراجَع | No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision. |
 | **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | instances | جزئي — مُراجَع | Two of the five classes exist: disabled is computed structurally in the scan, and managed/external ownership is derived only inside the removal preview (RemoveCandidate.external from the lock); the inventory view exposes only a lock-derived project_id per fact, with no ownership label, and the Duplicates and Incompatible classes are never computed. |
 | **F-098** | **المحاور الأربعة متعامدة** | instances | جزئي — مُراجَع | The struct-not-enum decision was taken (LocalContentFact's independent fields), but only two axes exist to compose: activation (disabled) and a resource type that is not the compatibility axis; ownership, duplicate and compatibility axes are never computed, so the documented managed+disabled+duplicate composition has nothing to compose and no test asserts coexistence. |
@@ -91,7 +89,7 @@
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
 |---|---|---|---|---|---|
-| **F-020** | تنزيل جماعي بتقدّم مجمَّع | Keep | M1 | جزئي — مُراجَع | E:\ModManager\core\src\downloader\batch.rs::execute_batch (lines 162-171: per-item emit, Started carries that file's done/total) · E:\ModManager\src-tauri\src\progress.rs::to_dto (per-item DTO only) · E:\ModManager\src\app\pages\DownloadsPage.tsx (one card per item) |
+| **F-020** | تنزيل جماعي بتقدّم مجمَّع | Keep | M1 | حاضر — مُراجَع | core/src/downloader/batch.rs::execute_batch · src-tauri/src/progress.rs::batch_to_dto · src/app/pages/DownloadsPage.tsx::BatchBar |
 | **F-021** | ملف `.part` ثم إعادة تسمية ذرّية | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs، core/src/safety/atomic.rs · كود: core/src/safety/atomic.rs |
 | **F-022** | التحقق SHA-1 + SHA-512 | Keep | M1 | حاضر — مُراجَع | core/src/downloader/client.rs::Downloader::verify_streamed · core/src/downloader/client.rs::Downloader::verify_and_commit · core/src/downloader/client.rs::hash_file · core/src/downloader/client.rs::check_file · core/src/downloader/client.rs::remove_part_quiet |
 | **F-023** | فحص المساحة قبل الطلب | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs |
@@ -107,7 +105,7 @@
 | **F-033** | **عدم الكتابة فوق ملف مستخدم** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs |
 | **F-034** | حذف `.part` عند فشل التحقق | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/safety/atomic.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
 | **F-035** | الإيقاف المؤقت / الاستئناف / الإلغاء | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs · وثائق: docs/plans/2026-10-15-master-plan.md |
-| **F-036** | **الإلغاء حالة مستقلة لا نجاح** | Keep | M1 | جزئي — مُراجَع | E:\ModManager\src-tauri\src\dto.rs::ErrorCode (lines 56-87: no Cancelled variant) · E:\ModManager\src-tauri\src\commands.rs::execute_install_with (line 976: AtomicBool::new(false) never shared; line 1054: IpcError::io(e.to_string())) · E:\ModManager\src-tauri\src\lib.rs::generate_handler (no cancel command) |
+| **F-036** | **الإلغاء حالة مستقلة لا نجاح** | Keep | M1 | حاضر — مُراجَع | core/src/downloader/batch.rs::execute_batch · core/src/downloader/client.rs::download · src-tauri/src/commands.rs::execute_install_with · src-tauri/src/commands.rs::install_batch_error · src-tauri/src/state.rs::begin_install · src-tauri/src/dto.rs::ErrorCode::Cancelled |
 | **F-037** | أطوار معلنة قبل كل عمل | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/exec_tests.rs، src-tauri/src/commands/channel_tests.rs (+1) |
 | **F-038** | حارس سباق الروابط الرمزية | Keep | M1 | حاضر — مُراجَع | core/src/safety/guard.rs::open_no_follow · core/src/safety/guard.rs::handle_is_link_or_reparse · core/src/safety/guard.rs::link_in_ancestors · core/src/downloader/client.rs::open_part_handle · core/src/safety/atomic.rs::commit_part · src-tauri/src/dto.rs::ErrorCode::LinkOrReparse |
 | **F-039** | التنزيل بالتوازي | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs · كود: core/src/downloader/client.rs، core/src/downloader/mod.rs (+1) |
