@@ -556,12 +556,27 @@ fn spec_f036_a_cancel_during_the_resolve_phase_is_cancelled() {
             !root.join("mods").join("sodium-0.5.8.jar").is_file(),
             "a cancelled install downloads nothing"
         );
+        // Per-item events MAY cross here. The flip races the resolve against a
+        // polling loop, so on a fast (or loaded) machine the resolve can return
+        // before the cancel is observed and the batch starts: its per-item
+        // events are legitimate F-020 stream content, not a bug. Which events
+        // happened to cross is timing-dependent — assert on the terminal state
+        // instead. The "only batch-level events" rule is asserted by the
+        // aggregate test `spec_f037_install_emits_a_well_formed_event_sequence_
+        // over_a_real_channel`, where the aggregate stream is the subject.
+        // The terminal state a cancel must produce: the command reports
+        // Cancelled and the history says the file was cancelled, not failed.
+        let rows = state
+            .with_db(|db| {
+                mm_core::db::download_history::list(db, &Default::default())
+                    .map_err(|e| crate::dto::IpcError::internal(e.to_string()))
+            })
+            .await
+            .expect("history");
         assert!(
-            sink.lock()
-                .expect("events")
-                .iter()
-                .all(|e| { e["itemId"].as_str().is_some_and(str::is_empty) }),
-            "only batch-level events may cross: {sink:?}"
+            rows.iter()
+                .all(|row| row.status == mm_core::db::download_history::Status::Cancelled),
+            "a cancelled install must not write a failed row: {rows:?}"
         );
         // The registration is gone: a cancel now finds nothing to flip.
         assert!(state.install_flag_for_test().is_none());
