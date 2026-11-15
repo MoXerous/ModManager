@@ -317,13 +317,30 @@ fn untrusted_paths_are_filtered_before_core() {
     assert_eq!(kept[1], mods.join("disabled_mods").join("nested.jar"));
 }
 
+/// The lock records the name a file had before a disable rename, so the join
+/// has to see through `.jar.disabled` — otherwise everything this app
+/// installed and then disabled looked external. The rule now lives in core
+/// (`lock_entry_for_name`), beside the scan that also joins identity by name;
+/// this pins the same five cases through it.
 #[test]
 fn spec_f111_disabled_file_keeps_lock_ownership() {
-    assert!(lock_matches("a.jar", "a.jar"));
-    assert!(lock_matches("a.jar", "a.jar.disabled"));
-    assert!(lock_matches("A.JAR", "a.JAR.DISABLED"));
-    assert!(!lock_matches("a.jar", "b.jar"));
-    assert!(!lock_matches("a.jar", "a.jar.disabled.disabled"));
+    use mm_core::instances::{lock_entry_for_name, LockEntry};
+
+    let entry = |name: &str| LockEntry {
+        provider: "modrinth".to_string(),
+        project_id: "P".to_string(),
+        slug: String::new(),
+        version_id: "v".to_string(),
+        filename: name.to_string(),
+        sha1: "00".to_string(),
+        sha512: "ff".to_string(),
+    };
+
+    assert!(lock_entry_for_name(&[entry("a.jar")], "a.jar").is_some());
+    assert!(lock_entry_for_name(&[entry("a.jar")], "a.jar.disabled").is_some());
+    assert!(lock_entry_for_name(&[entry("A.JAR")], "a.JAR.DISABLED").is_some());
+    assert!(lock_entry_for_name(&[entry("a.jar")], "b.jar").is_none());
+    assert!(lock_entry_for_name(&[entry("a.jar")], "a.jar.disabled.disabled").is_none());
 }
 
 #[test]
@@ -522,4 +539,95 @@ fn spec_f067_disabled_mods_relative_path_enables_the_nested_file() {
         .starts_with(std::fs::canonicalize(&mods).expect("canonical mods")));
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// F-097/F-100: the bridge must carry every axis, the derived class and the
+/// folder warnings across IPC. The screen has no other way to learn them, and
+/// a field left out of the DTO is a class the user never sees.
+#[test]
+fn spec_f097_scan_snapshot_carries_the_axes_the_class_and_the_warnings() {
+    use mm_core::instances::{write_lock, ContentTarget, LockEntry, LockFile, LOCK_FILE_NAME};
+
+    let dir = tempfile::tempdir().expect("temp");
+    let root = dir.path();
+    let mods = root.join("mods");
+    std::fs::create_dir_all(&mods).expect("mods");
+    // Plain bytes are enough here: the scan hashes and classifies, it does not
+    // require a valid archive, and an unreadable one means "unproven".
+    std::fs::write(mods.join("changed.jar"), b"changed").expect("write");
+    std::fs::write(mods.join("external.jar"), b"external").expect("write");
+    std::fs::write(mods.join("twin-a.jar"), b"twin").expect("write");
+    std::fs::write(mods.join("twin-b.jar"), b"twin").expect("write");
+
+    write_lock(
+        &root.join(LOCK_FILE_NAME),
+        &LockFile {
+            entries: vec![LockEntry {
+                provider: "modrinth".to_string(),
+                project_id: "proj".to_string(),
+                slug: String::new(),
+                version_id: "v1".to_string(),
+                filename: "changed.jar".to_string(),
+                // Deliberately not this file's SHA-1: the bytes changed after
+                // the install that wrote the record.
+                sha1: "0000000000000000000000000000000000000000".to_string(),
+                sha512: String::new(),
+            }],
+        },
+    )
+    .expect("lock");
+
+    let snapshot = super::scan_instance_at(
+        std::fs::canonicalize(root).expect("canon"),
+        ContentTarget {
+            game_version: "1.21.1".to_string(),
+            loader: "fabric".to_string(),
+        },
+    )
+    .expect("snapshot");
+    let fact = |name: &str| {
+        snapshot
+            .mods
+            .iter()
+            .find(|m| m.filename == name)
+            .unwrap_or_else(|| panic!("no fact for {name}: {:?}", snapshot.mods))
+    };
+
+    let changed = fact("changed.jar");
+    assert_eq!(changed.class, "managed");
+    assert_eq!(changed.ownership, "managed");
+    assert_eq!(changed.ownership_evidence, "provider_version");
+    assert!(changed.hash_mismatch, "F-100: the record no longer matches");
+    assert_eq!(changed.project_id.as_deref(), Some("proj"));
+    assert!(
+        snapshot.content_warnings.iter().any(
+            |w| w.kind == "managedHashMismatch" && w.rel_path.as_deref() == Some("changed.jar")
+        ),
+        "the changed file must warn: {:?}",
+        snapshot.content_warnings
+    );
+
+    let external = fact("external.jar");
+    assert_eq!(external.class, "externalUnknown");
+    assert_eq!(external.ownership, "external");
+    assert_eq!(external.ownership_evidence, "");
+    assert!(!external.hash_mismatch);
+
+    for name in ["twin-a.jar", "twin-b.jar"] {
+        let twin = fact(name);
+        assert_eq!(twin.class, "duplicate");
+        assert!(
+            twin.duplicate_keys.iter().any(|k| k.kind == "sha1"),
+            "{name} shares bytes, so it carries the sha1 key: {:?}",
+            twin.duplicate_keys
+        );
+    }
+    assert!(
+        snapshot
+            .content_warnings
+            .iter()
+            .any(|w| w.kind == "duplicateLocalIdentity" && w.key_kind.as_deref() == Some("sha1")),
+        "the twins must warn: {:?}",
+        snapshot.content_warnings
+    );
 }

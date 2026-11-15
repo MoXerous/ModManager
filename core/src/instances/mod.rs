@@ -5,6 +5,7 @@
 //! only), [`remove`] (move into a dated backup folder, never delete), and
 //! [`lock`] (the lock file itself).
 
+pub mod content;
 pub mod lock;
 pub mod metadata;
 pub mod record;
@@ -13,10 +14,16 @@ pub mod registry;
 pub mod remove;
 pub mod toggle;
 
+pub use content::{
+    classify_content, lock_entry_for_name, Compatibility, CompatibilityReason, ContentClass,
+    ContentSnapshot, ContentTarget, ContentWarning, DuplicateKey, Ownership,
+};
 pub use lock::{read_lock, write_lock, LockEntry, LockError, LockFile, LOCK_FILE_NAME};
 pub use record::{record_install, InstalledRecord, RecordError};
 
-use crate::jar_reader::{classify_local_resource_type, ResourceType};
+use crate::jar_reader::{
+    classify_local_resource_type, read_local_mod_metadata, Loader, ResourceType,
+};
 use std::path::{Path, PathBuf};
 
 /// One scanned file: orthogonal facts, never a single enum (spec Â§5).
@@ -32,6 +39,57 @@ pub struct LocalContentFact {
     pub sha1: String,
     pub resource_type: ResourceType,
     pub disabled: bool,
+    /// Identity the lock records for this file name (F-097/F-100). Empty when
+    /// the lock has no record for it — which is what makes it external.
+    pub provider: String,
+    pub project_id: String,
+    pub version_id: String,
+    /// What the archive itself declares (`fabric.mod.json` and friends): the
+    /// only local evidence the compatibility axis has (F-097).
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<Loader>,
+    /// Ownership axis: managed (and how it was proven) or external/unknown.
+    pub ownership: Ownership,
+    /// Duplication axis: the identity keys this file shares with another
+    /// (F-099).
+    pub duplicate_keys: Vec<DuplicateKey>,
+    /// Compatibility axis: proven, contradicted, or unprovable.
+    pub compatibility: Compatibility,
+    /// F-100: the bytes do not match the SHA-1 the lock records.
+    pub hash_mismatch: bool,
+}
+
+impl LocalContentFact {
+    /// A file the scan found, before any axis is proven. Every axis starts at
+    /// its honest "unproven" value, never at a guess.
+    fn new(
+        path: PathBuf,
+        rel_path: String,
+        filename: String,
+        size: u64,
+        sha1: String,
+        resource_type: ResourceType,
+        disabled: bool,
+    ) -> Self {
+        Self {
+            path,
+            rel_path,
+            filename,
+            size,
+            sha1,
+            resource_type,
+            disabled,
+            provider: String::new(),
+            project_id: String::new(),
+            version_id: String::new(),
+            game_versions: Vec::new(),
+            loaders: Vec::new(),
+            ownership: Ownership::External,
+            duplicate_keys: Vec::new(),
+            compatibility: Compatibility::Unknown(CompatibilityReason::NoTarget),
+            hash_mismatch: false,
+        }
+    }
 }
 
 /// Suffixes accepted by the scan (spec Â§4-1 + F-090 names).
@@ -167,15 +225,22 @@ pub fn scan_mods(instance: &Instance) -> Vec<LocalContentFact> {
                 .strip_prefix(&folder)
                 .map(relative_display)
                 .unwrap_or_else(|_| filename.clone());
-            LocalContentFact {
-                path: p.clone(),
+            let mut fact = LocalContentFact::new(
+                p.clone(),
                 rel_path,
                 filename,
                 size,
-                sha1: sha1_of(&p),
-                resource_type: classify_local_resource_type(&p),
-                disabled: is_disabled_path(&p),
+                sha1_of(&p),
+                classify_local_resource_type(&p),
+                is_disabled_path(&p),
+            );
+            // The archive's own declaration is the compatibility axis' only
+            // local source; an unreadable one leaves the axis unproven.
+            if let Some(metadata) = read_local_mod_metadata(&p) {
+                fact.game_versions = metadata.game_versions;
+                fact.loaders = metadata.loaders;
             }
+            fact
         })
         .collect()
 }
