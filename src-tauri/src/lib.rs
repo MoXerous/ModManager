@@ -164,6 +164,13 @@ pub fn run() -> i32 {
             commands::pack::pending_pack_recoveries,
             commands::pack::recover_pack_apply,
             commands::pack::dismiss_pack_apply,
+            commands::backup::list_instance_backups,
+            commands::backup::execute_instance_backup,
+            commands::backup::cancel_instance_transfer,
+            commands::backup::plan_instance_restore,
+            commands::backup::execute_instance_restore,
+            commands::backup::preview_instance_worlds,
+            commands::backup::pending_instance_restores,
         ])
         .build(tauri::generate_context!());
 

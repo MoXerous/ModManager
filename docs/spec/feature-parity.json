@@ -331,51 +331,56 @@
     },
     {
       "id": "F-113",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\modpack\\export.rs (line 509: exclusion name only)",
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no backup command)"
+        "core/src/instances/backup/mod.rs::create_backup",
+        "core/src/instances/backup/manifest.rs::BackupManifest",
+        "src-tauri/src/commands/backup.rs::backup_instance",
+        "src/app/pages/InstanceBackup.tsx"
       ],
-      "test": null,
-      "note": "The copy-only create_profile_update_backup behaviour is entirely absent, as reviewed.",
-      "gap": "No full profile backup: no command in generate_handler, no backup type or manifest schema; '.modrinth_bulk_downloader_profile_backups' survives only as an exclusion name in the pack exporter's EXCLUDED list.",
-      "review": "verified:confirmed"
+      "test": "spec_f113_a_cancelled_backup_reports_cancelled_and_copies_nothing",
+      "note": "حاضر: نسخةٌ كاملةٌ ببيانٍ ذرّيّ (mm.instance_backup.v1) يكتب عبر write_atomic_unique، والإلغاءُ يُلغى العمليةَ ولا ينسخ شيئًا. انحرافٌ موثَّق: البيانُ لا يسجّل mtime (لأن النسخةَ لا تحفظه)، ومجلّدُ النسخ القديم .modrinth_bulk_downloader_backup مستبعَد.",
+      "gap": null,
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-114",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\modpack\\export.rs (line 511: exclusion name only)",
-        "grep 'restore_manifest|restore_safety' → export.rs exclusions only"
+        "core/src/instances/backup/restore.rs::build_restore_plan",
+        "core/src/instances/backup/restore.rs::execute_restore",
+        "core/src/instances/backup/restore.rs::rollback",
+        "src-tauri/src/commands/backup.rs::restore_instance"
       ],
-      "test": null,
-      "note": "Confirmed the three protection layers and the typed confirmation are absent.",
-      "gap": "No restore at all: '.modrinth_bulk_downloader_restore_safety' appears only as an export exclusion name; no containment check, no blocked-entries preview, no move-aside, no restore_manifest.json, no RESTORE confirmation.",
-      "review": "verified:confirmed"
+      "test": "spec_f114_restore_refuses_a_forged_safety_path_outside_the_root",
+      "note": "حاضر: استرجاعٌ بخطةٍ قبل التنفيذ؛ الأهدافُ مشتقّةٌ من EntrySource وحده (والمسارُ المسجَّل حكمُ حجبٍ يُعاد فحصه عند التنفيذ)، والهويةُ instance_id تُطابَق (RestoreMismatch) والبصمةُ تأكيدٌ (BackupChanged)، والاسترجاعُ يزيحُ المجموعةَ ويتراجعُ عند الفشل — وفشلُ التراجعِ يُعلَنُ rollback-failed لا «تمَّ التراجع».",
+      "gap": null,
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-115",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\commands\\pack.rs (line 1138: worlds excluded from pack export)",
-        "grep 'include_saves|Saves restore' → no matches"
+        "core/src/instances/backup/restore.rs::recheck_entry",
+        "core/src/instances/backup/mod.rs::create_backup",
+        "src-tauri/src/commands/backup.rs::restore_instance"
       ],
-      "test": null,
-      "note": "Confirmed; consequence of F-113/F-114 absence.",
-      "gap": "With the whole backup/restore pair absent, the opt-in saves copy (and its restore-side default refusal) has no home; saves/ appears only as a standard-dir name in instance creation and as an export exclusion.",
-      "review": "verified:confirmed"
+      "test": "spec_f115_restore_copies_saves_only_when_asked",
+      "note": "حاضر: مجلدُ saves اختياريٌّ صريحٌّ (include_saves=false افتراضيًّا)، وادّعاءُ البيانِ وحده لا يُبيح الاسترجاع (saves-blocked-by-default).",
+      "gap": null,
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-118",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "grep 'level\\.dat|datapack_count|worlds' → only export exclusion comments/tests",
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no worlds command)"
+        "core/src/instances/backup/worlds.rs::preview_worlds",
+        "src-tauri/src/commands/backup.rs::preview_instance_worlds"
       ],
-      "test": null,
-      "note": "Confirmed entirely absent.",
-      "gap": "No read-only worlds preview: no worlds reader in core, no worlds command in generate_handler, no world folder enumeration, datapack count or level.dat read; saves/ is only named in export exclusion tests.",
-      "review": "verified:confirmed"
+      "test": "spec_f118_worlds_preview_lists_direct_children_without_touching_the_tree",
+      "note": "حاضر: معاينةٌ للقراءةِ فقط لأبناء saves المباشرين (الأبناءُ بنقطةِ حذفٍ مستبعَدون من عدّ datapacks، والفرزُ غيرُ حسّاسٍ لحالة الأحرف، وغيرُ المجلّداتِ يُتجاهل، والروابطُ تُدرَج ولا تُفحَص) مع اختبارٍ يثبت أن الشجرةَ لم تتغيّر.",
+      "gap": null,
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-121",

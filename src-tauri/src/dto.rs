@@ -105,6 +105,13 @@ pub enum ErrorCode {
     /// F-138: the database could not be upgraded. The message carries the
     /// stage and the schema versions, never a directory.
     MigrationFailed,
+    /// F-114: the backup the user confirmed is not the one the preview showed —
+    /// a different instance, or another folder now sits at the same name. Not
+    /// `InvalidInput`: the request was well-formed, the disk moved.
+    RestoreMismatch,
+    /// F-114: the backup's manifest changed after the plan was read (its SHA-256
+    /// is the token the confirm carries). Nothing was written.
+    BackupChanged,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -1687,4 +1694,396 @@ fn action_code(action: mm_core::legacy::ImportAction) -> &'static str {
 /// this screen is ever sent back as a path.
 fn display(path: &std::path::Path) -> String {
     path.display().to_string()
+}
+
+// --- backup & restore (F-113, F-114, F-115, F-118) ------------------------
+//
+// The dated folder on disk is the whole truth: no table, no index, no cached
+// row, so every DTO below is read from a folder or written by a run that just
+// finished. Paths cross IPC for display only; the two a command takes back —
+// the instance root and the chosen backup folder — are gated in Rust
+// (`registered_root`, then containment inside the backup root).
+//
+// `manifestState` is a word, not a sentence (`present`/`missing`/`legacy`/
+// `invalid`): the screen decides how to say why a folder is not restorable, and
+// a legacy backup is listed on purpose — hiding a folder the user can see in
+// their file manager is the worse lie.
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BackupListDto {
+    pub backup_root: String,
+    pub backups: Vec<BackupCandidateDto>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BackupCandidateDto {
+    pub stamp: String,
+    pub created_at: String,
+    pub include_saves: bool,
+    /// `present`, `missing`, `legacy` or `invalid`.
+    pub manifest_state: String,
+    /// The manifest names this instance. False for another instance's backup
+    /// and for a folder with no readable manifest at all.
+    pub instance_matches: bool,
+    #[ts(type = "number")]
+    pub entry_count: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+}
+
+/// Ask for a backup. `includeSaves` absent means `false`: the flag is stated,
+/// never inferred from `saves/` existing.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BackupRequest {
+    pub instance_root: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub include_saves: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BackupResultDto {
+    pub backup_dir: String,
+    pub created_at: String,
+    pub manifest_path: String,
+    pub manifest_sha256: String,
+    pub include_saves: bool,
+    #[ts(type = "number")]
+    pub copied_files: u64,
+    #[ts(type = "number")]
+    pub copied_bytes: u64,
+    pub skipped: Vec<BackupSkipDto>,
+}
+
+/// One sector the backup states it does not hold, with a code the UI
+/// translates (`source-missing`, `symlink`, `saves-not-included`).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BackupSkipDto {
+    pub source: String,
+    pub path: String,
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestorePreviewRequest {
+    pub instance_root: String,
+    /// A folder inside this instance's backup root. Core canonicalizes both
+    /// sides and refuses anything else.
+    pub backup_dir: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub include_saves: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestorePlanDto {
+    pub backup_dir: String,
+    pub created_at: String,
+    pub safety_dir: String,
+    pub include_saves: bool,
+    /// The freshness token: the SHA-256 of the manifest these entries were
+    /// read from. The execute command must send it back.
+    pub manifest_sha256: String,
+    pub allowed: Vec<RestoreEntryDto>,
+    pub blocked: Vec<RestoreEntryDto>,
+}
+
+/// Everything the user must send back with the typed word.
+/// `expectedManifestSha256` is the plan's token; `confirmation` is `RESTORE`,
+/// checked again in Rust.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestoreExecuteRequest {
+    pub instance_root: String,
+    pub backup_dir: String,
+    #[serde(default)]
+    pub include_saves: bool,
+    pub expected_manifest_sha256: String,
+    pub confirmation: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestoreEntryDto {
+    pub source: String,
+    pub backup_path: String,
+    pub target_path: String,
+    pub safety_path: String,
+    #[ts(type = "number")]
+    pub file_count: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    pub allowed: bool,
+    /// `allowed`, `profile-not-restored`, `source-missing`, `entry-is-link`,
+    /// `saves-blocked-by-default`, `entry-outside-group`, `safety-exists`,
+    /// `target-under-link`. A blocked row is shown, never silently dropped.
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestoreResultEntryDto {
+    pub source: String,
+    pub backup_path: String,
+    pub target_path: String,
+    pub safety_path: String,
+    /// `restored`, `failed`, `rolled-back`, `rollback-failed`, `cancelled`,
+    /// `dependency-failed`. `rollback-failed` means the group failed AND the
+    /// safety copy could not return: the target is missing or half written, and
+    /// the screen must send the user to `safety_path` instead of saying the
+    /// group was put back.
+    pub state: String,
+    pub reason_code: String,
+    #[ts(type = "number")]
+    pub file_count: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestoreRunDto {
+    /// `complete`, `partial` or `cancelled`.
+    pub outcome: String,
+    pub safety_dir: String,
+    pub manifest_path: String,
+    pub entries: Vec<RestoreResultEntryDto>,
+    pub blocked: Vec<RestoreEntryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WorldsPreviewDto {
+    pub saves_dir: String,
+    pub saves_exists: bool,
+    pub worlds: Vec<WorldDto>,
+    /// `worlds.no-saves`, `worlds.empty` or `worlds.read-only`.
+    pub message_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WorldDto {
+    pub name: String,
+    /// `detected`, `missing-level-dat` or `symlink`.
+    pub status: String,
+    #[ts(type = "number")]
+    pub datapack_count: u64,
+    pub has_level_dat: bool,
+    /// `worlds.level-dat-found`, `worlds.level-dat-missing` or
+    /// `worlds.symlink-skipped`.
+    pub message_code: String,
+}
+
+/// A safety folder with no completed manifest: the restore that died mid-run.
+/// Nothing is repaired automatically; the banner says where the old target is
+/// and lets the user decide.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PendingRestoreDto {
+    pub stamp: String,
+    pub safety_dir: String,
+    pub has_current: bool,
+    pub groups: Vec<String>,
+    pub message_code: String,
+}
+
+/// One progress event on the backup channel.
+///
+/// `phase` is an i18n key (`backup.phase.*`), and `terminal` is explicit so the
+/// throttle never drops the event that ends the run.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BackupEventDto {
+    pub phase: String,
+    #[ts(type = "number")]
+    pub copied_files: u64,
+    #[ts(type = "number")]
+    pub total_files: u64,
+    #[ts(type = "number")]
+    pub copied_bytes: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    pub terminal: bool,
+}
+
+/// One progress event on the restore channel: the same shape, restored counts.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RestoreEventDto {
+    pub phase: String,
+    #[ts(type = "number")]
+    pub restored_files: u64,
+    #[ts(type = "number")]
+    pub total_files: u64,
+    #[ts(type = "number")]
+    pub restored_bytes: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    pub terminal: bool,
+}
+
+impl From<&mm_core::instances::backup::BackupCandidate> for BackupCandidateDto {
+    fn from(candidate: &mm_core::instances::backup::BackupCandidate) -> Self {
+        Self {
+            stamp: candidate.stamp.clone(),
+            created_at: candidate.created_at.clone(),
+            include_saves: candidate.include_saves,
+            manifest_state: candidate.manifest_state.as_str().to_string(),
+            instance_matches: candidate.instance_matches,
+            entry_count: candidate.entry_count,
+            total_bytes: candidate.total_bytes,
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::BackupRun> for BackupResultDto {
+    fn from(run: &mm_core::instances::backup::BackupRun) -> Self {
+        Self {
+            backup_dir: display(&run.backup_dir),
+            created_at: run.created_at.clone(),
+            manifest_path: display(&run.manifest_path),
+            manifest_sha256: run.manifest_sha256.clone(),
+            include_saves: run.include_saves,
+            copied_files: run.copied_files,
+            copied_bytes: run.copied_bytes,
+            skipped: run.skipped.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::BackupSkip> for BackupSkipDto {
+    fn from(skip: &mm_core::instances::backup::BackupSkip) -> Self {
+        Self {
+            source: skip.source.as_str().to_string(),
+            path: skip.path.clone(),
+            reason_code: skip.reason_code.clone(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::restore::RestoreEntry> for RestoreEntryDto {
+    fn from(entry: &mm_core::instances::backup::restore::RestoreEntry) -> Self {
+        Self {
+            source: entry.source.as_str().to_string(),
+            backup_path: display(&entry.backup_path),
+            target_path: display(&entry.target_path),
+            safety_path: display(&entry.safety_path),
+            file_count: entry.file_count,
+            total_bytes: entry.total_bytes,
+            allowed: entry.allowed,
+            reason_code: entry.reason_code.to_string(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::restore::RestoreResultEntry> for RestoreResultEntryDto {
+    fn from(entry: &mm_core::instances::backup::restore::RestoreResultEntry) -> Self {
+        Self {
+            source: entry.source.as_str().to_string(),
+            backup_path: display(&entry.backup_path),
+            target_path: display(&entry.target_path),
+            safety_path: display(&entry.safety_path),
+            state: entry.state.as_str().to_string(),
+            reason_code: entry.reason_code.clone(),
+            file_count: entry.file_count,
+            total_bytes: entry.total_bytes,
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::restore::RestorePlan> for RestorePlanDto {
+    fn from(plan: &mm_core::instances::backup::restore::RestorePlan) -> Self {
+        Self {
+            backup_dir: display(&plan.backup_dir),
+            created_at: plan.created_at.clone(),
+            safety_dir: display(&plan.safety_dir),
+            include_saves: plan.include_saves,
+            manifest_sha256: plan.manifest_sha256.clone(),
+            allowed: plan
+                .entries
+                .iter()
+                .filter(|e| e.allowed)
+                .map(Into::into)
+                .collect(),
+            blocked: plan
+                .entries
+                .iter()
+                .filter(|e| !e.allowed)
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::restore::RestoreRun> for RestoreRunDto {
+    fn from(run: &mm_core::instances::backup::restore::RestoreRun) -> Self {
+        Self {
+            outcome: run.outcome.as_str().to_string(),
+            safety_dir: display(&run.safety_dir),
+            manifest_path: display(&run.manifest_path),
+            entries: run.entries.iter().map(Into::into).collect(),
+            blocked: run.blocked.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::worlds::WorldEntry> for WorldDto {
+    fn from(world: &mm_core::instances::backup::worlds::WorldEntry) -> Self {
+        Self {
+            name: world.name.clone(),
+            status: world.status.as_str().to_string(),
+            datapack_count: world.datapack_count,
+            has_level_dat: world.has_level_dat,
+            message_code: world.message_code.to_string(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::worlds::WorldsPreview> for WorldsPreviewDto {
+    fn from(preview: &mm_core::instances::backup::worlds::WorldsPreview) -> Self {
+        Self {
+            saves_dir: display(&preview.saves_dir),
+            saves_exists: preview.saves_exists,
+            worlds: preview.worlds.iter().map(Into::into).collect(),
+            message_code: preview.message_code.to_string(),
+        }
+    }
+}
+
+impl From<&mm_core::instances::backup::restore::PendingRestore> for PendingRestoreDto {
+    fn from(pending: &mm_core::instances::backup::restore::PendingRestore) -> Self {
+        Self {
+            stamp: pending.stamp.clone(),
+            safety_dir: display(&pending.safety_dir),
+            has_current: pending.has_current,
+            groups: pending.groups.clone(),
+            // One key for the whole surface: the banner says the restore
+            // stopped mid-run, and the group list says where.
+            message_code: "restore.pending-incomplete".to_string(),
+        }
+    }
 }

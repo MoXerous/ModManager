@@ -2,6 +2,10 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 
 import type { AppInfo } from '../bindings/AppInfo';
 import type { AppPathsDto } from '../bindings/AppPathsDto';
+import type { BackupEventDto } from '../bindings/BackupEventDto';
+import type { BackupListDto } from '../bindings/BackupListDto';
+import type { BackupRequest } from '../bindings/BackupRequest';
+import type { BackupResultDto } from '../bindings/BackupResultDto';
 import type { CheckUpdatesRequest } from '../bindings/CheckUpdatesRequest';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
@@ -29,12 +33,19 @@ import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
 import type { PackEventDto } from '../bindings/PackEventDto';
 import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
 import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
+import type { PendingRestoreDto } from '../bindings/PendingRestoreDto';
 import type { RemovePlanDto } from '../bindings/RemovePlanDto';
 import type { RemoveRunDto } from '../bindings/RemoveRunDto';
+import type { RestoreEventDto } from '../bindings/RestoreEventDto';
+import type { RestoreExecuteRequest } from '../bindings/RestoreExecuteRequest';
+import type { RestorePlanDto } from '../bindings/RestorePlanDto';
+import type { RestorePreviewRequest } from '../bindings/RestorePreviewRequest';
+import type { RestoreRunDto } from '../bindings/RestoreRunDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
 import type { UpdatePreviewDto } from '../bindings/UpdatePreviewDto';
+import type { WorldsPreviewDto } from '../bindings/WorldsPreviewDto';
 
 // الواجهة تصل إلى النواة عبر هذا الملف فقط.
 
@@ -483,6 +494,75 @@ export function openInstanceFolder(root: string): Promise<void> {
 /** Removes the standard folders that are still empty and closes the record. */
 export function abandonCreate(operationId: string): Promise<number> {
   return invoke<number>('abandon_create', { operationId });
+}
+
+// --- Backup & restore (F-113..F-115, F-118) ------------------------------
+//
+// A backup is a dated folder inside the instance and the folder is the truth,
+// so nothing here caches: every call reads the disk. Two rules bind the confirm
+// to what the user was shown — `RestorePlanDto.manifestSha256` is the token the
+// execute call sends back, and `confirmation` is the word `RESTORE` typed in
+// the dialog and checked again in Rust.
+
+/** Dated backups of one instance, newest first. Read-only. */
+export function listInstanceBackups(instanceRoot: string): Promise<BackupListDto> {
+  return invoke<BackupListDto>('list_instance_backups', { instanceRoot });
+}
+
+/**
+ * Copies the instance into a new dated folder and streams progress.
+ *
+ * `includeSaves` is stated explicitly by the caller (unticked by default); a
+ * backup never infers it from `saves/` existing.
+ */
+export async function executeInstanceBackup(
+  req: BackupRequest,
+  onEvent: (e: BackupEventDto) => void,
+): Promise<BackupResultDto> {
+  const channel = progressChannel<BackupEventDto>(onEvent);
+  return invoke<BackupResultDto>('execute_instance_backup', { req, onEvent: channel });
+}
+
+/** What a restore would do, entry by entry, including the blocked ones. */
+export function planInstanceRestore(req: RestorePreviewRequest): Promise<RestorePlanDto> {
+  return invoke<RestorePlanDto>('plan_instance_restore', { req });
+}
+
+/**
+ * Applies the reviewed restore.
+ *
+ * `expectedManifestSha256` must be the plan's token and `confirmation` the
+ * typed word; both are re-checked in Rust, and a mismatch writes nothing.
+ */
+export async function executeInstanceRestore(
+  req: RestoreExecuteRequest,
+  onEvent: (e: RestoreEventDto) => void,
+): Promise<RestoreRunDto> {
+  const channel = progressChannel<RestoreEventDto>(onEvent);
+  return invoke<RestoreRunDto>('execute_instance_restore', { req, onEvent: channel });
+}
+
+/**
+ * Stops the backup or restore running on this instance.
+ *
+ * One call for both: the run is addressed by its instance root, and the per-root
+ * lock allows one copy at a time. The copy polls the flag between groups and
+ * between files, so the stop lands inside a file rather than at the end. `true`
+ * means a run was there to stop; `false` is the ordinary race between the click
+ * and the run's own end — data, not an error.
+ */
+export function cancelInstanceTransfer(instanceRoot: string): Promise<boolean> {
+  return invoke<boolean>('cancel_instance_transfer', { instanceRoot });
+}
+
+/** The worlds under `saves/`, read-only. A missing folder is an answer, not an error. */
+export function previewInstanceWorlds(instanceRoot: string): Promise<WorldsPreviewDto> {
+  return invoke<WorldsPreviewDto>('preview_instance_worlds', { instanceRoot });
+}
+
+/** Safety folders a restore left behind. Advisory: never repairs anything. */
+export function pendingInstanceRestores(instanceRoot: string): Promise<PendingRestoreDto[]> {
+  return invoke<PendingRestoreDto[]>('pending_instance_restores', { instanceRoot });
 }
 
 /** Turn any error `invoke` rejects with into an IpcError (Tauri rejects with the serialized value itself). */

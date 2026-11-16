@@ -22,6 +22,7 @@ import {
 } from '../../lib/ipc';
 import { formatBytes } from '../../lib/format';
 import { type ProviderId, PROVIDERS, getGameTarget } from '../gameTarget';
+import { InstanceBackup } from './InstanceBackup';
 import { InstanceExport } from './InstanceExport';
 import { RemoveDialog } from './RemoveDialog';
 
@@ -422,6 +423,10 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         gameVersion={gameVersion}
         loader={loader}
       />
+
+      {/* F-113/F-114/F-115/F-118: the copy lives inside the instance, so it is
+          shown next to the folder it describes rather than in a global screen. */}
+      <InstanceBackup root={root} />
 
       {/* F-099/F-100: findings about the folder, not about one file. Shown
           once above the list rather than repeated on every affected row. */}

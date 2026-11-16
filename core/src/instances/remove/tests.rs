@@ -4,6 +4,7 @@
 
 use super::*;
 use std::time::Duration;
+use std::time::UNIX_EPOCH;
 
 fn fixture() -> tempfile::TempDir {
     let d = crate::test_tempdir();

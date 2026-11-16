@@ -19,21 +19,21 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 99 | 99 |
+| مُختبَر بمعرّف المواصفة | 103 | 103 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
-| إشارة في الوثائق فقط | 1 | 1 |
-| بلا أثر | 43 | 43 |
+| إشارة في الوثائق فقط | 2 | 2 |
+| بلا أثر | 38 | 38 |
 
-**99 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **44** بلا أثرٍ قابلٍ للتتبّع.
+**103 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **40** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
 | M1 | 72 | 63 | 3 | 6 |
-| M2 | 38 | 12 | 2 | 24 |
-| M3 | 41 | 23 | 4 | 14 |
+| M2 | 38 | 15 | 2 | 21 |
+| M3 | 41 | 24 | 4 | 13 |
 | later | 1 | 1 | 0 | 0 |
 
 ## بنود `Keep` بلا أثر قابلٍ للتتبّع — قائمة hygiene
@@ -59,10 +59,6 @@
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | M2 |
 | **F-108** | تفعيل/تعطيل (إعادة تسمية) | profiles | M2 |
 | **F-109** | **تراجع تنفيذي عكسي** | profiles | M2 |
-| **F-113** | نسخ احتياطي كامل للبروفايل | profiles | M2 |
-| **F-114** | استعادة بحفظ الوجهة القائمة جانباً | profiles | M2 |
-| **F-115** | **نسخ `saves` اختياري** | profiles | M2 |
-| **F-118** | معاينة العوالم (قراءة فقط) | profiles | M3 |
 | **F-121** | **إعادة تحقق قبل التنفيذ** | updates | M2 |
 | **F-122** | عقد السلامة (5 بنود) | updates | M2 |
 | **F-123** | **نسخ احتياطي Yes/No/Cancel** | updates | M2 |
@@ -213,7 +209,7 @@
 | **F-094** | كشف تخطيط Prism/MultiMC | Keep | M3 | بلا أثر | — |
 | **F-095** | التحقق من البروفايل (30 فحصاً) | Keep | M2 | بلا أثر | — |
 | **F-096** | فحص صحة النسخة | Defer | M2 | مؤجَّل | — |
-| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs (+2) · كود: cli/src/commands/install.rs، cli/src/commands/update.rs (+13) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs |
+| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs (+2) · كود: cli/src/commands/install.rs، cli/src/commands/update.rs (+13) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-098** | **المحاور الأربعة متعامدة** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/tests.rs (+2) |
 | **F-099** | كشف التكرار (SHA-1 + هوية المشروع) | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+6) |
 | **F-100** | كشف تعارض الهاش | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+7) |
@@ -231,22 +227,22 @@
 | **F-108** | تفعيل/تعطيل (إعادة تسمية) | Keep | M2 | بلا أثر | — |
 | **F-109** | **تراجع تنفيذي عكسي** | Keep | M2 | بلا أثر | — |
 | **F-110** | رفض الروابط الرمزية والتجاوز والتصادم | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/toggle/tests.rs |
-| **F-111** | حذف بمشغّل أمان **بلا حذف دائم** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/remove/tests.rs، src-tauri/src/commands/tests.rs · كود: cli/src/commands/remove.rs، core/src/instances/remove/mod.rs (+3) |
+| **F-111** | حذف بمشغّل أمان **بلا حذف دائم** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/remove/tests.rs، src-tauri/src/commands/tests.rs · كود: cli/src/commands/remove.rs، core/src/instances/remove/mod.rs (+4) |
 | **F-112** | كلمة تأكيد `REMOVE` للملفات الخارجية | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/remove/tests.rs · كود: core/src/instances/remove/mod.rs، src-tauri/src/commands.rs (+2) |
-| **F-113** | نسخ احتياطي كامل للبروفايل | Keep | M2 | بلا أثر | — |
-| **F-114** | استعادة بحفظ الوجهة القائمة جانباً | Keep | M2 | بلا أثر | — |
-| **F-115** | **نسخ `saves` اختياري** | Keep | M2 | بلا أثر | — |
-| **F-116** | مدير نسخ التحديث (لكل ملف) | Defer | later | مؤجَّل | — |
-| **F-117** | إصلاح الميتافيزقا (خطة) | Defer | later | مؤجَّل | — |
-| **F-118** | معاينة العوالم (قراءة فقط) | Keep | M3 | بلا أثر | — |
-| **F-119** | استيراد عالم (نسخ فقط) | Defer | later | مؤجَّل | — |
-| **F-181** | استيراد بيانات التطبيق القديم (باستود) | Keep | later | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/legacy/import_tests.rs، core/src/legacy/tests.rs (+1) · كود: core/src/legacy/import.rs، core/src/legacy/mod.rs (+6) · اختبار (ذكر): core/src/legacy/import_tests.rs، src-tauri/src/commands/legacy_tests.rs · وثائق: docs/adr/0003-scope-decisions.md، docs/adr/0006-legacy-import.md |
+| **F-113** | نسخ احتياطي كامل للبروفايل | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs، src-tauri/src/commands/backup_tests.rs (+1) · كود: core/src/instances/backup/manifest.rs، core/src/instances/backup/mod.rs (+9) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-114** | استعادة بحفظ الوجهة القائمة جانباً | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs، src-tauri/src/commands/backup_tests.rs · كود: core/src/instances/backup/restore.rs، core/src/instances/backup/tests.rs (+6) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-115** | **نسخ `saves` اختياري** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs · كود: core/src/instances/backup/mod.rs، core/src/instances/backup/restore.rs (+8) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-116** | مدير نسخ التحديث (لكل ملف) | Defer | later | مؤجَّل | وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-117** | إصلاح الميتافيزقا (خطة) | Defer | later | مؤجَّل | وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-118** | معاينة العوالم (قراءة فقط) | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs، src-tauri/src/commands/backup_tests.rs · كود: core/src/instances/backup/tests.rs، core/src/instances/backup/worlds.rs (+6) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-119** | استيراد عالم (نسخ فقط) | Defer | later | مؤجَّل | وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-181** | استيراد بيانات التطبيق القديم (باستود) | Keep | later | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/legacy/import_tests.rs، core/src/legacy/tests.rs (+1) · كود: core/src/legacy/import.rs، core/src/legacy/mod.rs (+6) · اختبار (ذكر): core/src/legacy/import_tests.rs، src-tauri/src/commands/legacy_tests.rs · وثائق: docs/adr/0003-scope-decisions.md، docs/adr/0006-legacy-import.md (+1) |
 ### updates
 
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
 | **F-120** | معاينة التحديث | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/tests.rs، src-tauri/src/commands/updates_tests.rs · كود: core/src/updates/mod.rs، src-tauri/src/commands.rs (+1) |
-| **F-121** | **إعادة تحقق قبل التنفيذ** | Keep | M2 | بلا أثر | — |
+| **F-121** | **إعادة تحقق قبل التنفيذ** | Keep | M2 | إشارة في الوثائق فقط | وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-122** | عقد السلامة (5 بنود) | Keep | M2 | بلا أثر | — |
 | **F-123** | **نسخ احتياطي Yes/No/Cancel** | Keep | M2 | بلا أثر | — |
 | **F-124** | تحديث بالتنزيل فقط | Keep | M2 | بلا أثر | — |

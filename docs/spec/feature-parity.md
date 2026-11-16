@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 26 |
+| حاضر — مُراجَع | 30 |
 | حاضر — بتتبّعِ اختبار | 97 |
 | جزئي — مُراجَع | 11 |
-| مفقود — مُراجَع | 15 |
+| مفقود — مُراجَع | 11 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**26** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**22** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -31,10 +31,6 @@
 | **F-015** | حالة `downloadUrl: null` عند CurseForge | providers | جزئي — مُراجَع | The data level is handled (null downloadUrl maps to "", files stay listed, plan entry blocked with the exact reason), but the spec's visible behaviour — opening the file's page in the browser — has no counterpart: nothing builds a CurseForge file/project page URL, and the only opener usages (commands.rs::open_app_folder, commands.rs::open_instance_folder) call opener().open_path on local folders, never a web URL. |
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | مفقود — مُراجَع | No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision. |
 | **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | instances | جزئي — مُراجَع | تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها. |
-| **F-113** | نسخ احتياطي كامل للبروفايل | profiles | مفقود — مُراجَع | No full profile backup: no command in generate_handler, no backup type or manifest schema; '.modrinth_bulk_downloader_profile_backups' survives only as an exclusion name in the pack exporter's EXCLUDED list. |
-| **F-114** | استعادة بحفظ الوجهة القائمة جانباً | profiles | مفقود — مُراجَع | No restore at all: '.modrinth_bulk_downloader_restore_safety' appears only as an export exclusion name; no containment check, no blocked-entries preview, no move-aside, no restore_manifest.json, no RESTORE confirmation. |
-| **F-115** | **نسخ `saves` اختياري** | profiles | مفقود — مُراجَع | With the whole backup/restore pair absent, the opt-in saves copy (and its restore-side default refusal) has no home; saves/ appears only as a standard-dir name in instance creation and as an export exclusion. |
-| **F-118** | معاينة العوالم (قراءة فقط) | profiles | مفقود — مُراجَع | No read-only worlds preview: no worlds reader in core, no worlds command in generate_handler, no world folder enumeration, datapack count or level.dat read; saves/ is only named in export exclusion tests. |
 | **F-121** | **إعادة تحقق قبل التنفيذ** | updates | جزئي — مُراجَع | The stale-plan gate exists only in the flows that exist: pack apply re-hashes the archive (PackChanged) and export compares expectedLockSha512 (InstanceChanged), both with tests. The CLI update is the only update-install path and it reads the lock once, prints rows, confirms and swaps without re-reading the lock, the instance target or the folder — no ticket, no context comparison. The GUI has no update-install command at all (only checkInstanceUpdates). docs/todo.md records F-121..F-124 as deliberately deferred to a later milestone, but features.md keeps them, so they stay gaps. |
 | **F-122** | عقد السلامة (5 بنود) | updates | مفقود — مُراجَع | The five-item safety contract copy (timestamped backup, no permanent delete, unknown files untouched, changed-since-preview update skipped, never overwrite an unlinked existing file) is absent everywhere; the only confirmation is confirm_forced's count-only prompt 'Apply N change(s)? [y/N]'. |
 | **F-123** | **نسخ احتياطي Yes/No/Cancel** | updates | مفقود — مُراجَع | No Yes/No/Cancel backup decision exists; cli update.rs unconditionally renames each replaced old jar into the shared backup dir before placing the new one, with no prompt and no whole-profile backup path the Yes branch could call. |
@@ -197,16 +193,16 @@
 | **F-108** | تفعيل/تعطيل (إعادة تسمية) | Keep | M2 | حاضر — مُراجَع | core/src/instances/toggle/mod.rs::preview_toggle · core/src/instances/toggle/mod.rs::preview_one (top-level, already-disabled, `.jar`-only, symlink, outside-root and destination-collision guards with the legacy sentences) · core/src/instances/toggle/mod.rs::execute_toggle · src-tauri/src/commands.rs::preview_toggle / ::execute_toggle · src/app/pages/InstanceDetails.tsx::InstanceDetails (preview list showing `allowed: false` + reason, then confirm) · src/lib/ipc.ts::previewToggle / ::executeToggle |
 | **F-109** | **تراجع تنفيذي عكسي** | Keep | M2 | حاضر — مُراجَع | core/src/instances/toggle/mod.rs::execute_toggle (first failure marks every remaining allowed entry `Skipped`, then walks `completed` in reverse) · core/src/instances/toggle/mod.rs::ToggleState (Success|Failed|Skipped|RolledBack|RollbackFailed|RollbackSkipped) |
 | **F-110** | رفض الروابط الرمزية والتجاوز والتصادم | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/toggle/tests.rs |
-| **F-111** | حذف بمشغّل أمان **بلا حذف دائم** | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/remove/tests.rs، src-tauri/src/commands/tests.rs · كود: cli/src/commands/remove.rs، core/src/instances/remove/mod.rs (+3) |
+| **F-111** | حذف بمشغّل أمان **بلا حذف دائم** | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/remove/tests.rs، src-tauri/src/commands/tests.rs · كود: cli/src/commands/remove.rs، core/src/instances/remove/mod.rs (+4) |
 | **F-112** | كلمة تأكيد `REMOVE` للملفات الخارجية | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/remove/tests.rs · كود: core/src/instances/remove/mod.rs، src-tauri/src/commands.rs (+2) |
-| **F-113** | نسخ احتياطي كامل للبروفايل | Keep | M2 | مفقود — مُراجَع | E:\ModManager\core\src\modpack\export.rs (line 509: exclusion name only) · E:\ModManager\src-tauri\src\lib.rs::generate_handler (no backup command) |
-| **F-114** | استعادة بحفظ الوجهة القائمة جانباً | Keep | M2 | مفقود — مُراجَع | E:\ModManager\core\src\modpack\export.rs (line 511: exclusion name only) · grep 'restore_manifest|restore_safety' → export.rs exclusions only |
-| **F-115** | **نسخ `saves` اختياري** | Keep | M2 | مفقود — مُراجَع | E:\ModManager\src-tauri\src\commands\pack.rs (line 1138: worlds excluded from pack export) · grep 'include_saves|Saves restore' → no matches |
+| **F-113** | نسخ احتياطي كامل للبروفايل | Keep | M2 | حاضر — مُراجَع | core/src/instances/backup/mod.rs::create_backup · core/src/instances/backup/manifest.rs::BackupManifest · src-tauri/src/commands/backup.rs::backup_instance · src/app/pages/InstanceBackup.tsx |
+| **F-114** | استعادة بحفظ الوجهة القائمة جانباً | Keep | M2 | حاضر — مُراجَع | core/src/instances/backup/restore.rs::build_restore_plan · core/src/instances/backup/restore.rs::execute_restore · core/src/instances/backup/restore.rs::rollback · src-tauri/src/commands/backup.rs::restore_instance |
+| **F-115** | **نسخ `saves` اختياري** | Keep | M2 | حاضر — مُراجَع | core/src/instances/backup/restore.rs::recheck_entry · core/src/instances/backup/mod.rs::create_backup · src-tauri/src/commands/backup.rs::restore_instance |
 | **F-116** | مدير نسخ التحديث (لكل ملف) | Defer | later | مؤجَّل (قرارُ المواصفة) | — |
 | **F-117** | إصلاح الميتافيزقا (خطة) | Defer | later | مؤجَّل (قرارُ المواصفة) | — |
-| **F-118** | معاينة العوالم (قراءة فقط) | Keep | M3 | مفقود — مُراجَع | grep 'level\.dat|datapack_count|worlds' → only export exclusion comments/tests · E:\ModManager\src-tauri\src\lib.rs::generate_handler (no worlds command) |
+| **F-118** | معاينة العوالم (قراءة فقط) | Keep | M3 | حاضر — مُراجَع | core/src/instances/backup/worlds.rs::preview_worlds · src-tauri/src/commands/backup.rs::preview_instance_worlds |
 | **F-119** | استيراد عالم (نسخ فقط) | Defer | later | مؤجَّل (قرارُ المواصفة) | — |
-| **F-181** | استيراد بيانات التطبيق القديم (باستود) | Keep | later | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/legacy/import_tests.rs، core/src/legacy/tests.rs (+1) · كود: core/src/legacy/import.rs، core/src/legacy/mod.rs (+6) · اختبار (ذكر): core/src/legacy/import_tests.rs، src-tauri/src/commands/legacy_tests.rs · وثائق: docs/adr/0003-scope-decisions.md، docs/adr/0006-legacy-import.md |
+| **F-181** | استيراد بيانات التطبيق القديم (باستود) | Keep | later | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/legacy/import_tests.rs، core/src/legacy/tests.rs (+1) · كود: core/src/legacy/import.rs، core/src/legacy/mod.rs (+6) · اختبار (ذكر): core/src/legacy/import_tests.rs، src-tauri/src/commands/legacy_tests.rs · وثائق: docs/adr/0003-scope-decisions.md، docs/adr/0006-legacy-import.md (+1) |
 ### updates
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |

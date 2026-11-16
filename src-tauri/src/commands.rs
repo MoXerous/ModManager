@@ -24,6 +24,9 @@ use mm_core::instances::remove::RemoveCandidate;
 /// decisions live in `mm_core::modpack` (see the module's own docs).
 pub mod pack;
 
+/// F-113..F-115/F-118: dated backups, restore, and the read-only world preview.
+pub mod backup;
+
 /// F-181: the read-only preview of the old application's data.
 pub mod legacy;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
@@ -1370,6 +1373,8 @@ pub fn save_curseforge_key(
     crate::providers::save_key(state.inner(), &key)
 }
 
+#[cfg(test)]
+pub(crate) mod backup_tests;
 #[cfg(test)]
 pub(crate) mod channel_tests;
 #[cfg(test)]
