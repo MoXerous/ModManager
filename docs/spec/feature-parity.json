@@ -499,41 +499,45 @@
     },
     {
       "id": "F-137",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\db\\mod.rs::open (lines 119-141: busy_timeout then gate then WAL then migrate)",
-        "E:\\ModManager\\core\\src\\db\\mod.rs::DbError (lines 17-28: raw Display propagation)",
-        "E:\\ModManager\\src-tauri\\src\\dto.rs::ErrorCode (no busy variant)"
+        "core/src/db/mod.rs::DbError::Busy",
+        "core/src/db/mod.rs::is_busy",
+        "src-tauri/src/commands.rs::db_error",
+        "src-tauri/src/dto.rs::ErrorCode::DatabaseBusy"
       ],
-      "test": "spec_f140_wal_busy_fk_set_and_persistent",
-      "note": "Verified the pragma order and error types; no busy mapping anywhere.",
-      "gap": "Fail-closed on busy is real (busy_timeout(5000) first in open(), then the gate, WAL assertion, then a transactional to_latest that aborts leaving no .bak), but the 'busy' answer does not exist: DbError::Migration/Sql propagate raw rusqlite Display, ErrorCode has no busy/database code, and the only busy-related test asserts the pragma is set — no lock-scenario test drives a held writer.",
-      "review": "verified:confirmed"
+      "test": "spec_f137_open_reports_a_held_writer_as_busy",
+      "note": "حاضر: انشغالُ القاعدة (BUSY/BUSY_TIMEOUT/LOCKED) خطأٌ مصنَّفٌ مستقلٌّ (DatabaseBusy) في النواة وفي كلِّ مسارات السجلّ والتاريخ، ولا يصل النصُّ الخام لـrusqlite إلى الواجهة.",
+      "gap": null,
+      "review": "fixed-s4: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-138",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\state.rs::AppState::open (line 59: map_err(|e| e.to_string()))",
-        "E:\\ModManager\\core\\src\\db\\mod.rs::DbError (raw chain Display)"
+        "core/src/db/mod.rs::DbError::MigrationFailed",
+        "core/src/db/mod.rs::file_name",
+        "src-tauri/src/state.rs::StartupFailure",
+        "src-tauri/src/lib.rs::report_startup_failure"
       ],
-      "test": null,
-      "note": "Confirmed: the _safe_error_message counterpart does not exist.",
-      "gap": "No migration-message sanitizer: a failed migration surfaces as raw rusqlite/io Display through AppState::open's e.to_string(), with no stage tag, no schema versions and no filename-only sentence; privacy is met only incidentally (no message interpolates a path), while the diagnosable old message is gone and no test asserts a path never appears.",
-      "review": "verified:confirmed"
+      "test": "spec_f138_migration_failure_message_names_stage_and_versions_without_a_path",
+      "note": "حاضر: رسالةُ فشل الترحيل تسمّي المرحلةَ وإصداراتِ المخطط واسمَ الملفّ فقط (بلا مسارٍ ولا سطرٍ خام)، ويُحفظ السببُ في السجلِّ عبر `diagnostic()`، ولا يُطبع المفتاحُ ولا المسار.",
+      "gap": null,
+      "review": "fixed-s4: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-139",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::run (line 21: AppState::open()? inside .setup)",
-        "E:\\ModManager\\src-tauri\\src\\main.rs::main (no exit-code handling)",
-        "E:\\ModManager\\src-tauri\\tauri.conf.json (window declared in config, created before setup)"
+        "src-tauri/src/state.rs::AppState::open_at",
+        "src-tauri/src/lib.rs::run",
+        "src-tauri/src/lib.rs::StartupFailure::window_failed",
+        "src-tauri/src/state.rs::STARTUP_FAILURE_EXIT_CODE"
       ],
-      "test": null,
-      "note": "Verified the open site and main() — no exit-code 2 path exists.",
-      "gap": "The DB is opened exactly once before any command runs and a failure aborts startup loudly, but it happens inside Tauri's .setup after the config-declared window already exists, the error leaves through Tauri's expect as a generic panic, and there is no pre-window gate, no ErrorCode/dialog, and no exit code 2.",
-      "review": "verified:confirmed"
+      "test": "spec_f139_the_startup_dialog_does_not_print_a_translation_key",
+      "note": "حاضر: البوابةُ تسبق إنشاءَ النافذة (create=false)، ورفضُ مخططٍ أحدث ينتهي بحوارٍ ورمزِ خروج 2، وفشلُ بناءِ النافذة يسلكُ نفسَ الطريق بدل panic، ويُسجَّل الفشلُ بدل eprintln الصامت.",
+      "gap": null,
+      "review": "fixed-s4: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-145",
