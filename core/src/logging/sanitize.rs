@@ -1,11 +1,41 @@
-//! Shareable-text sanitizer (`F-148`).
+//! Shareable-text sanitizer (`F-148`, `F-150`).
 //!
 //! Behavior port of `log_sanitizer.py`: constant tables and phase order are
-//! lifted verbatim (read-only reference, never modified). Pure functions,
-//! no filesystem access, infallible by construction (hand scanners + regexes
-//! compiled once — nothing here can fail at runtime).
+//! lifted verbatim (read-only reference, never modified). The passes are hand
+//! scanners and regexes compiled once.
+//!
+//! F-150: the contract is fallible. A successful call produces exactly what
+//! the port always produced; a call that cannot honour its policy returns
+//! [`SanitizeError`] instead of text that might still carry identity or a
+//! secret. Callers that write a file someone else may read go through
+//! [`super::report`], which aborts the whole report on the first error.
 
 use std::sync::LazyLock;
+use thiserror::Error;
+
+/// F-150: the policy value that could not be honoured.
+///
+/// `field` names the input (`home_paths` / `usernames`), `reason` says why it
+/// cannot be used. A caller only translates or logs this; it never retries.
+#[derive(Debug, Error)]
+pub enum SanitizeError {
+    /// A policy input is present but unusable (blank), so the text cannot be
+    /// redacted to a safe form without destroying or leaking it.
+    #[error("redaction policy {field} is unusable: {reason}")]
+    InvalidPolicy {
+        field: &'static str,
+        reason: &'static str,
+    },
+    /// The pass ran but the result still carries a policy term.
+    #[error("text still carries a {what} after redaction")]
+    Unredactable { what: &'static str },
+}
+
+/// F-150: the token a caller shows when sanitisation failed.
+///
+/// Never the raw text: a failure means the text is not shareable, and the
+/// reader needs a fixed marker instead of content nobody could verify.
+pub const UNAVAILABLE: &str = "<REDACTED:unavailable>";
 
 pub const REDACTED_HOME: &str = "<HOME>";
 pub const REDACTED_USER: &str = "<USER>";
@@ -182,17 +212,104 @@ fn default_homes_users() -> (Vec<String>, Vec<String>) {
 }
 
 /// Shareable text with identity and secrets removed (F-148).
-pub fn sanitize(input: &str) -> String {
+///
+/// F-150: fallible by contract. A successful call is byte-for-byte what the
+/// port always produced; a call that cannot honour the policy returns an
+/// error instead of text that might still leak.
+pub fn sanitize(input: &str) -> Result<String, SanitizeError> {
     let (homes, users) = default_homes_users();
     sanitize_with(input, &homes, &users)
 }
 
-pub fn sanitize_with(input: &str, home_paths: &[String], usernames: &[String]) -> String {
+pub fn sanitize_with(
+    input: &str,
+    home_paths: &[String],
+    usernames: &[String],
+) -> Result<String, SanitizeError> {
+    validate_policy(home_paths, usernames)?;
     // Structured JSON first (whole-document branch).
-    if let Some(out) = try_json(input, home_paths, usernames) {
-        return out;
+    let safe = match try_json(input, home_paths, usernames) {
+        Some(out) => out,
+        None => sanitize_plain(input, home_paths, usernames),
+    };
+    verify_redacted(&safe, home_paths, usernames)?;
+    Ok(safe)
+}
+
+/// F-150: refuses a policy it cannot apply.
+///
+/// A blank value has no safe substring form: replacing it would rewrite every
+/// character of the text, so the pass would have to skip it — and skipping a
+/// policy value is precisely the fail-open behaviour F-150 forbids. The same
+/// holds for a value shorter than [`MIN_POLICY_LEN`], which every pass drops.
+fn validate_policy(home_paths: &[String], usernames: &[String]) -> Result<(), SanitizeError> {
+    let check = |values: &[String], field: &'static str| {
+        for value in values {
+            if value.trim().is_empty() {
+                return Err(SanitizeError::InvalidPolicy {
+                    field,
+                    reason: "a blank value cannot be redacted",
+                });
+            }
+            if value.trim().len() < MIN_POLICY_LEN {
+                return Err(SanitizeError::InvalidPolicy {
+                    field,
+                    reason: "shorter than the minimum redaction length",
+                });
+            }
+        }
+        Ok(())
+    };
+    check(home_paths, "home_paths")?;
+    check(usernames, "usernames")
+}
+
+/// The shortest policy value the passes will rewrite (`redact_home_paths` and
+/// `redact_user_segments` both skip shorter ones).
+const MIN_POLICY_LEN: usize = 3;
+
+/// F-150: the output is re-read against the policy that produced it.
+///
+/// A pass can only promise what it actually matches; this catches the forms it
+/// cannot reach — a profile path with no trailing separator, a policy value it
+/// skipped — and turns them into an abort instead of `text that looks safe`.
+fn verify_redacted(
+    safe: &str,
+    home_paths: &[String],
+    usernames: &[String],
+) -> Result<(), SanitizeError> {
+    for home in home_paths {
+        let home = home.trim();
+        // The pass replaces the raw form and the slash form; the JSON branch
+        // writes the raw form escaped, so that variant is checked too.
+        for variant in [
+            home.to_string(),
+            home.replace('\\', "/"),
+            home.replace('\\', "\\\\"),
+        ] {
+            if !variant.is_empty() && safe.contains(&variant) {
+                return Err(SanitizeError::Unredactable { what: "home path" });
+            }
+        }
     }
-    sanitize_plain(input, home_paths, usernames)
+    for user in usernames {
+        // The pass only rewrites a name inside a profile path; the check asks
+        // the same question without demanding the trailing separator. The name
+        // is escaped, so the pattern is a literal; a build failure is still
+        // reported as a policy failure rather than a panic.
+        let esc = regex::escape(user.trim());
+        let pattern = format!(
+            r"(?i)[\\/](?:Users|home|Documents and Settings)[\\/]{esc}(?:[^A-Za-z0-9._-]|$)"
+        );
+        let check = regex::Regex::new(&pattern).map_err(|_| SanitizeError::InvalidPolicy {
+            field: "usernames",
+            reason: "the user name cannot be checked after redaction",
+        })?;
+        if check.is_match(safe) {
+            return Err(SanitizeError::Unredactable { what: "user name" });
+        }
+    }
+    Ok(())
 }
 
 fn try_json(input: &str, homes: &[String], users: &[String]) -> Option<String> {
@@ -655,7 +772,7 @@ mod tests {
     }
 
     fn s(input: &str) -> String {
-        sanitize_with(input, &homes(), &users())
+        sanitize_with(input, &homes(), &users()).expect("sanitize")
     }
 
     #[test]
@@ -827,6 +944,72 @@ mod tests {
             .contains("limit=20"));
         assert_eq!(v["items"][0]["email"], REDACTED_EMAIL);
         assert_eq!(v["items"][0]["count"], 3);
+    }
+
+    /// F-150: a policy value that cannot be redacted aborts the sanitisation.
+    ///
+    /// `""` is the shape a broken policy takes: the pass would have to replace
+    /// every position of the text, which it cannot, and today it would skip
+    /// the value and hand back text that leaks whatever that value names.
+    /// A value shorter than the minimum is the same story. Fail-closed is the
+    /// only safe answer.
+    #[test]
+    fn spec_f150_an_unusable_policy_value_aborts_sanitisation() {
+        let result = sanitize_with("token: hunter2", &[], &["".to_string()]);
+        let error = result.expect_err("a blank policy value cannot be redacted");
+        assert!(
+            matches!(
+                error,
+                SanitizeError::InvalidPolicy {
+                    field: "usernames",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        let homes = ["   ".to_string()];
+        let error = sanitize_with("token: hunter2", &homes, &[])
+            .expect_err("a blank home path cannot be redacted");
+        assert!(
+            matches!(
+                error,
+                SanitizeError::InvalidPolicy {
+                    field: "home_paths",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        // The pass skips anything shorter than three bytes, so accepting it
+        // would be a silent promise it cannot keep.
+        let error = sanitize_with("user jo", &[], &["jo".to_string()])
+            .expect_err("a two-letter user name cannot be redacted safely");
+        assert!(
+            matches!(
+                error,
+                SanitizeError::InvalidPolicy {
+                    field: "usernames",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
+    /// F-150: text that still carries a policy term is refused, not returned.
+    ///
+    /// The user-name pass only rewrites a name followed by a separator, so a
+    /// profile path that ends with the name reaches the output with the name
+    /// intact. That is a redaction that did not happen, and returning the text
+    /// would be the raw fallback F-150 forbids.
+    #[test]
+    fn spec_f150_a_profile_path_the_pass_cannot_reach_aborts() {
+        let error = sanitize_with(r"opened C:\Users\Alice", &[], &["Alice".to_string()])
+            .expect_err("the user name survived the redaction");
+        assert!(
+            matches!(error, SanitizeError::Unredactable { .. }),
+            "{error}"
+        );
     }
 
     #[test]

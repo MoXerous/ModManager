@@ -35,12 +35,49 @@ fn report_startup_failure(app: &tauri::App, failure: StartupFailure) {
     // F-138: the sentence and the cause have different audiences. The log
     // keeps the cause (sanitized); the dialog gets the sentence only.
     mm_core::logging::error(failure.diagnostic());
+    // F-150: the one artifact a user can hand to a maintainer is written
+    // through the report boundary, so every line in it is sanitized.
+    if let Ok(paths) = mm_core::paths::Paths::resolve() {
+        write_startup_report(paths.logs_dir(), &failure);
+    }
     let handle = app.handle().clone();
     app.dialog()
         .message(failure.dialog_text())
         .kind(tauri_plugin_dialog::MessageDialogKind::Error)
         .show(move |_| handle.exit(STARTUP_FAILURE_EXIT_CODE));
 }
+
+/// F-150: the shareable report of a refused startup.
+///
+/// The activity log is local and raw (F-149); this file is not — it is meant
+/// to be attached to a bug report, so it is written by
+/// [`mm_core::logging::write_report`], which sanitizes every line first and
+/// writes nothing at all if a line cannot be sanitized. A failure to write it
+/// is not a startup failure of its own: the dialog still has its sentence.
+fn write_startup_report(dir: &std::path::Path, failure: &StartupFailure) {
+    let info = mm_core::app_info();
+    // A free-text line is bracketed rather than written as `cause: …`: a
+    // second `key=value` inside a `key: value` line is a shape the field pass
+    // does not descend into, and the writer's own sanitiser has to see it.
+    let lines = vec![
+        "ModManager startup failure report".to_string(),
+        format!("app_version: {}", info.version),
+        format!("os: {} {}", info.os, info.arch),
+        format!("code: {}", failure.code.i18n_key()),
+        format!("message: {}", failure.message),
+        format!("[cause] {}", failure.detail.as_deref().unwrap_or("none")),
+    ];
+    if let Err(error) = mm_core::logging::write_report(dir, STARTUP_REPORT, &lines) {
+        // The reason can name a directory, and this line goes to the raw local
+        // log: sanitize it like every other Display.
+        let reason = mm_core::logging::sanitize(&error.to_string())
+            .unwrap_or_else(|_| mm_core::logging::UNAVAILABLE.to_string());
+        mm_core::logging::error(format_args!("the startup report was not written: {reason}"));
+    }
+}
+
+/// F-150: the report's file name, next to the activity log.
+const STARTUP_REPORT: &str = "startup_failure.txt";
 
 /// F-138: starts the activity log for the whole process, before the gate.
 ///
@@ -150,10 +187,10 @@ pub fn run() -> i32 {
 /// The code stays a generic failure: 2 means "the database gate refused",
 /// and this path never ran the gate.
 fn record_build_failure(error: &str) -> i32 {
-    mm_core::logging::error(format_args!(
-        "ModManager cannot start: {}",
-        mm_core::logging::sanitize(error)
-    ));
+    // F-150: a build failure cannot be sanitized? Then it is not named at all.
+    let safe = mm_core::logging::sanitize(error)
+        .unwrap_or_else(|_| mm_core::logging::UNAVAILABLE.to_string());
+    mm_core::logging::error(format_args!("ModManager cannot start: {safe}"));
     1
 }
 
@@ -174,5 +211,41 @@ mod tests {
         );
         assert_eq!(code, 1, "a failed build is not the refused startup");
         assert_ne!(code, STARTUP_FAILURE_EXIT_CODE);
+    }
+
+    /// F-150: a refused startup leaves a shareable report, sanitized.
+    ///
+    /// The report is the file a user attaches to a bug report, so it must not
+    /// carry a token, a directory or a user name — even when the failure's own
+    /// detail does. Every line goes through `logging::write_report`.
+    #[test]
+    fn spec_f150_a_refused_startup_leaves_a_sanitised_report() {
+        use crate::dto::ErrorCode;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let failure = StartupFailure {
+            code: ErrorCode::Internal,
+            message: "the main window could not be created".to_string(),
+            detail: Some(r"password=hunter2 at C:\Users\Alice\AppData\Local".to_string()),
+        };
+
+        write_startup_report(dir.path(), &failure);
+
+        let text = std::fs::read_to_string(dir.path().join(STARTUP_REPORT))
+            .expect("a refused startup leaves a report");
+        assert!(
+            text.contains(&format!("code: {}", ErrorCode::Internal.i18n_key())),
+            "the typed code is what a bug report shares: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "password={}",
+                mm_core::logging::sanitize::REDACTED_CREDENTIAL
+            )),
+            "the credential was not redacted: {text}"
+        );
+        for raw in ["hunter2", "Alice"] {
+            assert!(!text.contains(raw), "the report leaked {raw}: {text}");
+        }
+        assert!(text.contains("app_version: "), "{text}");
     }
 }

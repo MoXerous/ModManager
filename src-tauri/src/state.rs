@@ -46,8 +46,13 @@ pub struct StartupFailure {
 ///
 /// The migration message is already path-free by construction; this closes
 /// the remaining cases (io, WAL), whose `Display` can name a directory.
+///
+/// F-150: when the text cannot be sanitized it is not shown at all — the
+/// fixed token stands in for it, because the raw `Display` is exactly what
+/// must not escape.
 fn safe_text(message: impl std::fmt::Display) -> String {
     mm_core::logging::sanitize(&message.to_string())
+        .unwrap_or_else(|_| mm_core::logging::UNAVAILABLE.to_string())
 }
 
 /// F-138: the source chain of a failure, sanitized, for the log only.

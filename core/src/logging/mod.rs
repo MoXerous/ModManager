@@ -1,11 +1,20 @@
-//! Local logging: raw rolling activity log (F-149).
+//! Local logging: raw rolling activity log (F-149) and the shareable report
+//! boundary (F-150).
 //!
-//! The activity log stays complete and unsanitized by design; shareable
-//! reports sanitize at their own boundary (T8) via [`sanitize`].
+//! The activity log stays complete and unsanitized by design: it never leaves
+//! the machine, and a local diagnosis needs every byte (F-149).
+//!
+//! `logging::report` is what "leaves the machine" means here: any file written
+//! for someone else — a startup failure report today, a diagnostics export
+//! tomorrow — goes through it, and every line is sanitized before the file is
+//! created (F-150). A sanitisation failure aborts the report; the raw text is
+//! never a fallback.
 
+pub mod report;
 pub mod sanitize;
 
-pub use sanitize::sanitize;
+pub use report::{write_report, write_report_with, ReportError};
+pub use sanitize::{sanitize, sanitize_with, SanitizeError, UNAVAILABLE};
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
