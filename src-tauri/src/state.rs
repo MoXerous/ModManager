@@ -16,7 +16,113 @@ use mm_core::db::Db;
 use mm_core::journal::Journal;
 use mm_core::paths::Paths;
 
-use crate::dto::IpcError;
+use crate::dto::{ErrorCode, IpcError};
+
+/// F-139: the process exit code a refused startup returns.
+///
+/// 2 is what the old application left with, so a shortcut or a script that
+/// checks it keeps telling "the database was refused" from a crash.
+pub const STARTUP_FAILURE_EXIT_CODE: i32 = 2;
+
+/// F-139: why the database gate refused to start the app.
+///
+/// Typed, not a `String`: the code is the part the UI translates, so the
+/// startup dialog and the in-app error surface say the same thing. `message`
+/// is the diagnostic, safe to show (see [`StartupFailure::from_db`]).
+#[derive(Debug)]
+pub struct StartupFailure {
+    pub code: ErrorCode,
+    pub message: String,
+    /// F-138: the cause behind the sentence, sanitized.
+    ///
+    /// The dialog never carries it — a rusqlite or io Display may name a
+    /// directory, and the sentence is what the user reads. This is what the
+    /// log gets, because a failure with no cause on record cannot be
+    /// diagnosed by anyone.
+    pub detail: Option<String>,
+}
+
+/// F-138: text that is safe to show, log and quote in a report.
+///
+/// The migration message is already path-free by construction; this closes
+/// the remaining cases (io, WAL), whose `Display` can name a directory.
+fn safe_text(message: impl std::fmt::Display) -> String {
+    mm_core::logging::sanitize(&message.to_string())
+}
+
+/// F-138: the source chain of a failure, sanitized, for the log only.
+///
+/// The whole chain, because a tagged failure's `detail` usually wraps the
+/// rusqlite error that actually says why. `None` when the failure has no
+/// cause of its own (`Busy` and `NewerSchema` explain themselves).
+fn cause_of(error: &(dyn std::error::Error + 'static)) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut next = error.source();
+    while let Some(source) = next {
+        parts.push(source.to_string());
+        next = source.source();
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(safe_text(parts.join(": ")))
+    }
+}
+
+impl StartupFailure {
+    /// F-138: maps the core failure to a code and a sanitized sentence.
+    pub fn from_db(error: &mm_core::db::DbError) -> Self {
+        use mm_core::db::DbError as D;
+        let code = match error {
+            D::NewerSchema { .. } => ErrorCode::NewerSchema,
+            D::Busy => ErrorCode::DatabaseBusy,
+            D::MigrationFailed { .. } => ErrorCode::MigrationFailed,
+            D::Io(_) => ErrorCode::Io,
+            D::Wal(_) | D::Migration(_) | D::Sql(_) => ErrorCode::Internal,
+        };
+        Self {
+            code,
+            message: safe_text(error),
+            detail: cause_of(error),
+        }
+    }
+
+    /// F-139: Tauri could not build the main window.
+    ///
+    /// A refused startup like the gate's, not a panic: the window layer's own
+    /// `Display` can name a directory, so it goes to the log and the sentence
+    /// stays fixed and path-free.
+    pub fn window_failed(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self {
+            code: ErrorCode::Internal,
+            message: "the main window could not be created".to_string(),
+            detail: Some(safe_text(error)),
+        }
+    }
+
+    /// F-139: the sentence the startup dialog shows.
+    ///
+    /// English, like the log. It carries no translation key: the key is for
+    /// the in-app surface, which has a locale — the dialog does not, and
+    /// `error.databaseBusy` in front of the user says nothing at all.
+    pub fn dialog_text(&self) -> String {
+        format!("ModManager cannot start.\n\n{}", self.message)
+    }
+
+    /// F-138: the line the log gets before the app leaves.
+    ///
+    /// The sentence, the cause it deliberately omits, and the typed code. The
+    /// code belongs here and not in the dialog: it is the token a bug report
+    /// and the in-app surface share, and a developer is the reader of a log.
+    /// Sanitized, because a raw source may carry a directory.
+    pub fn diagnostic(&self) -> String {
+        let code = self.code.i18n_key();
+        match &self.detail {
+            Some(detail) => format!("[{code}] {}; cause: {detail}", self.message),
+            None => format!("[{code}] {}", self.message),
+        }
+    }
+}
 
 /// F-036: a second install tried to register while one is already running.
 ///
@@ -82,12 +188,28 @@ impl AppState {
     /// The root is the app's own stable directory and nothing else: a random
     /// per-state root would make the journal useless, because the app could
     /// not find its own unfinished operations after a restart.
-    pub fn open() -> Result<Self, String> {
-        let paths = Paths::resolve().map_err(|e| e.to_string())?;
-        paths
-            .ensure()
-            .map_err(|e| format!("cannot create data directories: {e}"))?;
-        let db = mm_core::db::open(&paths.db_file()).map_err(|e| e.to_string())?;
+    pub fn open() -> Result<Self, StartupFailure> {
+        let paths = Paths::resolve().map_err(|e| StartupFailure {
+            code: ErrorCode::Io,
+            message: safe_text(format_args!("cannot resolve the data directories: {e}")),
+            detail: Some(safe_text(&e)),
+        })?;
+        Self::open_at(paths)
+    }
+
+    /// F-139: the gate, with the roots injected.
+    ///
+    /// `open()` is this plus `Paths::resolve()`. The split exists so the
+    /// pre-window gate can be driven against a temp root: it must be tested
+    /// on the real refusal path (newer schema, held writer, broken upgrade),
+    /// and those need a database the test owns.
+    pub fn open_at(paths: Paths) -> Result<Self, StartupFailure> {
+        paths.ensure().map_err(|e| StartupFailure {
+            code: ErrorCode::Io,
+            message: safe_text(format_args!("cannot create the data directories: {e}")),
+            detail: Some(safe_text(&e)),
+        })?;
+        let db = mm_core::db::open(&paths.db_file()).map_err(|e| StartupFailure::from_db(&e))?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
             journal: Arc::new(Mutex::new(Journal::new(paths.operations_dir()))),
@@ -427,6 +549,291 @@ mod tests {
     /// `begin_install` registers the flag so `cancel_active_install` can flip
     /// it, and `end_install` takes the slot back down: a stale flag left
     /// registered would "cancel" an install that has not started yet.
+    /// F-139: the window must not exist before the database gate has run.
+    ///
+    /// Tauri creates every config-declared window before `.setup` runs, so a
+    /// window declared there is a window on top of a database that may be
+    /// refused. `"create": false` moves creation into `.setup`, after the
+    /// gate, and `lib.rs` builds the window there.
+    #[test]
+    fn spec_f139_the_window_is_created_after_the_gate_not_by_the_config() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json is json");
+        let windows = config["app"]["windows"]
+            .as_array()
+            .expect("the app declares a windows array");
+        assert!(!windows.is_empty(), "no window is declared at all");
+        // `create_main_window` builds `windows.first()`: a second declaration
+        // would be a window that silently never exists.
+        assert_eq!(
+            windows.len(),
+            1,
+            "only the first declared window is ever built"
+        );
+        for window in windows {
+            assert_eq!(
+                window["create"].as_bool(),
+                Some(false),
+                "a config window exists before .setup: the gate would run behind it"
+            );
+        }
+    }
+
+    /// F-139: a file written by a newer version refuses startup, before any
+    /// window exists, with a typed answer and the process exit code 2.
+    ///
+    /// The gate has to run against the real database path (that is what it
+    /// protects), so it takes the resolved paths as an argument instead of
+    /// resolving the machine's own directories: a test must never touch the
+    /// real profile.
+    #[test]
+    fn spec_f139_open_at_refuses_a_newer_schema_with_a_typed_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::from_root(dir.path());
+        let db_path = paths.db_file();
+        std::fs::create_dir_all(db_path.parent().expect("the db sits in a directory"))
+            .expect("create the data directory");
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("raw open");
+            conn.execute_batch("PRAGMA user_version = 99")
+                .expect("stamp a newer schema");
+        }
+
+        let failure = match AppState::open_at(paths) {
+            Ok(_) => panic!("a newer schema must refuse startup"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.code,
+            ErrorCode::NewerSchema,
+            "the UI can only translate a code: {}",
+            failure.message
+        );
+        assert!(failure.message.contains("99"), "{}", failure.message);
+        assert!(
+            failure
+                .message
+                .contains(&mm_core::db::CURRENT_VERSION.to_string()),
+            "the supported version is missing: {}",
+            failure.message
+        );
+        let root = dir.path().to_string_lossy().into_owned();
+        assert!(
+            !failure.message.contains(&root),
+            "the failure leaked a directory: {}",
+            failure.message
+        );
+    }
+
+    /// F-139: a refused startup leaves an exit code a script can read.
+    ///
+    /// The refusal path ends in `handle.exit(STARTUP_FAILURE_EXIT_CODE)`, and
+    /// nothing here can run an event loop to observe it — so what is pinned
+    /// is the contract a shortcut or an installer depends on: 2, the code the
+    /// old application left with, distinct from every other way this process
+    /// can end (0 a normal close, 1 a failed build, 101 a Rust panic).
+    #[test]
+    fn spec_f139_a_refused_startup_leaves_an_exit_code_of_its_own() {
+        assert_eq!(
+            STARTUP_FAILURE_EXIT_CODE, 2,
+            "the old application left with 2; scripts and shortcuts rely on it"
+        );
+        for other in [0, 1, 101] {
+            assert_ne!(
+                STARTUP_FAILURE_EXIT_CODE, other,
+                "a refused startup must be distinguishable from exit {other}"
+            );
+        }
+    }
+
+    /// F-138: a failed upgrade reaches startup as the safe sentence.
+    ///
+    /// The same failure the core test drives, one layer up: what the startup
+    /// dialog and the log get is the stage, the two versions and the file
+    /// name — and never the resolved path with the user name in it.
+    #[test]
+    fn spec_f138_a_migration_failure_reaches_startup_without_a_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::from_root(dir.path());
+        let db_path = paths.db_file();
+        std::fs::create_dir_all(db_path.parent().expect("the db sits in a directory"))
+            .expect("create the data directory");
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("raw open");
+            conn.execute_batch(
+                "CREATE TABLE instances (id TEXT PRIMARY KEY);
+                 PRAGMA user_version = 0;",
+            )
+            .expect("a conflicting table at v0");
+        }
+
+        let failure = match AppState::open_at(paths) {
+            Ok(_) => panic!("the conflicting table must refuse startup"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.code, ErrorCode::MigrationFailed);
+        assert!(
+            failure.message.contains("failed during migration"),
+            "the stage is missing: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("from schema version 0"),
+            "the versions are missing: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("app.sqlite3"),
+            "the file name is missing: {}",
+            failure.message
+        );
+        let root = dir.path().to_string_lossy().into_owned();
+        assert!(
+            !failure.message.contains(&root),
+            "the failure leaked a directory: {}",
+            failure.message
+        );
+    }
+
+    /// F-138: the cause of a failed upgrade is kept for the log.
+    ///
+    /// The message is safe for the user but says nothing about why. The raw
+    /// rusqlite/io failure is `MigrationFailed`'s `source`, and nothing read
+    /// it: the diagnosis reached neither the dialog nor a log. The line the
+    /// app records before it leaves carries it, sanitized.
+    #[test]
+    fn spec_f138_a_failed_migration_keeps_its_cause_for_the_log() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::from_root(dir.path());
+        let db_path = paths.db_file();
+        std::fs::create_dir_all(db_path.parent().expect("the db sits in a directory"))
+            .expect("create the data directory");
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("raw open");
+            conn.execute_batch(
+                "CREATE TABLE instances (id TEXT PRIMARY KEY);
+                 PRAGMA user_version = 0;",
+            )
+            .expect("a conflicting table at v0");
+        }
+
+        let failure = match AppState::open_at(paths) {
+            Ok(_) => panic!("the conflicting table must refuse startup"),
+            Err(failure) => failure,
+        };
+
+        // The diagnostic carries what the safe sentence cannot: the cause.
+        let diagnostic = failure.diagnostic();
+        assert!(
+            diagnostic.contains("failed during migration"),
+            "the stage is missing from the log line: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("already exists"),
+            "the cause is missing from the log line: {diagnostic}"
+        );
+        // ...and the user's sentence stays the safe one.
+        assert!(
+            !failure.dialog_text().contains("already exists"),
+            "the cause belongs in the log, not in the dialog: {}",
+            failure.dialog_text()
+        );
+        let root = dir.path().to_string_lossy().into_owned();
+        assert!(
+            !diagnostic.contains(&root),
+            "the log line leaked a directory: {diagnostic}"
+        );
+    }
+
+    /// F-139: the startup dialog speaks; it does not print catalog keys.
+    ///
+    /// It used to append `error.databaseBusy` in parentheses — the key, not
+    /// the sentence, and in no language at all. The dialog is English, like
+    /// the log; the code stays in the typed answer for the in-app surface.
+    #[test]
+    fn spec_f139_the_startup_dialog_does_not_print_a_translation_key() {
+        let cases = [
+            (ErrorCode::DatabaseBusy, "the database is busy"),
+            (
+                ErrorCode::MigrationFailed,
+                "the database could not be upgraded",
+            ),
+            (ErrorCode::NewerSchema, "the database schema is newer"),
+            (ErrorCode::Internal, "something failed"),
+        ];
+        for (code, message) in cases {
+            let failure = StartupFailure {
+                code,
+                message: message.to_string(),
+                detail: None,
+            };
+            let text = failure.dialog_text();
+            assert!(
+                !text.contains(&code.i18n_key()),
+                "the dialog shows the key, not the text: {text}"
+            );
+            assert!(
+                !text.contains("error."),
+                "a catalog key reached the user: {text}"
+            );
+            assert!(text.contains(message), "the sentence is missing: {text}");
+        }
+    }
+
+    /// F-139: a window Tauri cannot build is a refused startup, not a panic.
+    ///
+    /// `create_main_window` returned `?` into `.setup`, so Tauri's own setup
+    /// panic answered it: no sentence and exit 101. It is a `StartupFailure`
+    /// like the gate's, and its message names no directory.
+    #[test]
+    fn spec_f139_a_window_that_cannot_be_built_is_a_startup_failure() {
+        let error = std::io::Error::other(
+            r"failed to create window at C:\Users\Alice\AppData\Local\ModManager",
+        );
+        let failure = StartupFailure::window_failed(&error);
+        assert_eq!(failure.code, ErrorCode::Internal);
+        let text = failure.dialog_text();
+        assert!(
+            text.contains("window"),
+            "the sentence is unreadable: {text}"
+        );
+        assert!(
+            !text.contains("Alice"),
+            "the dialog leaked a directory: {text}"
+        );
+        let logged = failure.diagnostic();
+        assert!(
+            logged.contains("failed to create window"),
+            "the cause is missing from the log: {logged}"
+        );
+        assert!(
+            !logged.contains("Alice"),
+            "the log line was not sanitized: {logged}"
+        );
+    }
+
+    /// F-137/F-138: every new code has a sentence in both catalogs.
+    ///
+    /// The UI translates `error.<code>`; a code with no key renders as the raw
+    /// dotted identifier, which is worse than no message at all.
+    #[test]
+    fn spec_f137_and_f138_the_new_codes_are_translated_in_both_catalogs() {
+        let en: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/i18n/en.json")).expect("en.json is json");
+        let ar: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/i18n/ar.json")).expect("ar.json is json");
+        for code in [ErrorCode::DatabaseBusy, ErrorCode::MigrationFailed] {
+            let key = code.i18n_key();
+            for (locale, catalog) in [("en", &en), ("ar", &ar)] {
+                let text = catalog
+                    .get(&key)
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                assert!(!text.is_empty(), "{locale} has no {key}");
+            }
+        }
+    }
+
     #[test]
     fn spec_f036_begin_cancel_end_cycle() {
         let dir = tempfile::tempdir().expect("tempdir");

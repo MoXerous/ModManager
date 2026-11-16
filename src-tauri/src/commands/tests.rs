@@ -281,6 +281,53 @@ fn spec_f134_newer_lock_schema_surfaces_as_code() {
     assert_eq!(err.code, ErrorCode::NewerSchema);
 }
 
+/// F-137: the history screen answers a held writer with the busy code.
+///
+/// All three history paths — the install log write, the log read and the
+/// clear — run on the shared handle and share one mapper. The write is what
+/// the lock actually blocks (a read in WAL sees the last snapshot), so this
+/// drives `clear` against a real second connection holding `BEGIN IMMEDIATE`
+/// and pins what the UI receives: `DatabaseBusy`, never `internal` with the
+/// raw `database is locked` text underneath it.
+///
+/// The handle waits its own 5 s busy timeout before it answers; that wait is
+/// the behaviour under test, not test overhead.
+#[test]
+fn spec_f137_a_held_writer_reaches_the_history_screen_as_database_busy() {
+    let dir = tempfile::tempdir().expect("temp");
+    let db_path = dir.path().join("t.db");
+    let state = AppState::from_db(mm_core::db::open(&db_path).expect("open"));
+
+    let writer = rusqlite::Connection::open(&db_path).expect("second connection");
+    writer
+        .busy_timeout(std::time::Duration::from_millis(0))
+        .expect("the test must not wait on itself");
+    writer
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold the lock");
+
+    let error = tauri::async_runtime::block_on(clear_history_at(&state))
+        .expect_err("a held writer must fail the write");
+    writer.execute_batch("ROLLBACK").expect("release the lock");
+
+    assert_eq!(
+        error.code,
+        ErrorCode::DatabaseBusy,
+        "a locked database is its own state, not a generic failure: {}",
+        error.message
+    );
+    assert!(
+        error.message.to_lowercase().contains("busy"),
+        "the typed busy sentence is what a user can act on: {}",
+        error.message
+    );
+    assert!(
+        !error.message.contains("database is locked"),
+        "the raw rusqlite text reached the UI: {}",
+        error.message
+    );
+}
+
 #[test]
 fn spec_f067_toggle_action_maps_to_core() {
     use crate::dto::ToggleActionDto;

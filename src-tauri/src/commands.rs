@@ -16,6 +16,7 @@ use crate::dto::{
     UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
+use mm_core::db::Db;
 use mm_core::downloader::{ItemProgress, JournalOp};
 use mm_core::instances::remove::RemoveCandidate;
 
@@ -36,6 +37,10 @@ fn db_error(e: &mm_core::db::DbError) -> IpcError {
     match e {
         // The user must update or downgrade; retrying changes nothing.
         D::NewerSchema { .. } => IpcError::new(ErrorCode::NewerSchema, e),
+        // F-137: a held lock is its own state: wait, or close the other copy.
+        D::Busy => IpcError::new(ErrorCode::DatabaseBusy, e),
+        // F-138: the message already names the stage and the versions.
+        D::MigrationFailed { .. } => IpcError::new(ErrorCode::MigrationFailed, e),
         D::Io(_) => IpcError::io(e),
         // Migration and WAL failures are our setup, not the user's action.
         D::Wal(_) | D::Migration(_) | D::Sql(_) => IpcError::internal(e),
@@ -1255,6 +1260,20 @@ fn history_rows(
     rows
 }
 
+/// F-137: the three history paths run through one mapper.
+///
+/// The log write, the log read and the clear all touch the same database, so
+/// a held writer has one answer: `DatabaseBusy` (`db_error`), not `internal`
+/// with the raw `database is locked` text underneath it. One seam, because
+/// three hand-written `map_err` calls are three chances to forget this.
+async fn history<T, F>(state: &AppState, f: F) -> Result<T, IpcError>
+where
+    T: Send + 'static,
+    F: FnOnce(&Db) -> Result<T, mm_core::db::DbError> + Send + 'static,
+{
+    state.with_db(|db| f(db).map_err(|e| db_error(&e))).await
+}
+
 /// Write the rows `history_rows` built, if there are any.
 ///
 /// One `with_db` for the whole batch: the lock is taken once, and a batch of
@@ -1270,15 +1289,13 @@ async fn log_history(
     if rows.is_empty() {
         return Ok(());
     }
-    state
-        .with_db(move |db| {
-            for row in &rows {
-                mm_core::db::download_history::log(db, row)
-                    .map_err(|e| IpcError::internal(e.to_string()))?;
-            }
-            Ok(())
-        })
-        .await
+    history(state, move |db| {
+        for row in &rows {
+            mm_core::db::download_history::log(db, row)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// F-152/F-153: the install log, newest first.
@@ -1289,6 +1306,14 @@ async fn log_history(
 #[tauri::command]
 pub async fn list_download_history(
     state: tauri::State<'_, AppState>,
+    query: DownloadHistoryQueryDto,
+) -> Result<Vec<DownloadHistoryEntryDto>, IpcError> {
+    list_history_at(state.inner(), query).await
+}
+
+/// The read body of [`list_download_history`], against a state a test owns.
+async fn list_history_at(
+    state: &AppState,
     query: DownloadHistoryQueryDto,
 ) -> Result<Vec<DownloadHistoryEntryDto>, IpcError> {
     let status = match query.status.as_deref().map(str::trim) {
@@ -1303,13 +1328,11 @@ pub async fn list_download_history(
         search: query.search,
         limit: query.limit,
     };
-    state
-        .with_db(move |db| {
-            mm_core::db::download_history::list(db, &core)
-                .map(|rows| rows.iter().map(DownloadHistoryEntryDto::from).collect())
-                .map_err(|e| IpcError::internal(e.to_string()))
-        })
-        .await
+    history(state, move |db| {
+        mm_core::db::download_history::list(db, &core)
+    })
+    .await
+    .map(|rows| rows.iter().map(DownloadHistoryEntryDto::from).collect())
 }
 
 /// Deletes every history row and answers how many went.
@@ -1318,13 +1341,14 @@ pub async fn list_download_history(
 /// bare `()` would leave the UI guessing whether anything happened.
 #[tauri::command]
 pub async fn clear_download_history(state: tauri::State<'_, AppState>) -> Result<u32, IpcError> {
-    state
-        .with_db(|db| {
-            mm_core::db::download_history::clear(db)
-                .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
-                .map_err(|e| IpcError::internal(e.to_string()))
-        })
+    clear_history_at(state.inner()).await
+}
+
+/// The write body of [`clear_download_history`], against a state a test owns.
+async fn clear_history_at(state: &AppState) -> Result<u32, IpcError> {
+    history(state, mm_core::db::download_history::clear)
         .await
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
 }
 
 /// Where the live CurseForge key comes from, and where its file lives — never

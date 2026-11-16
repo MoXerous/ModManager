@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 22 |
+| حاضر — مُراجَع | 25 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 13 |
-| مفقود — مُراجَع | 17 |
+| جزئي — مُراجَع | 11 |
+| مفقود — مُراجَع | 16 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**30** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**27** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -45,9 +45,6 @@
 | **F-130** | **قصّ الميتافيزقا فقط** | updates | مفقود — مُراجَع | No metadata-only prune/reconcile: lock entries are dropped only by explicit remove; scan_instance returns facts plus lock entries without reconciling them; grep for prune/reconcile in core finds one unrelated comment. No plan, no mandatory dry-run, no typed report. |
 | **F-131** | **التمييز «موجود» عن «مؤهَّل»** | updates | جزئي — مُراجَع | The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere. |
 | **F-132** | كاش لكل تشغيل في المخطّط | updates | جزئي — مُراجَع | The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour. |
-| **F-137** | **fail-closed عند القفل** | storage | جزئي — مُراجَع | Fail-closed on busy is real (busy_timeout(5000) first in open(), then the gate, WAL assertion, then a transactional to_latest that aborts leaving no .bak), but the 'busy' answer does not exist: DbError::Migration/Sql propagate raw rusqlite Display, ErrorCode has no busy/database code, and the only busy-related test asserts the pragma is set — no lock-scenario test drives a held writer. |
-| **F-138** | **تنقية رسائل الترحيل** | storage | مفقود — مُراجَع | No migration-message sanitizer: a failed migration surfaces as raw rusqlite/io Display through AppState::open's e.to_string(), with no stage tag, no schema versions and no filename-only sentence; privacy is met only incidentally (no message interpolates a path), while the diagnosable old message is gone and no test asserts a path never appears. |
-| **F-139** | **فشل قبل بناء النافذة** | storage | جزئي — مُراجَع | The DB is opened exactly once before any command runs and a failure aborts startup loudly, but it happens inside Tauri's .setup after the config-declared window already exists, the error leaves through Tauri's expect as a generic panic, and there is no pre-window gate, no ErrorCode/dialog, and no exit code 2. |
 | **F-145** | مركز العمليات (قراءة فقط) | operations | جزئي — مُراجَع | No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record. |
 | **F-150** | **فشل مغلق بلا مخرج خام** | logging | مفقود — مُراجَع | No report-writing path exists: sanitize/sanitize_with are called from nowhere outside their own module (workspace grep), sanitize returns String and is infallible by construction, and logging::init only writes the raw activity log. The old contract (a sanitizer failure aborts the report and never writes a raw one) has neither a code path nor a test — the fail-closed property cannot be exercised at all. |
 | **F-157** | `export_manifest.json` | - | مفقود — مُراجَع | No in-archive policy record: write_export_zip emits only modrinth.index.json plus overrides (no export_manifest.json); ExcludedEntry/SkipReason decisions are shown in the preview UI and then discarded, so the artefact cannot be machine-audited after it leaves the app. |
@@ -236,9 +233,9 @@
 | **F-134** | **بوابة إصدار المخطط المستقبلي** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/mod.rs، src-tauri/src/commands/tests.rs |
 | **F-135** | نسخة احتياطية قبل الترحيل | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/mod.rs |
 | **F-136** | **نشر النسخة بلا استبدال** | Keep | M1 | حاضر — بتتبّعِ اختبار | كود: core/src/db/mod.rs |
-| **F-137** | **fail-closed عند القفل** | Keep | M1 | جزئي — مُراجَع | E:\ModManager\core\src\db\mod.rs::open (lines 119-141: busy_timeout then gate then WAL then migrate) · E:\ModManager\core\src\db\mod.rs::DbError (lines 17-28: raw Display propagation) · E:\ModManager\src-tauri\src\dto.rs::ErrorCode (no busy variant) |
-| **F-138** | **تنقية رسائل الترحيل** | Keep | M1 | مفقود — مُراجَع | E:\ModManager\src-tauri\src\state.rs::AppState::open (line 59: map_err(|e| e.to_string())) · E:\ModManager\core\src\db\mod.rs::DbError (raw chain Display) |
-| **F-139** | **فشل قبل بناء النافذة** | Keep | M1 | جزئي — مُراجَع | E:\ModManager\src-tauri\src\lib.rs::run (line 21: AppState::open()? inside .setup) · E:\ModManager\src-tauri\src\main.rs::main (no exit-code handling) · E:\ModManager\src-tauri\tauri.conf.json (window declared in config, created before setup) |
+| **F-137** | **fail-closed عند القفل** | Keep | M1 | حاضر — مُراجَع | core/src/db/mod.rs::DbError::Busy · core/src/db/mod.rs::is_busy · src-tauri/src/commands.rs::db_error · src-tauri/src/dto.rs::ErrorCode::DatabaseBusy |
+| **F-138** | **تنقية رسائل الترحيل** | Keep | M1 | حاضر — مُراجَع | core/src/db/mod.rs::DbError::MigrationFailed · core/src/db/mod.rs::file_name · src-tauri/src/state.rs::StartupFailure · src-tauri/src/lib.rs::report_startup_failure |
+| **F-139** | **فشل قبل بناء النافذة** | Keep | M1 | حاضر — مُراجَع | src-tauri/src/state.rs::AppState::open_at · src-tauri/src/lib.rs::run · src-tauri/src/lib.rs::StartupFailure::window_failed · src-tauri/src/state.rs::STARTUP_FAILURE_EXIT_CODE |
 | **F-140** | **WAL** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/mod.rs |
 ### operations
 

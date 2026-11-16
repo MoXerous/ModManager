@@ -98,6 +98,13 @@ pub enum ErrorCode {
     /// Refused on purpose — two batches sharing one cancel flag would break
     /// both — and the UI tells the user to wait for, or stop, the running one.
     Busy,
+    /// F-137: SQLite refused a write because another connection holds the
+    /// lock past `busy_timeout`. Not `Busy`, which is the install slot: this
+    /// one is a database state the user resolves outside the app.
+    DatabaseBusy,
+    /// F-138: the database could not be upgraded. The message carries the
+    /// stage and the schema versions, never a directory.
+    MigrationFailed,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -111,6 +118,21 @@ pub struct IpcError {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub retry_after_seconds: Option<u64>,
+}
+
+impl ErrorCode {
+    /// The catalog key both locales carry for this code (`error.<camelCase>`).
+    ///
+    /// Serialized, not a second hand-written match: the generated binding the
+    /// frontend consumes is produced from the same `serde` names, so the key
+    /// cannot drift from the enum. Used where no frontend is running — the
+    /// native startup dialog (F-139).
+    pub fn i18n_key(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(name)) => format!("error.{name}"),
+            _ => "error.internal".to_string(),
+        }
+    }
 }
 
 impl IpcError {
