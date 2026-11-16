@@ -19,12 +19,97 @@ pub enum DbError {
     NewerSchema { found: u32, supported: u32 },
     #[error("wal mode not applied: {0}")]
     Wal(String),
+    /// F-137: another connection holds the write lock past `busy_timeout`.
+    ///
+    /// Its own answer, not a wrapped `Sql` error: "the database is busy" is a
+    /// state the user can act on (close the other copy, wait, retry), while
+    /// the raw `database is locked` text is untranslatable and says nothing.
+    #[error("the database is busy: another process is holding the write lock")]
+    Busy,
+    /// F-138: a failed upgrade, described safely and diagnosably.
+    ///
+    /// The message names the database file (name only), the stage that failed
+    /// and the versions involved — the old application's wording. The
+    /// underlying failure is a `source` and never reaches the message: a
+    /// rusqlite or io Display may carry an absolute path.
+    #[error(
+        "Database migration for {file} failed during {stage} from schema version {from} to schema version {to}. The application stopped before normal startup."
+    )]
+    MigrationFailed {
+        stage: &'static str,
+        from: u32,
+        to: u32,
+        /// `file_name` of the database, never a directory.
+        file: String,
+        #[source]
+        detail: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error(transparent)]
-    Migration(#[from] rusqlite_migration::Error),
+    Migration(rusqlite_migration::Error),
     #[error(transparent)]
-    Sql(#[from] rusqlite::Error),
+    Sql(rusqlite::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// F-137: SQLITE_BUSY / SQLITE_LOCKED, never the raw text.
+fn is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+impl From<rusqlite::Error> for DbError {
+    fn from(error: rusqlite::Error) -> Self {
+        if is_busy(&error) {
+            Self::Busy
+        } else {
+            Self::Sql(error)
+        }
+    }
+}
+
+impl From<rusqlite_migration::Error> for DbError {
+    fn from(error: rusqlite_migration::Error) -> Self {
+        // The migration crate wraps what rusqlite returned; the busy answer
+        // must survive that wrap or the user gets the raw text again.
+        if matches!(
+            &error,
+            rusqlite_migration::Error::RusqliteError { err, .. } if is_busy(err)
+        ) {
+            return Self::Busy;
+        }
+        Self::Migration(error)
+    }
+}
+
+impl DbError {
+    /// F-138: tags a failure with the stage and versions it happened at.
+    ///
+    /// Answers the user must see as themselves (busy, newer schema, an
+    /// already-tagged failure) are passed through untouched; everything else
+    /// becomes the safe sentence.
+    fn at_stage(self, stage: &'static str, from: u32, path: &Path) -> Self {
+        match self {
+            Self::Busy | Self::NewerSchema { .. } | Self::MigrationFailed { .. } => self,
+            other => Self::MigrationFailed {
+                stage,
+                from,
+                to: CURRENT_VERSION,
+                file: file_name(path),
+                detail: Box::new(other),
+            },
+        }
+    }
+}
+
+/// The database file name only: its directory (and the user name inside it)
+/// must never reach a message that is shown or logged (F-138).
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "the database".to_string())
 }
 
 pub struct Db {
@@ -135,9 +220,11 @@ pub fn open(path: &Path) -> Result<Db, DbError> {
         // no user content — the WAL pragma above already initialized the
         // file, so file size alone cannot gate the backup (spec §2-5).
         if version > 0 {
-            backup_db(&conn, path, version)?;
+            backup_db(&conn, path, version).map_err(|e| e.at_stage("backup", version, path))?;
         }
-        schema::migrations().to_latest(&mut conn)?;
+        schema::migrations()
+            .to_latest(&mut conn)
+            .map_err(|e| DbError::from(e).at_stage("migration", version, path))?;
     }
     Ok(Db {
         conn,
@@ -630,6 +717,93 @@ mod tests {
         assert!(
             !baks.iter().any(|n| n.to_string_lossy().ends_with(".bak")),
             "no backup on refusal"
+        );
+    }
+
+    /// F-137: a held writer must come back as our own busy answer.
+    ///
+    /// A database one version behind is the case that needs a write: the
+    /// backup and the migrations both run inside `open`, so a second
+    /// connection holding `BEGIN IMMEDIATE` makes the attempt fail. What the
+    /// caller gets must not be the raw `database is locked` text — the UI has
+    /// no translation for it and the sentence says nothing about what to do.
+    #[test]
+    fn spec_f137_open_reports_a_held_writer_as_busy() {
+        let dir = crate::test_tempdir();
+        let p = dir.path().join("t.db");
+        {
+            let mut conn = rusqlite::Connection::open(&p).expect("raw open");
+            schema::migrations()
+                .to_version(&mut conn, 1)
+                .expect("a database one version behind");
+            conn.pragma_update(None, "journal_mode", "WAL")
+                .expect("wal");
+        }
+        let writer = rusqlite::Connection::open(&p).expect("second connection");
+        writer
+            .busy_timeout(std::time::Duration::from_millis(0))
+            .expect("the test must not wait on itself");
+        writer
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("hold the lock");
+
+        let error = match open(&p) {
+            Ok(_) => panic!("a held writer must fail the open"),
+            Err(error) => error,
+        };
+        let text = error.to_string();
+        assert!(
+            matches!(&error, DbError::Busy),
+            "the busy answer needs its own variant, got: {text}"
+        );
+        assert!(
+            !text.contains("database is locked"),
+            "the raw rusqlite text reached the caller: {text}"
+        );
+        assert!(
+            text.to_lowercase().contains("busy"),
+            "expected a busy answer, got: {text}"
+        );
+        writer.execute_batch("ROLLBACK").expect("release the lock");
+    }
+
+    /// F-138: a failed migration names the stage and the versions, and never
+    /// names a directory.
+    ///
+    /// The old application's message was diagnosable but safe: file name,
+    /// stage, `from`/`to`. A raw rusqlite Display gives neither the stage nor
+    /// the versions, and any io/rusqlite error text may carry an absolute path.
+    #[test]
+    fn spec_f138_migration_failure_message_names_stage_and_versions_without_a_path() {
+        let dir = crate::test_tempdir();
+        let p = dir.path().join("t.db");
+        {
+            let conn = rusqlite::Connection::open(&p).expect("raw open");
+            // A v0 file that already holds the table M1 wants to create: the
+            // migration fails on a real conflict, not on an invented error.
+            conn.execute_batch(
+                "CREATE TABLE instances (id TEXT PRIMARY KEY);
+                 PRAGMA user_version = 0;",
+            )
+            .expect("a conflicting table at v0");
+        }
+
+        let error = match open(&p) {
+            Ok(_) => panic!("the conflicting table must block M1"),
+            Err(error) => error,
+        };
+        let text = error.to_string();
+        assert!(text.contains("failed during migration"), "stage: {text}");
+        assert!(text.contains("from schema version 0"), "{text}");
+        assert!(
+            text.contains(&format!("to schema version {CURRENT_VERSION}")),
+            "{text}"
+        );
+        assert!(text.contains("t.db"), "the file name is missing: {text}");
+        let root = dir.path().to_string_lossy().into_owned();
+        assert!(
+            !text.contains(&root),
+            "the message leaked a directory: {text}"
         );
     }
 

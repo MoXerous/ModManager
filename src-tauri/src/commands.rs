@@ -36,6 +36,10 @@ fn db_error(e: &mm_core::db::DbError) -> IpcError {
     match e {
         // The user must update or downgrade; retrying changes nothing.
         D::NewerSchema { .. } => IpcError::new(ErrorCode::NewerSchema, e),
+        // F-137: a held lock is its own state: wait, or close the other copy.
+        D::Busy => IpcError::new(ErrorCode::DatabaseBusy, e),
+        // F-138: the message already names the stage and the versions.
+        D::MigrationFailed { .. } => IpcError::new(ErrorCode::MigrationFailed, e),
         D::Io(_) => IpcError::io(e),
         // Migration and WAL failures are our setup, not the user's action.
         D::Wal(_) | D::Migration(_) | D::Sql(_) => IpcError::internal(e),

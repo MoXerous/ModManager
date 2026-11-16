@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    modmanager_lib::run()
+    std::process::exit(modmanager_lib::run())
 }
