@@ -12,7 +12,10 @@ pub mod record;
 pub mod recovery;
 pub mod registry;
 pub mod remove;
+pub mod stamp;
 pub mod toggle;
+
+pub mod backup;
 
 pub use content::{
     classify_content, lock_entry_for_name, Compatibility, CompatibilityReason, ContentClass,
