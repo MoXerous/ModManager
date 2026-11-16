@@ -554,16 +554,18 @@
     },
     {
       "id": "F-150",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\logging\\sanitize.rs::sanitize (returns String, no Result)",
-        "E:\\ModManager\\core\\src\\logging\\mod.rs::init (raw rolling log only)",
-        "workspace grep for 'sanitize\\(' — only the definition and re-export"
+        "core/src/logging/sanitize.rs::Policy",
+        "core/src/logging/sanitize.rs::verify_redacted",
+        "core/src/logging/report.rs::write_report",
+        "core/src/logging/report.rs::discard",
+        "src-tauri/src/state.rs::dialog_text"
       ],
-      "test": null,
-      "note": "F-148's sanitizer is present and tested, but the F-150 behaviour is about a report flow that does not exist yet.",
-      "gap": "No report-writing path exists: sanitize/sanitize_with are called from nowhere outside their own module (workspace grep), sanitize returns String and is infallible by construction, and logging::init only writes the raw activity log. The old contract (a sanitizer failure aborts the report and never writes a raw one) has neither a code path nor a test — the fail-closed property cannot be exercised at all.",
-      "review": "verified:confirmed"
+      "test": "spec_f150_a_report_that_cannot_be_sanitised_leaves_no_file",
+      "note": "حاضر: سياسةُ حجبٍ مركزيةٌ لكلِّ نصٍّ يخرج من الآلة، والتنقيعُ قابلٌ للفشل (قيمةٌ غيرُ قابلة للاستعمال تُسقَط وتُبلَّغ، وقيمةٌ حاضرةٌ لا تُحجب تُفشل)، والتقريرُ يُبنى كاملًا في الذاكرة قبل أيّ إنشاء، فلا ملفَّ تقريرَ عند الفشل ولا `.part` عالق، والحوارُ يشرح انتفاءَ التفصيل بنصٍّ مترجَم.",
+      "gap": null,
+      "review": "fixed-s5: implemented, adversarially challenged (glm), five findings fixed"
     },
     {
       "id": "F-155",

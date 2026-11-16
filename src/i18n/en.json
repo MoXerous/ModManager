@@ -76,6 +76,7 @@
   "error.busy": "Another install is already running. Wait for it to finish, or stop it first.",
   "error.databaseBusy": "The database is busy: another copy of the app or another program is using it. Close it and try again.",
   "error.migrationFailed": "The database could not be upgraded, so the app stopped before starting. Your data was not changed; the details show the stage and the schema versions.",
+  "error.startupDetailUnavailable": "The details of this failure could not be shown: they could not be redacted safely, so they were withheld rather than displayed. The log records that this happened.",
 
   "page.instances.emptyTitle": "No instances yet",
   "page.instances.emptyBody": "Create an instance or link an existing folder.",

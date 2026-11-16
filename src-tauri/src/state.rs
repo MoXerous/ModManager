@@ -24,6 +24,16 @@ use crate::dto::{ErrorCode, IpcError};
 /// checks it keeps telling "the database was refused" from a crash.
 pub const STARTUP_FAILURE_EXIT_CODE: i32 = 2;
 
+/// F-150: what the startup dialog says when the detail was withheld.
+///
+/// The startup detail is sanitized before it is shown or logged (F-138/F-150),
+/// and a failure to sanitize means the text is not shareable at all. The user
+/// gets this sentence instead of `<REDACTED:unavailable>`, which explains
+/// nothing; `src/i18n/en.json` carries the same sentence under
+/// `error.startupDetailUnavailable`, and a test pins the two together.
+pub const DETAIL_UNAVAILABLE: &str =
+    "The details of this failure could not be shown: they could not be redacted safely, so they were withheld rather than displayed. The log records that this happened.";
+
 /// F-139: why the database gate refused to start the app.
 ///
 /// Typed, not a `String`: the code is the part the UI translates, so the
@@ -46,8 +56,18 @@ pub struct StartupFailure {
 ///
 /// The migration message is already path-free by construction; this closes
 /// the remaining cases (io, WAL), whose `Display` can name a directory.
+///
+/// F-150: when the text cannot be sanitized it is not shown at all — the
+/// fixed token stands in for it, because the raw `Display` is exactly what
+/// must not escape.
+///
+/// This runs for the *local* log too, which F-149 otherwise keeps raw. That is
+/// a deliberate, small deviation inherited from F-138: the startup detail is
+/// the one line that may be quoted for a bug report, and a marker is cheaper
+/// than a second, sanitised copy of the same failure.
 fn safe_text(message: impl std::fmt::Display) -> String {
     mm_core::logging::sanitize(&message.to_string())
+        .unwrap_or_else(|_| mm_core::logging::UNAVAILABLE.to_string())
 }
 
 /// F-138: the source chain of a failure, sanitized, for the log only.
@@ -102,11 +122,23 @@ impl StartupFailure {
 
     /// F-139: the sentence the startup dialog shows.
     ///
-    /// English, like the log. It carries no translation key: the key is for
-    /// the in-app surface, which has a locale — the dialog does not, and
-    /// `error.databaseBusy` in front of the user says nothing at all.
+    /// English, like the log: the dialog appears before there is a locale, so
+    /// it does not translate `error.<code>` itself — `error.databaseBusy` in
+    /// front of the user says nothing at all. The catalog carries the same
+    /// sentences for the in-app surface, and one of them,
+    /// `error.startupDetailUnavailable`, is pinned to [`DETAIL_UNAVAILABLE`].
+    ///
+    /// F-150: a detail that could not be sanitized is *not* printed as the
+    /// `<REDACTED:unavailable>` token. That token is an instruction to a
+    /// developer, not a sentence for a user: the dialog explains the
+    /// withholding, and the log keeps the token.
     pub fn dialog_text(&self) -> String {
-        format!("ModManager cannot start.\n\n{}", self.message)
+        let message = if self.message.contains(mm_core::logging::UNAVAILABLE) {
+            DETAIL_UNAVAILABLE
+        } else {
+            self.message.as_str()
+        };
+        format!("ModManager cannot start.\n\n{message}")
     }
 
     /// F-138: the line the log gets before the app leaves.
@@ -778,6 +810,54 @@ mod tests {
             );
             assert!(text.contains(message), "the sentence is missing: {text}");
         }
+    }
+
+    /// F-150: a withheld startup detail is explained, never printed as a token.
+    ///
+    /// `safe_text` answers `<REDACTED:unavailable>` when a failure's `Display`
+    /// cannot be sanitised, and the dialog used to print that token at a user
+    /// with no explanation. The token stays in the log, where a developer
+    /// reads it; the dialog says what happened, in a sentence both catalogs
+    /// carry.
+    #[test]
+    fn spec_f150_the_startup_dialog_explains_a_withheld_detail() {
+        let failure = StartupFailure {
+            code: ErrorCode::Internal,
+            message: mm_core::logging::UNAVAILABLE.to_string(),
+            detail: None,
+        };
+
+        let text = failure.dialog_text();
+        assert!(
+            !text.contains(mm_core::logging::UNAVAILABLE),
+            "the dialog shows a raw token: {text}"
+        );
+        assert!(
+            text.contains(DETAIL_UNAVAILABLE),
+            "the dialog does not explain itself: {text}"
+        );
+        // The log keeps the token: a maintainer needs to know it was withheld.
+        assert!(
+            failure.diagnostic().contains(mm_core::logging::UNAVAILABLE),
+            "the log lost the withheld marker: {}",
+            failure.diagnostic()
+        );
+
+        let en: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/i18n/en.json")).expect("en.json is json");
+        let ar: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/i18n/ar.json")).expect("ar.json is json");
+        assert_eq!(
+            en["error.startupDetailUnavailable"].as_str(),
+            Some(DETAIL_UNAVAILABLE),
+            "the dialog sentence and en.json drifted apart"
+        );
+        assert!(
+            ar["error.startupDetailUnavailable"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "ar.json has no error.startupDetailUnavailable"
+        );
     }
 
     /// F-139: a window Tauri cannot build is a refused startup, not a panic.
