@@ -14,7 +14,10 @@ pub mod report;
 pub mod sanitize;
 
 pub use report::{write_report, write_report_with, ReportError};
-pub use sanitize::{sanitize, sanitize_with, SanitizeError, UNAVAILABLE};
+pub use sanitize::{
+    sanitize, sanitize_with, sanitize_with_notes, IgnoredPolicy, SanitizeError, Sanitized,
+    UNAVAILABLE,
+};
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;

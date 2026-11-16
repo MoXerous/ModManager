@@ -19,8 +19,12 @@ use thiserror::Error;
 /// cannot be used. A caller only translates or logs this; it never retries.
 #[derive(Debug, Error)]
 pub enum SanitizeError {
-    /// A policy input is present but unusable (blank), so the text cannot be
-    /// redacted to a safe form without destroying or leaking it.
+    /// A policy value that is still an item cannot be used to check the
+    /// output, so the pass cannot say whether the text is shareable.
+    ///
+    /// Blank values never reach this: they name nothing, so the policy drops
+    /// them and reports the drop instead of aborting. A *short* value is an
+    /// item on purpose: the passes skip it, the post-pass check decides.
     #[error("redaction policy {field} is unusable: {reason}")]
     InvalidPolicy {
         field: &'static str,
@@ -36,6 +40,37 @@ pub enum SanitizeError {
 /// Never the raw text: a failure means the text is not shareable, and the
 /// reader needs a fixed marker instead of content nobody could verify.
 pub const UNAVAILABLE: &str = "<REDACTED:unavailable>";
+
+/// F-150: a policy value that was not applied, and why.
+///
+/// Not an error: the value names nothing that can be redacted (a blank value
+/// matches every position of the text), so it is dropped instead of aborting a
+/// pass it could never honour. The reason travels with it, because a silent
+/// skip is exactly the fail-open shape F-150 forbids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredPolicy {
+    /// `home_paths` or `usernames`.
+    pub field: &'static str,
+    /// Why the value is not a policy item.
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for IgnoredPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the redaction policy {} dropped a value: {}",
+            self.field, self.reason
+        )
+    }
+}
+
+/// F-150: shareable text, and the policy values that were dropped on the way.
+#[derive(Debug)]
+pub struct Sanitized {
+    pub text: String,
+    pub ignored: Vec<IgnoredPolicy>,
+}
 
 pub const REDACTED_HOME: &str = "<HOME>";
 pub const REDACTED_USER: &str = "<USER>";
@@ -199,6 +234,18 @@ fn default_homes_users() -> (Vec<String>, Vec<String>) {
         }
     }
     homes.sort_by_key(|h| std::cmp::Reverse(h.len()));
+    let users = default_users(&homes);
+    (homes, users)
+}
+
+/// The default user names: the account variables and the home folder's final
+/// component.
+///
+/// The folder name is the old app's third source (`log_sanitizer.py:220`): on a
+/// roaming profile it can differ from `USERNAME`, and it is the name the paths
+/// this app prints actually carry. Taking only the variables left that name in
+/// every report.
+fn default_users(home_paths: &[String]) -> Vec<String> {
     let mut users = Vec::new();
     for key in ["USERNAME", "USER"] {
         if let Ok(v) = std::env::var(key) {
@@ -208,7 +255,27 @@ fn default_homes_users() -> (Vec<String>, Vec<String>) {
             }
         }
     }
-    (homes, users)
+    for home in home_paths {
+        if let Some(name) = home_basename(home) {
+            if !users.iter().any(|kept| kept == name) {
+                users.push(name.to_string());
+            }
+        }
+    }
+    users
+}
+
+/// The final component of a home path, if it has one.
+///
+/// `C:` and `/` are roots, not names: redacting them would rewrite the drive
+/// letter of every path in the text.
+fn home_basename(home: &str) -> Option<&str> {
+    let trimmed = home.trim().trim_end_matches(['\\', '/']);
+    if trimmed.len() == 2 && trimmed.as_bytes().get(1) == Some(&b':') {
+        return None;
+    }
+    let name = trimmed.rsplit(['\\', '/']).next()?;
+    (!name.is_empty()).then_some(name)
 }
 
 /// Shareable text with identity and secrets removed (F-148).
@@ -221,51 +288,105 @@ pub fn sanitize(input: &str) -> Result<String, SanitizeError> {
     sanitize_with(input, &homes, &users)
 }
 
+/// F-150: [`sanitize_with`], with the values that were dropped handed back.
+///
+/// A caller that must record *why* a policy was not fully applied (a log line,
+/// a diagnostics export) uses this instead of letting the note vanish; a
+/// caller that only needs the text uses [`sanitize_with`], which logs it.
+pub fn sanitize_with_notes(
+    input: &str,
+    home_paths: &[String],
+    usernames: &[String],
+) -> Result<Sanitized, SanitizeError> {
+    let policy = Policy::resolve(home_paths, usernames);
+    let text = policy.apply(input)?;
+    Ok(Sanitized {
+        text,
+        ignored: policy.ignored,
+    })
+}
+
 pub fn sanitize_with(
     input: &str,
     home_paths: &[String],
     usernames: &[String],
 ) -> Result<String, SanitizeError> {
-    validate_policy(home_paths, usernames)?;
-    // Structured JSON first (whole-document branch).
-    let safe = match try_json(input, home_paths, usernames) {
-        Some(out) => out,
-        None => sanitize_plain(input, home_paths, usernames),
-    };
-    verify_redacted(&safe, home_paths, usernames)?;
-    Ok(safe)
+    let policy = Policy::resolve(home_paths, usernames);
+    // Logged before the pass runs, so a value dropped on the way to an abort
+    // is not lost with the error.
+    policy.log_ignored();
+    policy.apply(input)
 }
 
-/// F-150: refuses a policy it cannot apply.
+/// F-150: the policy values that can actually be applied.
 ///
-/// A blank value has no safe substring form: replacing it would rewrite every
-/// character of the text, so the pass would have to skip it — and skipping a
-/// policy value is precisely the fail-open behaviour F-150 forbids. The same
-/// holds for a value shorter than [`MIN_POLICY_LEN`], which every pass drops.
-fn validate_policy(home_paths: &[String], usernames: &[String]) -> Result<(), SanitizeError> {
-    let check = |values: &[String], field: &'static str| {
-        for value in values {
-            if value.trim().is_empty() {
-                return Err(SanitizeError::InvalidPolicy {
-                    field,
-                    reason: "a blank value cannot be redacted",
-                });
-            }
-            if value.trim().len() < MIN_POLICY_LEN {
-                return Err(SanitizeError::InvalidPolicy {
-                    field,
-                    reason: "shorter than the minimum redaction length",
-                });
-            }
+/// Resolution is per value. A blank value names nothing (replacing it would
+/// rewrite every character of the text, and verifying it would match every
+/// position), so it is dropped and recorded rather than allowed to invalidate
+/// the pass. A value shorter than [`MIN_POLICY_LEN`] stays an item: the passes
+/// skip it, so [`verify_redacted`] decides — if it does appear, the pass fails
+/// closed instead of handing back text that still carries it.
+struct Policy {
+    homes: Vec<String>,
+    users: Vec<String>,
+    ignored: Vec<IgnoredPolicy>,
+}
+
+impl Policy {
+    fn resolve(home_paths: &[String], usernames: &[String]) -> Self {
+        let mut ignored = Vec::new();
+        let homes = usable(home_paths, "home_paths", &mut ignored);
+        let users = usable(usernames, "usernames", &mut ignored);
+        Self {
+            homes,
+            users,
+            ignored,
         }
-        Ok(())
-    };
-    check(home_paths, "home_paths")?;
-    check(usernames, "usernames")
+    }
+
+    /// F-150: one warn per dropped value — the failure reason is never silent.
+    fn log_ignored(&self) {
+        for note in &self.ignored {
+            tracing::warn!(target: "mm_core::logging::sanitize", "{note}");
+        }
+    }
+
+    fn apply(&self, input: &str) -> Result<String, SanitizeError> {
+        // Structured JSON first (whole-document branch).
+        let safe = match try_json(input, &self.homes, &self.users) {
+            Some(out) => out,
+            None => sanitize_plain(input, &self.homes, &self.users),
+        };
+        verify_redacted(&safe, &self.homes, &self.users)?;
+        Ok(safe)
+    }
+}
+
+/// F-150: trims, dedups and drops the values that name nothing.
+fn usable(values: &[String], field: &'static str, ignored: &mut Vec<IgnoredPolicy>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(values.len());
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            ignored.push(IgnoredPolicy {
+                field,
+                reason: "a blank value cannot be redacted",
+            });
+            continue;
+        }
+        if !out.iter().any(|kept| kept == value) {
+            out.push(value.to_string());
+        }
+    }
+    out
 }
 
 /// The shortest policy value the passes will rewrite (`redact_home_paths` and
 /// `redact_user_segments` both skip shorter ones).
+///
+/// Such a value is still a policy *item*: the passes cannot apply it, so
+/// [`verify_redacted`] decides the outcome — text that still carries it fails
+/// closed instead of being returned.
 const MIN_POLICY_LEN: usize = 3;
 
 /// F-150: the output is re-read against the policy that produced it.
@@ -456,7 +577,7 @@ fn redact_home_paths(input: &str, homes: &[String]) -> String {
     variants.dedup();
     let mut safe = input.to_string();
     for (home, _) in variants {
-        if home.len() < 3 {
+        if home.len() < MIN_POLICY_LEN {
             continue;
         }
         if matches!(home.as_bytes(), [a, b':', _, ..] if a.is_ascii_alphabetic()) {
@@ -477,7 +598,7 @@ fn redact_user_segments(input: &str, users: &[String]) -> String {
     // Rust regex has no look-ahead.
     let mut patterns: Vec<String> = Vec::new();
     for user in users {
-        if user.len() < 3 {
+        if user.len() < MIN_POLICY_LEN {
             continue;
         }
         let esc = regex::escape(user);
@@ -946,54 +1067,90 @@ mod tests {
         assert_eq!(v["items"][0]["count"], 3);
     }
 
-    /// F-150: a policy value that cannot be redacted aborts the sanitisation.
+    /// F-150: one unusable policy value does not silence the whole pass.
     ///
-    /// `""` is the shape a broken policy takes: the pass would have to replace
-    /// every position of the text, which it cannot, and today it would skip
-    /// the value and hand back text that leaks whatever that value names.
-    /// A value shorter than the minimum is the same story. Fail-closed is the
-    /// only safe answer.
+    /// A two-letter account is real (`jo`, `Al`, `李`). Rejecting it as an
+    /// invalid policy aborted every report on that machine and made every
+    /// `safe_text` return the placeholder — a permanent, silent blackout that
+    /// protects nothing. The policy is applied per value: a short name that
+    /// never appears costs nothing.
     #[test]
-    fn spec_f150_an_unusable_policy_value_aborts_sanitisation() {
-        let result = sanitize_with("token: hunter2", &[], &["".to_string()]);
-        let error = result.expect_err("a blank policy value cannot be redacted");
+    fn spec_f150_a_short_user_name_does_not_disable_the_pass() {
+        let sanitized = sanitize_with_notes("token: hunter2", &[], &["jo".to_string()])
+            .expect("a short user name is not an invalid policy");
+        let text = sanitized.text;
+        assert!(text.contains(REDACTED_CREDENTIAL), "{text}");
         assert!(
-            matches!(
-                error,
-                SanitizeError::InvalidPolicy {
-                    field: "usernames",
-                    ..
-                }
-            ),
+            sanitized.ignored.is_empty(),
+            "a short name is still a policy item to check: {:?}",
+            sanitized.ignored
+        );
+    }
+
+    /// F-150: a short name that IS present fails closed, and says so.
+    ///
+    /// The pass cannot rewrite `jo` inside a profile path with no trailing
+    /// separator, so returning the text would leak the name. The abort is the
+    /// correct answer, and it has to reach the caller as the reason.
+    #[test]
+    fn spec_f150_a_short_user_name_that_appears_still_fails_closed() {
+        let error = sanitize_with(r"C:\Users\jo is gone", &[], &["jo".to_string()])
+            .expect_err("the short name survived the pass");
+        assert!(
+            matches!(error, SanitizeError::Unredactable { what } if what == "user name"),
             "{error}"
         );
+    }
+
+    /// F-150: a blank policy value is dropped, and the drop is not silent.
+    ///
+    /// `""` names nothing: replacing it would rewrite the whole text and
+    /// verifying it would match every position, so it cannot be a policy item.
+    /// Skipping it quietly would be the fail-open shape F-150 forbids, so the
+    /// reason is handed back for the caller to log.
+    #[test]
+    fn spec_f150_a_blank_policy_value_is_dropped_and_reported() {
+        let sanitized = sanitize_with_notes("token: hunter2", &[], &["".to_string()])
+            .expect("a blank value names nothing and must not abort the pass");
+        let text = sanitized.text;
+        let ignored = sanitized.ignored;
+        assert!(text.contains(REDACTED_CREDENTIAL), "{text}");
+        assert_eq!(ignored.len(), 1, "{ignored:?}");
+        assert_eq!(ignored[0].field, "usernames");
+        assert!(
+            ignored[0].reason.contains("blank"),
+            "the reason is missing: {}",
+            ignored[0]
+        );
+        let line = ignored[0].to_string();
+        assert!(line.contains("usernames"), "the field is missing: {line}");
+        assert!(line.contains("blank"), "the reason is missing: {line}");
+
+        // The same for a home path that is only whitespace.
         let homes = ["   ".to_string()];
-        let error = sanitize_with("token: hunter2", &homes, &[])
-            .expect_err("a blank home path cannot be redacted");
+        let sanitized = sanitize_with_notes("token: hunter2", &homes, &[])
+            .expect("a blank home names nothing either");
+        assert_eq!(sanitized.ignored[0].field, "home_paths", "{sanitized:?}");
+    }
+
+    /// F-150: the home folder's final component is a user name (§F-148 parity).
+    ///
+    /// The old sanitizer took `Path.home().name` as a third source, because on
+    /// a roaming profile the folder name can differ from `USERNAME`. Without
+    /// it, the name that actually sits in every path the app prints stayed in
+    /// the report.
+    #[test]
+    fn spec_f150_the_home_folder_name_is_a_user_name() {
+        let users = default_users(&[r"C:\Users\Alice.Smith".to_string()]);
         assert!(
-            matches!(
-                error,
-                SanitizeError::InvalidPolicy {
-                    field: "home_paths",
-                    ..
-                }
-            ),
-            "{error}"
+            users.contains(&"Alice.Smith".to_string()),
+            "the home folder name is not redacted: {users:?}"
         );
-        // The pass skips anything shorter than three bytes, so accepting it
-        // would be a silent promise it cannot keep.
-        let error = sanitize_with("user jo", &[], &["jo".to_string()])
-            .expect_err("a two-letter user name cannot be redacted safely");
-        assert!(
-            matches!(
-                error,
-                SanitizeError::InvalidPolicy {
-                    field: "usernames",
-                    ..
-                }
-            ),
-            "{error}"
-        );
+        // A drive root has no final component, and a trailing separator is not
+        // a name of its own.
+        assert!(!default_users(&[r"C:\".to_string()]).contains(&"C:".to_string()));
+        let users = default_users(&["/home/alice/".to_string()]);
+        assert!(users.contains(&"alice".to_string()), "{users:?}");
     }
 
     /// F-150: text that still carries a policy term is refused, not returned.

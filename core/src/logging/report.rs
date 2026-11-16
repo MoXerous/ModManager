@@ -4,6 +4,10 @@
 //! cannot be sanitised aborts the whole report: no file, no raw fallback, no
 //! partial file. The activity log stays raw and local (F-149); this is the
 //! boundary a file crosses when it is meant to be sent to someone else.
+//!
+//! "No partial file" is enforced, not assumed: the report is published with a
+//! rename, and a `.part` that cannot be removed after a failure is reported as
+//! [`ReportError::Leftover`] instead of being dropped on the floor.
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +32,24 @@ pub enum ReportError {
     /// The report could not be created or published.
     #[error("io {op} on {}: {source}", path.display())]
     Io {
+        op: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A `.part` file outlived a failed report, so "no partial file" is false.
+    ///
+    /// Removing the temp file can fail on its own (a scanner or indexer holding
+    /// it open on Windows). Swallowing that left a half-written report beside
+    /// the destination while this module claimed there was none; the leftover
+    /// is now a typed failure that names the exact file, so the guarantee is
+    /// either kept or honestly reported.
+    #[error(
+        "the partial report {} could not be removed after a failed {op}: {source}",
+        path.display()
+    )]
+    Leftover {
+        /// The operation that failed first (`write` or `rename`).
         op: &'static str,
         path: PathBuf,
         #[source]
@@ -83,14 +105,31 @@ fn write_with(
     // a rename, so a reader never sees a half-written report.
     let part = dir.join(format!("{name}.part"));
     if let Err(source) = std::fs::write(&part, &body) {
-        let _ = std::fs::remove_file(&part);
+        discard(&part, "write")?;
         return Err(io("write", &part, source));
     }
     if let Err(source) = std::fs::rename(&part, &final_path) {
-        let _ = std::fs::remove_file(&part);
+        discard(&part, "rename")?;
         return Err(io("rename", &final_path, source));
     }
     Ok(final_path)
+}
+
+/// F-150: removes a `.part` that must not outlive a failed report.
+///
+/// A removal that fails is a failure of its own: the file is still there, and
+/// "no partial file" would be a claim nobody checked.
+fn discard(part: &Path, op: &'static str) -> Result<(), ReportError> {
+    match std::fs::remove_file(part) {
+        Ok(()) => Ok(()),
+        // Nothing was created, so there is nothing to clean up.
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ReportError::Leftover {
+            op,
+            path: part.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn io(op: &'static str, path: &Path, source: std::io::Error) -> ReportError {
@@ -178,6 +217,81 @@ mod tests {
         assert!(
             leftovers.is_empty(),
             "nothing raw may be left: {leftovers:?}"
+        );
+    }
+
+    /// F-150: a short account name does not stop the report from being written.
+    ///
+    /// A two-letter `USERNAME` used to be rejected as an invalid policy, so the
+    /// file was never created and nothing said why. Per-value policy: the name
+    /// is simply not applied when it does not appear.
+    #[test]
+    fn spec_f150_a_short_user_name_does_not_block_the_report() {
+        let dir = crate::test_tempdir();
+        let lines = vec![
+            "app_version: 0.1.0".to_string(),
+            "os: windows x86_64".to_string(),
+        ];
+
+        let path = write_report_with(dir.path(), "short.txt", &lines, &[], &["jo".to_string()])
+            .expect("a short user name is not a policy failure");
+
+        assert_eq!(path, dir.path().join("short.txt"));
+        assert!(path.exists(), "the report has to exist");
+    }
+
+    /// F-150: a failed rename leaves no `.part` behind — or says that it did.
+    ///
+    /// The report is published by renaming a `.part` file, so a failure there
+    /// must not leave the half-written file where a user could pick it up.
+    #[test]
+    fn spec_f150_a_failed_rename_leaves_no_part_file() {
+        let dir = crate::test_tempdir();
+        // A directory where the report wants to be: the rename fails, the
+        // write before it succeeded.
+        std::fs::create_dir(dir.path().join("blocked.txt")).expect("a blocked target");
+
+        let error = write_report_with(
+            dir.path(),
+            "blocked.txt",
+            &["app_version: 0.1.0".to_string()],
+            &[],
+            &[],
+        )
+        .expect_err("the target is a directory");
+
+        assert!(
+            matches!(error, ReportError::Io { op: "rename", .. }),
+            "the failed operation has to be named: {error}"
+        );
+        assert!(
+            !dir.path().join("blocked.txt.part").exists(),
+            "a .part file outlived the failed report"
+        );
+    }
+
+    /// F-150: a `.part` that cannot be removed is reported, not swallowed.
+    ///
+    /// `let _ = remove_file(..)` is how a locked file (an antivirus scanner on
+    /// Windows) leaves a partial report behind while the module claims there is
+    /// none. The leftover is a typed failure with the path on it.
+    #[test]
+    fn spec_f150_a_part_file_that_cannot_be_removed_is_reported() {
+        let dir = crate::test_tempdir();
+        // A directory cannot be removed with `remove_file` on any platform,
+        // which is the shape of a removal that fails.
+        let part = dir.path().join("leftover.txt.part");
+        std::fs::create_dir(&part).expect("a directory at the .part path");
+
+        let error = discard(&part, "rename").expect_err("the leftover cannot be removed");
+
+        assert!(
+            matches!(error, ReportError::Leftover { op: "rename", .. }),
+            "the leftover has to be a typed failure: {error}"
+        );
+        assert!(
+            error.to_string().contains("leftover.txt.part"),
+            "the path has to be in the message: {error}"
         );
     }
 }
