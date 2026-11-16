@@ -102,7 +102,6 @@ pub struct BackupEntry {
     pub kind: EntryKind,       // file | dir
     pub size: u64,
     pub sha256: String,        // فارغة للمجلدات وللمدخلات المتخطّاة
-    pub modified_at: i64,      // mtime بالثواني وقت النسخ
     pub version_id: String,    // من القفل لذلك الملف؛ "" لغير المُدار
     pub status: EntryStatus,   // copied | generated | skipped
     pub reason_code: String,   // رمز ثابت عند skip (source-missing، symlink، …)
@@ -115,7 +114,7 @@ pub struct BackupEntry {
 | `path` | يُعيد بناء الشجرة، وهو **مُدخل غير موثوق**؛ عند الاستعادة **عرضٌ فقط** ولا يُشتقّ منه هدف (§6-5) |
 | `size` + `sha256` | إثبات أن البايتات التي نستعيدها هي البايتات التي نسخناها |
 | `source` | يجمع المجموعة بلا تحليل نصّ المسار، ويسمّي ما نسخناه (نفس معنى `label`/`source` في بيان التطبيق القديم) |
-| `modified_at` | يفرّق «نفس الحجم ونفس الهاش» عن «نفس الملف» عند تقرير ما تغيّر، ويُنبّه المستخدم أن النسخة أقدم من الملفات الحالية |
+| `modified_at` | **أُزيل (انحراف ٩):** لا شيء يقرأه، والنسخ لا يستطيع إعادة كتابته |
 | `version_id` | **حقل الإصدار**: يسمح بتقرير «هذه النسخة تحوي ٤٢ ملفًا مُدارًا، ٣ منها لم تعد في القفل الحالي» بلا فتح أي jar |
 | `status` + `reason_code` | النسخة التي تُسقط رابطًا أو مجلدًا بصمت تكذب بالنقصان؛ البيان يقول ما ليس فيه ولماذا |
 
@@ -154,6 +153,7 @@ copy(<backup>/<group>, target)                // نسخ، لا نقل: النس�
 ```
 
 - إن كان مسار الأمان موجودًا مسبقًا ⇒ يُرفض ذلك المدخل (`safety-exists`) ولا يُستبدل شيء.
+- **مسار الأمان نفسه هدفُ كتابة، فيُثبَّت على الجذر:** `safety_dir` و`safety_path` يُشترطان داخل `content_root` بقاعدة المسارات نفسها (`starts_with` على مكوّنات مُطبَّعة، و`..` تُحسب لا تُتبَع) — في التخطيط (`safety-outside` كحكم مدخل) وفي التنفيذ: خطةٌ تشير إلى مجلد أمان خارج النسخة تُرفض بـ`RestoreError::SafetyOutside` **قبل أول إعادة تسمية وقبل إنشاء أي مجلد**، وإلا نقلت `mods/` إلى أي مكان يسمّيه من صنع الخطة (النواة تُستدعى من CLI، ولاحقًا من تثبيت التحديث التلقائي).
 - **الحارس من الجذر المستحقّ نزولًا، لا من الملف صعودًا:** يُفحص المسار من `content_root` إلى الهدف بـ`guard::link_at_or_inside(content_root, target)` (و`guard::link_inside` حيث لا يُحكم على الجذر نفسه)، وإلا `target-under-link`. **ولا يُستخدم `guard::link_in_ancestors(target)` هنا**: فهو يحكم ما **فوق** الجذر المستحقّ — مجلد منزل مربوط، أو `/var` على macOS — فيرفض استعادةً مشروعة على جهاز سليم. الجذر يضمنه المستخدم، وما تحته فقط ملكنا.
 - بعد النسخ تُقارن بصمة كل ملف بالبيان أثناء النسخ نفسه (مرور واحد: نُهشِّر ما نكتبه). اختلاف ⇒ **تراجع تلك المجموعة**: يُنقل الهدف الجزئي إلى `<safety>/failed_restore/<group>` وتُعاد نسخة الأمان بـ`rename` واحد. لا تُترك شجرة نصف مستعادة.
 - **الترتيب مقصود:** `mods/` ← `config/` ← (`saves/` و`installed_mods.json`) ← `instance.lock.json` **أخيرًا**. القفل آخرًا لأنه ادّعاء ملكية: استعادته قبل الملفات تجعله يشهد على ملفات لم تصل بعد. وإن فشلت مجموعة `mods/` فلا يُستعاد القفل، ويُسجَّل `dependency-failed`.
@@ -163,7 +163,9 @@ copy(<backup>/<group>, target)                // نسخ، لا نقل: النس�
 
 `RestoreOutcome { Complete | Partial | Cancelled }`، ولكل مجموعة `state`:
 
-`restored` · `failed` · `rolled-back` · `cancelled` · `dependency-failed`
+`restored` · `failed` · `rolled-back` · `rollback-failed` · `cancelled` · `dependency-failed`
+
+- **`rollback-failed` ليس تزيّدًا:** تراجع المجموعة يُنفَّذ بإعادتَي تسمية (الهدف الجزئي إلى `failed_restore/<group>`، ثم نسخة الأمان إلى الهدف)، وكل نتيجة تُفحص. مجموعةٌ فشلت **وتعذّر إرجاع نسختها** ليست `rolled-back` وليست `failed` فحسب: هدفها مفقود أو نصف مكتوب، فالصفّ يقول ذلك و`outcome` يبقى `Partial`، والواجهة تُرسل المستخدم إلى `safety_path`. الإبلاغ بـ`rolled-back` عن مجموعة لم تُرجَع هو الكذبة الوحيدة التي لا يحتملها هذا التصميم (انحراف ١٠ عن قائمة المواصفة ذات الخمس حالات). وإلغاءُ مجموعةٍ **لم يكن لها هدف سابق** يبقى `cancelled` (لا شيء ليعود، والشجرة النصفية أُزيحت) — إيقافُ المستخدم ليس فشلًا.
 
 - المدخل المحجوب في الخطة **لا يدخل التشغيل أصلًا**؛ فحالته حالة خطة (`blocked` + `reasonCode`) لا حالة تشغيل، ويُسجَّل في `restore_manifest.json` كذلك — كي لا يقرأ المستخدم تقريرًا يخفي ما لم يُستعد.
 - الفشل **معزول بمجموعة**: مجموعة تفشل لا تُسقط البقية (سلوك التطبيق القديم)، لكن `outcome` يصبح `Partial` لا `Complete`، وتُعرض للمستخدم مسارات مجلد الأمان وما لم يُستعد. **لا حالة نصفية صامتة.**
@@ -286,12 +288,15 @@ pub fn preview_worlds(root: &Path) -> WorldsPreview;
 |---|---|---|
 | `list_instance_backups { instanceRoot }` | `BackupListDto` | لا |
 | `execute_instance_backup { req: BackupRequest, onEvent: Channel<BackupEventDto> }` | `BackupResultDto` | نعم |
+| `cancel_instance_transfer { instanceRoot }` | `bool` | لا |
 | `plan_instance_restore { req: RestorePreviewRequest }` | `RestorePlanDto` | لا |
 | `execute_instance_restore { req: RestoreExecuteRequest, onEvent: Channel<RestoreEventDto> }` | `RestoreRunDto` | نعم |
 | `preview_instance_worlds { instanceRoot }` | `WorldsPreviewDto` | لا |
 | `pending_instance_restores { instanceRoot }` | `Vec<PendingRestoreDto>` | لا |
 
 كل الأوامر تمرّ بـ`registered_root` (نفس بوابة `pack`: لا نسخ ولا استعادة لمجلد غير مسجَّل)، وتأخذ `apply_lock_for(root)` كي لا يتزاحم نسخٌ مع تطبيق حزمة على الشجرة نفسها.
+
+**الإلغاء حقيقي لا صُوريًّا:** `cancel_instance_transfer` يُخاطِب **علم النسخ الجاري على ذلك الجذر**، لا علمًا محليًّا: `execute_*` يُسجّل العلم في `AppState::begin_transfer(&root)` **قبل بناء الخطة**، و`TransferGuard` يُسقط التسجيل على كل مخرج، و`cancel_transfer` يقلب العلم نفسه. الخريطة بمفتاح الجذر لا خانةٌ واحدة: قفل التطبيق لكل جذر يسمح بنسخين متوازيين على نسختين، وخانةٌ واحدة تجعل إلغاء الثانية يصل إلى الأولى. والجذر الذي له علم مُسجَّل **يتبنّاه** ولا يُستبدل، كي لا يضيع إلغاءٌ وصل بين النقرة وتسجيل التشغيل.
 
 DTOs (كلها `#[serde(rename_all = "camelCase")] #[ts(export)]`):
 
@@ -325,7 +330,7 @@ PendingRestoreDto { stamp, safetyDir, hasCurrent, groups: Vec<String>, messageCo
 
 ### 9-3. الواجهة
 
-`src/app/pages/InstanceDetails.tsx` قسمان جديدان: «النسخ الاحتياطي» (قائمة، إنشاء بزر واحد مع خانة `saves` **غير مفعّلة افتراضيًّا**، واستعادة بحوار خطة على غرار `RemoveDialog.tsx` ينتهي بكتابة `RESTORE`) و«العوالم» (جدول قراءة فقط، بلا أزرار — كما في `ProfileWorldsDialog`). كل النصوص من `src/i18n/{ar,en}.json`، و`src/lib/ipc.ts` يحصل على الدوال الخمس، والمجلّد `src/bindings/` يُعاد توليده بـ`cargo test --workspace`.
+`src/app/pages/InstanceDetails.tsx` قسمان جديدان: «النسخ الاحتياطي» (قائمة، إنشاء بزر واحد مع خانة `saves` **غير مفعّلة افتراضيًّا**، واستعادة بحوار خطة على غرار `RemoveDialog.tsx` ينتهي بكتابة `RESTORE`) و«العوالم» (جدول قراءة فقط، بلا أزرار — كما في `ProfileWorldsDialog`). **وزرّ إيقاف** أثناء النسخ وأثناء الاستعادة ينادي `cancel_instance_transfer` (F-114). كل النصوص من `src/i18n/{ar,en}.json`، و`src/lib/ipc.ts` يحصل على دوال هذا القسم، والمجلّد `src/bindings/` يُعاد توليده بـ`cargo test --workspace`.
 
 ## 10. الاختبارات (الأسماء تحمل معرّف المواصفة — `AGENTS.md` §6)
 
@@ -336,13 +341,18 @@ PendingRestoreDto { stamp, safetyDir, hasCurrent, groups: Vec<String>, messageCo
 - `spec_f113_backup_excludes_its_own_folders_and_removed_content`
 - `spec_f113_backup_skips_a_missing_folder_with_a_reason_code`
 - `spec_f113_backup_skips_a_symlink_and_never_follows_it`
-- `spec_f113_manifest_is_written_atomically_and_leaves_no_temp`
+- `spec_f113_manifest_is_written_atomically_and_leaves_no_temp` (رابط صلب يشهد أن الكتابة إعادةُ تسمية لا قصٌّ في المكان)
+- `spec_f113_manifest_records_no_mtime_the_copy_cannot_restore`
 - `spec_f114_restore_refuses_a_folder_outside_the_backup_root`
 - `spec_f114_restore_refuses_a_manifest_of_another_instance`
 - `spec_f114_restore_refuses_a_manifest_changed_after_the_preview`
 - `spec_f114_restore_moves_the_live_target_aside_then_copies`
 - `spec_f114_restore_refuses_an_existing_safety_path`
 - `spec_f114_restore_rolls_a_failed_group_back_and_reports_partial`
+- `spec_f114_restore_reports_a_failed_rollback_instead_of_claiming_one`
+- `spec_f114_a_cancelled_restore_of_a_new_group_reports_cancelled_not_failed`
+- `spec_f114_restore_refuses_a_forged_safety_path_outside_the_root`
+- `spec_f114_restore_refuses_a_plan_whose_safety_folder_is_outside_the_root`
 - `spec_f114_restore_refuses_an_entry_path_that_escapes_the_root`
 - `spec_f114_restore_blocks_an_entry_path_outside_its_own_group` (خطة وتنفيذ معًا)
 - `spec_f114_pending_restores_reports_a_safety_folder_without_a_manifest`
@@ -358,7 +368,7 @@ PendingRestoreDto { stamp, safetyDir, hasCurrent, groups: Vec<String>, messageCo
 - `spec_f118_worlds_preview_counts_datapacks_and_flags_missing_level_dat`
 - `spec_f118_worlds_preview_handles_a_missing_saves_folder`
 
-`src-tauri/src/commands/backup_tests.rs`: تحويل الأكواد (`RestoreMismatch`، `BackupChanged`، `NewerSchema`)، رفض مجلد غير مسجَّل، تسلسل أحداث القناة مع `terminal`، وتحويل `manifestState` إلى DTO.
+`src-tauri/src/commands/backup_tests.rs`: تحويل الأكواد (`RestoreMismatch` للهوية، `BackupChanged` للبيان الذي تحرّك، `NewerSchema`)، رفض مجلد غير مسجَّل، تسلسل أحداث القناة مع `terminal`، تحويل `manifestState` إلى DTO، و**الإلغاء على المسار الحقيقي** (`spec_f113_a_cancelled_backup_reports_cancelled_and_copies_nothing`، `spec_f114_a_cancelled_restore_writes_no_content`)، ودورة العلم في `state::tests::spec_f113_a_cancel_reaches_the_flag_the_running_copy_polls`.
 
 ## 11. الانحرافات المسجَّلة عن المواصفة (بصراحة)
 
@@ -372,6 +382,8 @@ PendingRestoreDto { stamp, safetyDir, hasCurrent, groups: Vec<String>, messageCo
 | 6 | F-114: الإلغاء بين المدخلات | الإلغاء بين المجموعات **وبين الملفات**، مع تراجع المجموعة | التحسين نفسه الذي يمنع نصف شجرة مستعادة عند إلغاء في المنتصف |
 | 7 | F-114: الهدف يُقرأ من مسار البيان | الهدف **من `EntrySource` وحده**، والمسار المسجَّل حكمُ حجب (`entry-outside-group`) | البيان مُدخل غير موثوق: مسارٌ محرَّر لا يجوز أن يوجّه كتابةً خارج النسخة |
 | 8 | F-113/F-114: نسخة التطبيق القديم تُستعاد | تُعرض بحالة `legacy` و**تُرفض** للاستعادة | مخططها (`modrinth_bulk_downloader.profile_update_backup.v1`) غير مخططنا، وقراءتها تخمين. الاسم على القرص محفوظ، والعقد ليس |
+| 9 | F-113: `copy2` يحفظ `mtime` | **`modified_at` أُزيل من البيان**، والنسخ لا يحفظ وقت التعديل | `std::fs` لا يضبط وقت تعديل بلا تبعية جديدة (`filetime`)، وقاعدة الشريحة «لا تبعية جديدة». حقلٌ يُكتب ولا يُطبَّق يَعِد باستعادة زمنٍ لن يكون هناك؛ والنسخ نفسه (المحتوى) لم يتغيّر |
+| 10 | F-114: خمس حالات للمجموعة | **ستّ**، بإضافة `rollback-failed` | مجموعة فشلت وتعذّر إرجاع نسخة أمانها ليست `rolled-back`؛ الحالة الجديدة تسمّيها وترسل المستخدم إلى `safety_path` (§6-4) |
 
 ما عدا ذلك، السلوك مطابق: نسخٌ لا نقل، الوجهة تُزاح لا تُدهس، نسخة أمان ثانوية، كلمة `RESTORE` مكتوبة، والإلغاء افتراضه «لا» في كل موضع.
 

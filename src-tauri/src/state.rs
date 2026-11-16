@@ -9,6 +9,8 @@
 //! The operation journal is held beside it for the same reason, and is opened
 //! once against the resolved platform directories.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -195,6 +197,17 @@ pub struct AppState {
     /// only ever clear the flag IT registered — a second install is refused
     /// rather than left to race the first one for the slot.
     install_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    /// F-113/F-114: the cancel flag of the backup or restore running on each
+    /// root, keyed by the resolved content root.
+    ///
+    /// A map where the install slot is one `Option`, because the two operations
+    /// differ in what the webview can name: a backup or restore is addressed by
+    /// its instance root, and two instances may be copied at once (the apply
+    /// lock that serialises a run is per root), so one shared slot would let the
+    /// second run's cancel reach the first. A run registers its own flag and
+    /// drops it when it ends; the flag carries its identity (`Arc::ptr_eq`), so
+    /// an operation finishing late can only clear the flag IT registered.
+    transfer_cancel: Arc<Mutex<HashMap<PathBuf, Arc<AtomicBool>>>>,
     /// Test seam: the private journal store this state owns.
     ///
     /// `None` in production, where the journal is the app's own directory.
@@ -247,6 +260,7 @@ impl AppState {
             journal: Arc::new(Mutex::new(Journal::new(paths.operations_dir()))),
             paths,
             install_cancel: Arc::new(Mutex::new(None)),
+            transfer_cancel: Arc::new(Mutex::new(HashMap::new())),
             // Production owns no private store: the journal is the app's own
             // directory, and it outlives the state.
             #[cfg(test)]
@@ -281,6 +295,7 @@ impl AppState {
             journal: Arc::new(Mutex::new(Journal::new(root.path()))),
             paths,
             install_cancel: Arc::new(Mutex::new(None)),
+            transfer_cancel: Arc::new(Mutex::new(HashMap::new())),
             owned_journal_root: Some(Arc::new(root)),
             owned_config_root: Some(Arc::new(config_root)),
         }
@@ -409,6 +424,65 @@ impl AppState {
         }
     }
 
+    /// F-113/F-114: registers the flag of the backup or restore about to run on
+    /// `root`, and hands it back.
+    ///
+    /// `execute_instance_backup`/`execute_instance_restore` call this BEFORE the
+    /// plan is built, so a cancel that lands while the plan walks the tree is
+    /// observed instead of being answered for a run that has not registered yet.
+    ///
+    /// A flag already registered for this root is ADOPTED, never replaced: a
+    /// cancel arrives on another thread, and the one that lands between the click
+    /// and the blocking task's start must be honoured rather than dropped. The
+    /// per-root apply lock is what keeps adoption safe — at most one copy runs
+    /// per root, so the flag has exactly one owner.
+    ///
+    /// A poisoned lock is recovered from, not panicked on: the value inside is a
+    /// plain map, and a cancel must never take the app down.
+    pub fn begin_transfer(&self, root: &Path) -> Arc<AtomicBool> {
+        let mut slot = self
+            .transfer_cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        slot.entry(root.to_path_buf())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    /// F-113/F-114: flips the flag of the copy running on `root`, if any.
+    ///
+    /// The answer is data, not an error: asking to cancel with nothing running is
+    /// a normal race between the click and the run's own end.
+    pub fn cancel_transfer(&self, root: &Path) -> bool {
+        let slot = self
+            .transfer_cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match slot.get(root) {
+            Some(flag) => {
+                flag.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// F-113/F-114: drops this run's registration — but ONLY the flag this call
+    /// was handed, so a run ending late cannot clear the flag of a run that
+    /// registered after it for the same root.
+    pub fn end_transfer(&self, root: &Path, flag: &Arc<AtomicBool>) {
+        let mut slot = self
+            .transfer_cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot
+            .get(root)
+            .is_some_and(|current| Arc::ptr_eq(current, flag))
+        {
+            slot.remove(root);
+        }
+    }
+
     /// Runs `f` against the database on a blocking thread.
     ///
     /// The error channel is `IpcError`, not `String`: it is what carries the
@@ -472,6 +546,31 @@ impl<'a> InstallGuard<'a> {
 impl Drop for InstallGuard<'_> {
     fn drop(&mut self) {
         self.state.end_install(&self.flag);
+    }
+}
+
+/// RAII guard for a registered backup/restore cancel flag (F-113/F-114).
+///
+/// The run registers its flag before the plan is built, and the plan can fail
+/// through plain `?` returns long before the copy starts. The guard makes "every
+/// exit drops the registration" hold by construction, and its `end_transfer`
+/// only ever clears the flag it was born with — so a cancel after the run ends
+/// finds nothing, and never reaches the next run.
+pub struct TransferGuard<'a> {
+    state: &'a AppState,
+    root: PathBuf,
+    flag: Arc<AtomicBool>,
+}
+
+impl<'a> TransferGuard<'a> {
+    pub fn new(state: &'a AppState, root: PathBuf, flag: Arc<AtomicBool>) -> Self {
+        Self { state, root, flag }
+    }
+}
+
+impl Drop for TransferGuard<'_> {
+    fn drop(&mut self) {
+        self.state.end_transfer(&self.root, &self.flag);
     }
 }
 
@@ -935,6 +1034,45 @@ mod tests {
             "after end_install there is nothing left to cancel"
         );
         assert!(state.install_flag_for_test().is_none());
+    }
+
+    /// F-113/F-114: a backup or restore is cancelled from the screen, so the
+    /// flag the copy polls must be reachable by root — and only by the flag the
+    /// run registered.
+    #[test]
+    fn spec_f113_a_cancel_reaches_the_flag_the_running_copy_polls() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = AppState::from_db(mm_core::db::open(&dir.path().join("t.db")).expect("db"));
+        let root = dir.path().join("instance");
+        let other = dir.path().join("other-instance");
+
+        let flag = state.begin_transfer(&root);
+        assert!(
+            !state.cancel_transfer(&other),
+            "a cancel is addressed to one root, not to whatever is running"
+        );
+        assert!(
+            state.cancel_transfer(&root),
+            "the registered run is reached"
+        );
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "the flag the blocking copy polls must be the one the cancel flipped"
+        );
+
+        // The same root adopts its own flag instead of replacing it: a cancel
+        // that lands between the click and the run's registration is honoured,
+        // not dropped.
+        assert!(
+            Arc::ptr_eq(&flag, &state.begin_transfer(&root)),
+            "the registration was replaced under the running cancel"
+        );
+
+        state.end_transfer(&root, &flag);
+        assert!(
+            !state.cancel_transfer(&root),
+            "after the run ends there is nothing left to cancel"
+        );
     }
 
     /// F-036: two concurrent operations must not share the slot.

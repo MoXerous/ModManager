@@ -152,8 +152,6 @@ pub struct BackupEntry {
     #[serde(default)]
     pub sha256: String,
     #[serde(default)]
-    pub modified_at: i64,
-    #[serde(default)]
     pub version_id: String,
     pub status: EntryStatus,
     #[serde(default)]

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorState } from '../../components/state';
 import {
+  cancelInstanceTransfer,
   executeInstanceBackup,
   listInstanceBackups,
   openInstanceFolder,
@@ -120,6 +121,19 @@ export function InstanceBackup({ root }: { root: string }) {
           >
             {creating ? t('backup.action.creating') : t('backup.action.create')}
           </Button>
+          {creating && (
+            // A cancel stops the copy at the next file boundary; the folder it
+            // leaves is not a backup (no manifest) and the list says so.
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                void cancelInstanceTransfer(root);
+              }}
+            >
+              {t('state.action.cancel')}
+            </Button>
+          )}
         </div>
         <p className="mt-1.5 text-caption text-muted-foreground">{t('backup.body')}</p>
 

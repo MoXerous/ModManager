@@ -223,8 +223,13 @@ async fn spec_f113_listing_maps_every_manifest_state_to_a_word() {
 /// F-114: the confirm must carry the manifest digest of the plan it read. A
 /// different token stops before the first write — this is the only link between
 /// what the user was shown and what would be written.
+///
+/// The code is `BackupChanged`, not `RestoreMismatch` (ADR 0007 §6-2): the
+/// backup is still this instance's, but its manifest moved after the preview,
+/// and the two answers send the user to different places — "rebuild the plan"
+/// versus "this is another instance's backup".
 #[tokio::test]
-async fn spec_f114_execute_restore_refuses_a_different_manifest_token() {
+async fn spec_f114_execute_restore_refuses_a_manifest_that_moved_after_the_preview() {
     let dir = tempdir();
     let root = instance_with_content(dir.path());
     let state = app_state_with_roots(dir.path(), &[&root]);
@@ -261,7 +266,7 @@ async fn spec_f114_execute_restore_refuses_a_different_manifest_token() {
     .await
     .expect_err("a different token is not this plan");
 
-    assert_eq!(err.code, ErrorCode::RestoreMismatch);
+    assert_eq!(err.code, ErrorCode::BackupChanged);
     assert_eq!(
         std::fs::read(root.join("mods/one.jar")).expect("live jar"),
         b"changed after the preview",
@@ -368,6 +373,96 @@ async fn spec_f114_restore_events_end_on_a_terminal_event() {
             "every restore phase is a key"
         );
     }
+}
+
+/// F-113: the screen can stop a backup, and a stopped one copies nothing.
+///
+/// The command registers the flag the blocking copy polls, so the flag a cancel
+/// flips is that one. Arming it before the run is the deterministic form of the
+/// same thing the button does mid-run.
+#[tokio::test]
+async fn spec_f113_a_cancelled_backup_reports_cancelled_and_copies_nothing() {
+    let dir = tempdir();
+    let root = instance_with_content(dir.path());
+    let state = app_state_with_roots(dir.path(), &[&root]);
+    let key = std::fs::canonicalize(&root).expect("canonical root");
+
+    let flag = state.begin_transfer(&key);
+    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let sink: Sink = Arc::new(Mutex::new(Vec::new()));
+    let err = execute_instance_backup_with(
+        &state,
+        BackupRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            include_saves: None,
+        },
+        backup_channel(&sink),
+    )
+    .await
+    .expect_err("a cancelled backup is not a backup");
+
+    assert_eq!(err.code, ErrorCode::Cancelled);
+    let backup_root = root.join(".modrinth_bulk_downloader_profile_backups");
+    assert!(
+        !backup_root.exists(),
+        "a cancelled run must not leave a dated folder behind"
+    );
+    assert!(
+        !state.cancel_transfer(&key),
+        "the registration is dropped when the run ends"
+    );
+}
+
+/// F-114: the same handle stops a restore, and a stopped restore writes no
+/// content — only the record that says it stopped.
+#[tokio::test]
+async fn spec_f114_a_cancelled_restore_writes_no_content() {
+    let dir = tempdir();
+    let root = instance_with_content(dir.path());
+    let state = app_state_with_roots(dir.path(), &[&root]);
+    let backup = make_backup(&state, &root).await;
+    std::fs::write(root.join("mods/one.jar"), b"live bytes").expect("edit");
+    let preview = plan_instance_restore_with(
+        &state,
+        RestorePreviewRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            backup_dir: backup.to_string_lossy().into_owned(),
+            include_saves: None,
+        },
+    )
+    .await
+    .expect("a plan");
+
+    let key = std::fs::canonicalize(&root).expect("canonical root");
+    let flag = state.begin_transfer(&key);
+    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let sink: Sink = Arc::new(Mutex::new(Vec::new()));
+    let run = execute_instance_restore_with(
+        &state,
+        RestoreExecuteRequest {
+            instance_root: root.to_string_lossy().into_owned(),
+            backup_dir: backup.to_string_lossy().into_owned(),
+            include_saves: false,
+            expected_manifest_sha256: preview.manifest_sha256,
+            confirmation: "RESTORE".to_string(),
+        },
+        restore_channel(&sink),
+    )
+    .await
+    .expect("a cancelled restore still answers");
+
+    assert_eq!(run.outcome, "cancelled");
+    assert_eq!(
+        std::fs::read(root.join("mods/one.jar")).expect("live jar"),
+        b"live bytes",
+        "a cancelled restore must not write content"
+    );
+    assert!(
+        !state.cancel_transfer(&key),
+        "the registration is dropped when the run ends"
+    );
 }
 
 /// F-114: the two restore codes that are not "invalid input", mapped where both

@@ -2,6 +2,10 @@
 
 export type RestoreResultEntryDto = { source: string, backupPath: string, targetPath: string, safetyPath: string, 
 /**
- * `restored`, `failed`, `rolled-back`, `cancelled`, `dependency-failed`.
+ * `restored`, `failed`, `rolled-back`, `rollback-failed`, `cancelled`,
+ * `dependency-failed`. `rollback-failed` means the group failed AND the
+ * safety copy could not return: the target is missing or half written, and
+ * the screen must send the user to `safety_path` instead of saying the
+ * group was put back.
  */
 state: string, reasonCode: string, fileCount: number, totalBytes: number, };

@@ -542,6 +542,19 @@ export async function executeInstanceRestore(
   return invoke<RestoreRunDto>('execute_instance_restore', { req, onEvent: channel });
 }
 
+/**
+ * Stops the backup or restore running on this instance.
+ *
+ * One call for both: the run is addressed by its instance root, and the per-root
+ * lock allows one copy at a time. The copy polls the flag between groups and
+ * between files, so the stop lands inside a file rather than at the end. `true`
+ * means a run was there to stop; `false` is the ordinary race between the click
+ * and the run's own end — data, not an error.
+ */
+export function cancelInstanceTransfer(instanceRoot: string): Promise<boolean> {
+  return invoke<boolean>('cancel_instance_transfer', { instanceRoot });
+}
+
 /** The worlds under `saves/`, read-only. A missing folder is an answer, not an error. */
 export function previewInstanceWorlds(instanceRoot: string): Promise<WorldsPreviewDto> {
   return invoke<WorldsPreviewDto>('preview_instance_worlds', { instanceRoot });

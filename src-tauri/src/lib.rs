@@ -166,6 +166,7 @@ pub fn run() -> i32 {
             commands::pack::dismiss_pack_apply,
             commands::backup::list_instance_backups,
             commands::backup::execute_instance_backup,
+            commands::backup::cancel_instance_transfer,
             commands::backup::plan_instance_restore,
             commands::backup::execute_instance_restore,
             commands::backup::preview_instance_worlds,

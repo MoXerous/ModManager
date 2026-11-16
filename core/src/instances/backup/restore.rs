@@ -22,6 +22,10 @@ pub enum RestoreState {
     Restored,
     Failed,
     RolledBack,
+    /// The group failed AND the safety copy could not return: the target is
+    /// missing or half written, and the user must be sent to the safety folder
+    /// instead of being told the group was put back (ADR 0007 §6-4).
+    RollbackFailed,
     Cancelled,
     DependencyFailed,
 }
@@ -32,6 +36,7 @@ impl RestoreState {
             RestoreState::Restored => "restored",
             RestoreState::Failed => "failed",
             RestoreState::RolledBack => "rolled-back",
+            RestoreState::RollbackFailed => "rollback-failed",
             RestoreState::Cancelled => "cancelled",
             RestoreState::DependencyFailed => "dependency-failed",
         }
@@ -140,6 +145,11 @@ pub enum RestoreError {
     InstanceMismatch,
     #[error("the backup changed after the plan was shown")]
     ManifestChanged,
+    /// The plan names a safety folder outside the instance it restores. A
+    /// rename destination is authority over where content lands, so a plan that
+    /// points it outside `content_root` is not a plan (ADR 0007 §6-3).
+    #[error("the safety folder is not inside this instance")]
+    SafetyOutside,
     #[error("the typed confirmation word is required")]
     ConfirmationRequired,
     #[error(transparent)]
@@ -230,6 +240,34 @@ pub(super) fn read_restore_manifest(
     }
 }
 
+/// Is `path` inside `root` by the rule the entry paths use: a lexical prefix on
+/// normalised components. `..` is resolved against the component before it, and
+/// a leading `..` has nothing to cancel — it was never inside anything, so it
+/// is refused instead of being followed.
+fn within_root(root: &Path, path: &Path) -> bool {
+    let (Some(root), Some(path)) = (normalised(root), normalised(path)) else {
+        return false;
+    };
+    path.starts_with(root)
+}
+
+fn normalised(path: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    Some(out)
+}
+
+/// The read-only plan for a restore.
 fn plan_entry(
     root: &Path,
     backup_dir: &Path,
@@ -256,6 +294,12 @@ fn plan_entry(
     // written back (ADR 0007 §6-3).
     if source == EntrySource::ProfileJson {
         return blocked("profile-not-restored");
+    }
+    // Defensive: `safety_path` is derived from `root` just above, so this holds
+    // by construction — and it is checked anyway, because the same path is a
+    // rename destination at execution and a plan is not an authority.
+    if !within_root(root, &safety_path) {
+        return blocked("safety-outside");
     }
     let Ok(meta) = std::fs::symlink_metadata(&backup_path) else {
         return blocked("source-missing");
@@ -371,6 +415,13 @@ pub fn execute_restore(
     if confirmation.trim() != super::CONFIRMATION_WORD {
         return Err(RestoreError::ConfirmationRequired);
     }
+    // The safety folder is where `mods/` is renamed to: a plan that names one
+    // outside the instance would move content anywhere it likes, and would
+    // write its manifest there too. Refused before the first rename, and before
+    // a single folder is created (ADR 0007 §6-3).
+    if !within_root(&plan.root, &plan.safety_dir) {
+        return Err(RestoreError::SafetyOutside);
+    }
     let backup_dir = canonical_backup_dir(&plan.root, &plan.backup_dir)?;
     let manifest_path = backup_dir.join(super::BACKUP_MANIFEST_NAME);
     let manifest = read_restore_manifest(&manifest_path)?;
@@ -444,6 +495,16 @@ pub fn execute_restore(
                 first_failure = true;
                 results.push(result_of(entry, RestoreState::RolledBack, code));
             }
+            GroupEnd::RollbackFailed(code) => {
+                // Same failure, worse outcome: the group is not where it was.
+                // `Partial` was already the loudest honest verdict, and the row
+                // now names the group the user has to look at.
+                if entry.source == EntrySource::Mods {
+                    mods_failed = true;
+                }
+                first_failure = true;
+                results.push(result_of(entry, RestoreState::RollbackFailed, code));
+            }
             GroupEnd::Failed(code) => {
                 if entry.source == EntrySource::Mods {
                     mods_failed = true;
@@ -497,6 +558,15 @@ fn recheck_entry(
     if entry.target_path != entry.source.target_of(&plan.root) {
         return Some("entry-outside-group");
     }
+    // The safety path is a rename destination, so it is a routing decision like
+    // the target: it must stay under this plan's own safety folder *and* under
+    // the instance. Without this a forged plan moves `mods/` to any path the
+    // caller names (ADR 0007 §6-3).
+    if !entry.safety_path.starts_with(&plan.safety_dir)
+        || !within_root(&plan.root, &entry.safety_path)
+    {
+        return Some("safety-outside");
+    }
     if !rows_within_group(manifest, entry.source) {
         return Some("entry-outside-group");
     }
@@ -522,7 +592,19 @@ enum GroupEnd {
     Restored,
     Cancelled,
     RolledBack(&'static str),
+    RollbackFailed(&'static str),
     Failed(&'static str),
+}
+
+/// How a rollback ended, judged rename by rename.
+enum RollbackEnd {
+    /// The safety copy is back at the target.
+    Done,
+    /// There was no previous target: the half-copied tree was moved aside and
+    /// nothing had to return.
+    NothingToUndo,
+    /// A rename the way back needed did not happen.
+    Failed,
 }
 
 fn restore_group(
@@ -547,37 +629,43 @@ fn restore_group(
     }
 
     let expected = expected_hashes(manifest, entry.source);
-    match copy_group(
+    let copy = copy_group(
         entry,
         &expected,
         cancel,
         restored_files,
         restored_bytes,
         on_progress,
-    ) {
+    );
+    match copy {
         Ok(()) => GroupEnd::Restored,
-        Err("cancelled") => {
-            rollback(entry, had_target);
-            GroupEnd::Cancelled
-        }
-        Err(code) => {
-            if rollback(entry, had_target) {
-                GroupEnd::RolledBack(code)
-            } else {
-                GroupEnd::Failed(code)
-            }
-        }
+        Err(code) => match rollback(entry, had_target) {
+            // A cancel whose group did not come back is not a cancel: the tree
+            // is half restored, and the row says so. Nothing is hidden behind
+            // "you stopped it".
+            RollbackEnd::Failed => GroupEnd::RollbackFailed(code),
+            // When the group did come back — or never had a target to come back
+            // to — the stop is the honest verdict, not a failure the user did
+            // not cause.
+            _ if code == "cancelled" => GroupEnd::Cancelled,
+            RollbackEnd::Done => GroupEnd::RolledBack(code),
+            RollbackEnd::NothingToUndo => GroupEnd::Failed(code),
+        },
     }
 }
 
-/// Puts the previous target back after a failed or cancelled group, keeping
-/// the half-copied tree for inspection rather than deleting it.
-fn rollback(entry: &RestoreEntry, had_target: bool) -> bool {
+/// Puts the previous target back after a failed or cancelled group, keeping the
+/// half-copied tree for inspection rather than deleting it.
+///
+/// Every rename's result is judged. Ignoring one and answering "rolled back"
+/// would report a group as restored-unto-itself while it is in fact missing or
+/// half written — the report this feature exists to never make (ADR 0007 §6-4).
+fn rollback(entry: &RestoreEntry, had_target: bool) -> RollbackEnd {
     let Some(current) = entry.safety_path.parent() else {
-        return false;
+        return RollbackEnd::Failed;
     };
     let Some(safety_dir) = current.parent() else {
-        return false;
+        return RollbackEnd::Failed;
     };
     let failed = crate::instances::stamp::unique_path(
         safety_dir
@@ -585,16 +673,25 @@ fn rollback(entry: &RestoreEntry, had_target: bool) -> bool {
             .join(entry.source.group_name()),
     );
     if std::fs::symlink_metadata(&entry.target_path).is_ok() {
-        if let Some(parent) = failed.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let Some(parent) = failed.parent() else {
+            return RollbackEnd::Failed;
+        };
+        if std::fs::create_dir_all(parent).is_err() {
+            return RollbackEnd::Failed;
         }
-        let _ = std::fs::rename(&entry.target_path, &failed);
+        if std::fs::rename(&entry.target_path, &failed).is_err() {
+            // The half-copied tree is still in the way of the way back, so the
+            // safety copy cannot return either.
+            return RollbackEnd::Failed;
+        }
     }
-    if had_target {
-        let _ = std::fs::rename(&entry.safety_path, &entry.target_path);
-        return true;
+    if !had_target {
+        return RollbackEnd::NothingToUndo;
     }
-    false
+    if std::fs::rename(&entry.safety_path, &entry.target_path).is_err() {
+        return RollbackEnd::Failed;
+    }
+    RollbackEnd::Done
 }
 
 fn expected_hashes(

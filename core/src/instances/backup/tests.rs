@@ -218,7 +218,35 @@ fn spec_f113_backup_skips_a_symlink_and_never_follows_it() {
 #[test]
 fn spec_f113_manifest_is_written_atomically_and_leaves_no_temp() {
     let dir = instance();
-    let run = backup(dir.path(), false);
+    let plan = build_backup_plan(dir.path(), &subject(), false, now()).expect("plan");
+    // A dated folder that already carries a manifest: the second run into it
+    // must *replace* the document through a rename, not truncate it in place.
+    // A hard link is what tells the two apart — a rename publishes a new file
+    // and the link keeps the old bytes, while `File::create` through the same
+    // name rewrites the very bytes the link sees. That is the difference
+    // between "a reader sees the old manifest or the new one" and "a reader
+    // can see neither".
+    std::fs::create_dir_all(&plan.backup_dir).expect("backup dir");
+    let manifest_path = plan.backup_dir.join(BACKUP_MANIFEST_NAME);
+    std::fs::write(&manifest_path, b"{\"stale\":true}").expect("stale manifest");
+    let witness = plan.backup_dir.join("witness.bin");
+    if std::fs::hard_link(&manifest_path, &witness).is_err() {
+        // No hard links on this volume (AGENTS.md §6: filesystem tests run on
+        // NTFS), so the in-place-versus-rename distinction cannot be observed.
+        return;
+    }
+
+    let run = execute_backup(&plan, &AtomicBool::new(false), &mut |_| {}).expect("run");
+
+    assert_eq!(
+        std::fs::read(&witness).expect("witness"),
+        b"{\"stale\":true}",
+        "the manifest was rewritten in place: a reader could observe it half written"
+    );
+    assert_eq!(
+        run.manifest_path, manifest_path,
+        "the document landed in place"
+    );
 
     let mut leftovers = Vec::new();
     let mut stack = vec![run.backup_dir.clone()];
@@ -243,6 +271,32 @@ fn spec_f113_manifest_is_written_atomically_and_leaves_no_temp() {
         manifest::manifest_digest(&run.manifest_path).expect("digest"),
         run.manifest_sha256,
         "the digest handed to a restore is the file on disk"
+    );
+}
+
+#[test]
+fn spec_f113_manifest_records_no_mtime_the_copy_cannot_restore() {
+    // `modified_at` was recorded for every row and read by nothing: `std::fs`
+    // cannot set a file's mtime without a new dependency, and the old app's
+    // `copy2` did preserve it. A field the copy does not reproduce promises a
+    // restored timestamp that will not be there, so the schema drops it
+    // (ADR 0007 §11) and this test pins that.
+    let dir = instance();
+    let run = backup(dir.path(), false);
+
+    let bytes = std::fs::read(&run.manifest_path).expect("manifest bytes");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("manifest json");
+    let entries = value["entries"].as_array().expect("an entries array");
+    assert!(!entries.is_empty(), "the fixture copied something");
+    for entry in entries {
+        assert!(
+            entry.get("modified_at").is_none(),
+            "a timestamp nothing restores: {entry}"
+        );
+    }
+    assert!(
+        !bytes.windows(11).any(|window| window == b"modified_at"),
+        "the key must be gone from the document itself"
     );
 }
 
@@ -455,7 +509,6 @@ fn spec_f114_restore_blocks_an_entry_path_outside_its_own_group() {
         kind: manifest::EntryKind::File,
         size: 3,
         sha256: "0".repeat(64),
-        modified_at: 0,
         version_id: String::new(),
         status: manifest::EntryStatus::Copied,
         reason_code: String::new(),
@@ -524,7 +577,6 @@ fn spec_f114_restore_refuses_an_entry_path_that_escapes_the_root() {
             kind: manifest::EntryKind::File,
             size: 3,
             sha256: "0".repeat(64),
-            modified_at: 0,
             version_id: String::new(),
             status: manifest::EntryStatus::Copied,
             reason_code: String::new(),
@@ -607,6 +659,159 @@ fn spec_f114_restore_rolls_a_failed_group_back_and_reports_partial() {
             .join(".modrinth_bulk_downloader_restore_safety")
             .is_dir(),
         "the safety copy is the way back and must stay"
+    );
+}
+
+#[test]
+fn spec_f114_restore_reports_a_failed_rollback_instead_of_claiming_one() {
+    let dir = instance();
+    let run = backup(dir.path(), false);
+    std::fs::write(dir.path().join("mods/sodium.jar"), b"live-bytes").expect("live");
+    std::fs::write(run.backup_dir.join("mods/sodium.jar"), b"tampered").expect("tamper");
+
+    let plan = plan_restore(dir.path(), &run.backup_dir, false);
+    // The way back is blocked before the run: the failed tree cannot be moved
+    // to `failed_restore/` (that name is a file, not a folder), and the target
+    // is therefore still in the way of the safety copy's return. A rollback
+    // that cannot happen must say so — "rolled back" over a group that is
+    // actually missing or half copied is the one report this feature cannot
+    // afford.
+    std::fs::create_dir_all(&plan.safety_dir).expect("safety dir");
+    std::fs::write(plan.safety_dir.join("failed_restore"), b"in the way").expect("blocker");
+
+    let out = restore::execute_restore(
+        &plan,
+        CONFIRMATION_WORD,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .expect("run");
+
+    assert_eq!(out.outcome, restore::RestoreOutcome::Partial);
+    let mods = out
+        .entries
+        .iter()
+        .find(|e| e.source == EntrySource::Mods)
+        .expect("mods row");
+    assert_eq!(mods.state, restore::RestoreState::RollbackFailed);
+    assert_eq!(
+        mods.reason_code, "hash-mismatch",
+        "the cause is still named"
+    );
+    assert_ne!(
+        std::fs::read(dir.path().join("mods/sodium.jar")).ok(),
+        Some(b"live-bytes".to_vec()),
+        "the live bytes did not come back, so the group was not rolled back"
+    );
+    assert_eq!(
+        std::fs::read(plan.safety_dir.join("current/mods/sodium.jar")).expect("safety"),
+        b"live-bytes",
+        "the safety copy is the way back and must stay where it is"
+    );
+}
+
+#[test]
+fn spec_f114_a_cancelled_restore_of_a_new_group_reports_cancelled_not_failed() {
+    let dir = instance();
+    std::fs::write(dir.path().join("config/second.txt"), b"cfg2").expect("second");
+    let run = backup(dir.path(), false);
+    // The config group has no live target at restore time: there is nothing for
+    // the way back to return. A stop must still read as a stop — not as a
+    // failure the user never caused — and the half-copied tree must be gone.
+    std::fs::remove_dir_all(dir.path().join("config")).expect("remove");
+    let plan = plan_restore(dir.path(), &run.backup_dir, false);
+
+    let cancel = AtomicBool::new(false);
+    let out = restore::execute_restore(&plan, CONFIRMATION_WORD, &cancel, &mut |p| {
+        // The first file of the config group has landed: stop before its
+        // sibling, so the group is cancelled mid-copy with no previous target.
+        if p.restored_files >= 2 {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    })
+    .expect("run");
+
+    assert_eq!(out.outcome, restore::RestoreOutcome::Cancelled);
+    let config = out
+        .entries
+        .iter()
+        .find(|e| e.source == EntrySource::Config)
+        .expect("config row");
+    assert_eq!(config.state, restore::RestoreState::Cancelled);
+    assert!(
+        !dir.path().join("config").exists(),
+        "a cancelled group leaves no half-copied tree behind"
+    );
+}
+
+#[test]
+fn spec_f114_restore_refuses_a_forged_safety_path_outside_the_root() {
+    let dir = instance();
+    let run = backup(dir.path(), false);
+    let plan = plan_restore(dir.path(), &run.backup_dir, false);
+    let outside = crate::test_tempdir();
+    // The safety path is a rename destination: a hand-made plan that points it
+    // outside the instance would move `mods/` anywhere it likes (ADR 0007 §6-3).
+    let mut forged = plan.clone();
+    for entry in &mut forged.entries {
+        if entry.source == EntrySource::Mods {
+            entry.safety_path = outside.path().join("mods");
+        }
+    }
+
+    let out = restore::execute_restore(
+        &forged,
+        CONFIRMATION_WORD,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .expect("run");
+
+    let mods = out
+        .entries
+        .iter()
+        .find(|e| e.source == EntrySource::Mods)
+        .expect("mods row");
+    assert_eq!(mods.state, restore::RestoreState::Failed);
+    assert_eq!(mods.reason_code, "safety-outside");
+    assert!(
+        !outside.path().join("mods").exists(),
+        "the live mods folder was moved outside the instance"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("mods/sodium.jar")).expect("live"),
+        b"jar",
+        "the live mods folder stayed where it was"
+    );
+}
+
+#[test]
+fn spec_f114_restore_refuses_a_plan_whose_safety_folder_is_outside_the_root() {
+    let dir = instance();
+    let run = backup(dir.path(), false);
+    let outside = crate::test_tempdir();
+    let mut forged = plan_restore(dir.path(), &run.backup_dir, false);
+    forged.safety_dir = outside.path().join("safety");
+
+    let err = restore::execute_restore(
+        &forged,
+        CONFIRMATION_WORD,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .expect_err("a safety folder outside the instance is not a plan");
+    assert!(
+        matches!(err, restore::RestoreError::SafetyOutside),
+        "got {err:?}"
+    );
+    assert!(
+        !outside.path().join("safety").exists(),
+        "nothing may be created outside the instance"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("mods/sodium.jar")).expect("live"),
+        b"jar",
+        "a refused plan writes nothing"
     );
 }
 

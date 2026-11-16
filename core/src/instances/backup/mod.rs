@@ -271,7 +271,6 @@ pub fn execute_backup(
                     },
                     size: 0,
                     sha256: String::new(),
-                    modified_at: 0,
                     version_id: String::new(),
                     status: EntryStatus::Skipped,
                     reason_code: "source-missing".to_string(),
@@ -293,7 +292,6 @@ pub fn execute_backup(
                     },
                     size: 0,
                     sha256: String::new(),
-                    modified_at: 0,
                     version_id: String::new(),
                     status: EntryStatus::Skipped,
                     reason_code: "symlink".to_string(),
@@ -305,24 +303,12 @@ pub fn execute_backup(
                     let digest = copy_file(&from, &to)?;
                     copied_files += 1;
                     copied_bytes += meta.len();
-                    entries.push(file_entry(
-                        source,
-                        source.group_name(),
-                        meta.len(),
-                        digest,
-                        meta,
-                    ));
+                    entries.push(file_entry(source, source.group_name(), meta.len(), digest));
                 } else {
                     let digest = copy_file(&from, &to)?;
                     copied_files += 1;
                     copied_bytes += meta.len();
-                    entries.push(file_entry(
-                        source,
-                        source.group_name(),
-                        meta.len(),
-                        digest,
-                        meta,
-                    ));
+                    entries.push(file_entry(source, source.group_name(), meta.len(), digest));
                 }
                 progress(copied_files, copied_bytes, false);
             }
@@ -370,7 +356,6 @@ pub fn execute_backup(
                                 kind: EntryKind::File,
                                 size: 0,
                                 sha256: String::new(),
-                                modified_at: 0,
                                 version_id: String::new(),
                                 status: EntryStatus::Skipped,
                                 reason_code: "symlink".to_string(),
@@ -385,13 +370,7 @@ pub fn execute_backup(
                             let digest = copy_file(&child_path, &dest)?;
                             copied_files += 1;
                             copied_bytes += child_meta.len();
-                            entries.push(file_entry(
-                                source,
-                                &rel,
-                                child_meta.len(),
-                                digest,
-                                child_meta,
-                            ));
+                            entries.push(file_entry(source, &rel, child_meta.len(), digest));
                             progress(copied_files, copied_bytes, false);
                         }
                     }
@@ -415,7 +394,6 @@ pub fn execute_backup(
             kind: EntryKind::Dir,
             size: 0,
             sha256: String::new(),
-            modified_at: 0,
             version_id: String::new(),
             status: EntryStatus::Skipped,
             reason_code: "saves-not-included".to_string(),
@@ -447,7 +425,6 @@ pub fn execute_backup(
             kind: EntryKind::File,
             size: bytes.len() as u64,
             sha256: manifest::hex(sha2::Sha256::digest(&bytes)),
-            modified_at: 0,
             version_id: String::new(),
             status: EntryStatus::Generated,
             reason_code: String::new(),
@@ -493,32 +470,17 @@ pub fn execute_backup(
     })
 }
 
-fn file_entry(
-    source: EntrySource,
-    path: &str,
-    size: u64,
-    digest: String,
-    meta: std::fs::Metadata,
-) -> BackupEntry {
+fn file_entry(source: EntrySource, path: &str, size: u64, digest: String) -> BackupEntry {
     BackupEntry {
         source,
         path: path.to_string(),
         kind: EntryKind::File,
         size,
         sha256: digest,
-        modified_at: modified_at(&meta),
         version_id: String::new(),
         status: EntryStatus::Copied,
         reason_code: String::new(),
     }
-}
-
-fn modified_at(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// Copies one file and returns the SHA-256 of the bytes it wrote, hashing the

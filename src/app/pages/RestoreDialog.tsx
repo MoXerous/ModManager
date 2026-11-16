@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from 'cn';
 import { ErrorState, LoadingState } from '../../components/state';
-import { executeInstanceRestore, planInstanceRestore, toIpcError } from '../../lib/ipc';
+import { executeInstanceRestore, cancelInstanceTransfer, planInstanceRestore, toIpcError } from '../../lib/ipc';
 
 /** Mirrors `CONFIRMATION_WORD` in mm-core; the bridge checks it again. */
 const RESTORE_WORD = 'RESTORE';
@@ -295,9 +295,24 @@ export function RestoreDialog({ root, backupRoot, backup, onClose, onRestored }:
             </Button>
           ) : (
             <>
-              <Button type="button" variant="outline" onClick={onClose} disabled={running}>
-                {t('state.action.cancel')}
-              </Button>
+              {running ? (
+                // A restore is a write in flight: this stops it at the next file
+                // boundary and rolls the group back, so the world it leaves is
+                // the one it found (F-114).
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void cancelInstanceTransfer(root);
+                  }}
+                >
+                  {t('state.action.cancel')}
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" onClick={onClose}>
+                  {t('state.action.cancel')}
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="destructive"

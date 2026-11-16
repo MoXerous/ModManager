@@ -12,9 +12,10 @@
 //! `plan_instance_restore` writes nothing and returns the manifest digest. The
 //! confirm carries that digest back; the execute command re-plans server-side —
 //! a plan body from the webview is never trusted, the same rule
-//! `execute_toggle` and `execute_modpack_install` follow — and refuses when the
-//! digest differs (`RestoreMismatch`), or lets core refuse a manifest that moved
-//! on disk (`BackupChanged`). The typed word `RESTORE` is checked again in core.
+//! `execute_toggle` and `execute_modpack_install` follow — and refuses a digest
+//! that moved (`BackupChanged`), the code ADR 0007 §6-2 names for "the manifest
+//! changed since it was written", while `RestoreMismatch` is kept for the one
+//! thing it names there: a manifest that belongs to another instance.
 //!
 //! # The root is a registry question
 //!
@@ -28,7 +29,6 @@
 //! `saves/` and `profile.json` live there, so that is what a backup covers.
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::time::{Instant, SystemTime};
 
 use tauri::ipc::Channel;
@@ -48,7 +48,7 @@ use crate::dto::{
     WorldsPreviewDto,
 };
 use crate::progress::ProgressThrottle;
-use crate::state::AppState;
+use crate::state::{AppState, TransferGuard};
 
 use super::pack::apply_lock_for;
 
@@ -130,6 +130,9 @@ pub(super) fn backup_error(e: &BackupError) -> IpcError {
 pub(super) fn restore_error(e: &RestoreError) -> IpcError {
     match e {
         RestoreError::BackupOutside => IpcError::invalid_input(e),
+        // A plan whose safety folder is outside the instance is a plan this
+        // bridge never builds: it is a malformed request, not a disk failure.
+        RestoreError::SafetyOutside => IpcError::invalid_input(e),
         RestoreError::BackupMissing => IpcError::new(ErrorCode::NotFound, e),
         RestoreError::InstanceMismatch => IpcError::new(ErrorCode::RestoreMismatch, e),
         RestoreError::ManifestChanged => IpcError::new(ErrorCode::BackupChanged, e),
@@ -259,6 +262,12 @@ pub async fn execute_instance_backup_with(
     let lock = apply_lock_for(&root);
     let _guard = lock.lock().await;
 
+    // A cancel the screen sends while the plan walks the tree must be observed,
+    // so the flag is registered before the plan is built and dropped on every
+    // exit (the guard), never at the end of a happy path only.
+    let cancel = state.begin_transfer(&root);
+    let _transfer = TransferGuard::new(state, root.clone(), cancel.clone());
+
     let plan_root = root.clone();
     let plan = tauri::async_runtime::spawn_blocking(move || {
         core_backup::build_backup_plan(&plan_root, &subject, include_saves, SystemTime::now())
@@ -276,7 +285,7 @@ pub async fn execute_instance_backup_with(
             }
             let _ = channel.send(backup_event(&p));
         };
-        core_backup::execute_backup(&plan, &AtomicBool::new(false), &mut emit)
+        core_backup::execute_backup(&plan, &cancel, &mut emit)
     })
     .await
     .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?;
@@ -288,6 +297,32 @@ pub async fn execute_instance_backup_with(
             Err(backup_error(&e))
         }
     }
+}
+
+/// Stops the backup or restore running on this instance, if one is.
+///
+/// One command for both, because the key is the same: the resolved content root,
+/// and the per-root lock allows one copy at a time. The copy polls the flag
+/// between groups and between files, so a stop lands within a file rather than at
+/// the end of the run. `true` means a run was there to stop; `false` is the
+/// ordinary race between the click and the run's own end — data, not an error.
+#[tauri::command]
+pub async fn cancel_instance_transfer(
+    state: tauri::State<'_, AppState>,
+    instance_root: String,
+) -> Result<bool, IpcError> {
+    cancel_instance_transfer_with(state.inner(), instance_root).await
+}
+
+/// The body of [`cancel_instance_transfer`], with the state as a parameter.
+pub async fn cancel_instance_transfer_with(
+    state: &AppState,
+    instance_root: String,
+) -> Result<bool, IpcError> {
+    // The same registry gate as the run it stops: a folder this app does not own
+    // is not something a cancel can address.
+    let (root, _subject) = registered_instance(state, &instance_root).await?;
+    Ok(state.cancel_transfer(&root))
 }
 
 /// What a restore would do, without writing anything.
@@ -360,6 +395,12 @@ pub async fn execute_instance_restore_with(
     let lock = apply_lock_for(&root);
     let _guard = lock.lock().await;
 
+    // Registered before the plan, like the backup's: the safety folder is not
+    // created until execution, and a cancel between the click and the copy is
+    // still a cancel.
+    let cancel = state.begin_transfer(&root);
+    let _transfer = TransferGuard::new(state, root.clone(), cancel.clone());
+
     let plan_root = root.clone();
     let plan = tauri::async_runtime::spawn_blocking(move || {
         restore::build_restore_plan(
@@ -381,10 +422,14 @@ pub async fn execute_instance_restore_with(
         .manifest_sha256
         .eq_ignore_ascii_case(req.expected_manifest_sha256.trim())
     {
+        // `BackupChanged`, not `RestoreMismatch` (ADR 0007 §6-2): the folder is
+        // still this instance's backup, but its manifest moved after the preview
+        // the user read, so the answer is "show the plan again" — while
+        // `RestoreMismatch` answers "this is another instance's backup".
         return Err(IpcError::new(
-            ErrorCode::RestoreMismatch,
+            ErrorCode::BackupChanged,
             format!(
-                "{} is not the backup this confirm was shown",
+                "{} changed after the plan was shown",
                 plan.backup_dir.display()
             ),
         ));
@@ -400,7 +445,7 @@ pub async fn execute_instance_restore_with(
             }
             let _ = channel.send(restore_event(&p));
         };
-        restore::execute_restore(&plan, &confirmation, &AtomicBool::new(false), &mut emit)
+        restore::execute_restore(&plan, &confirmation, &cancel, &mut emit)
     })
     .await
     .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?;
