@@ -415,7 +415,109 @@ pub struct LocalFactDto {
     /// `mod` | `shaderpack` | `datapack` | `resourcepack` | `unknown`.
     pub resource_type: String,
     pub disabled: bool,
+    /// The lock's project id for this file, when it has one.
     pub project_id: Option<String>,
+    /// F-097/F-098: the one label the screen shows, derived in core from the
+    /// axes below: `managed` | `externalUnknown` | `disabled` | `duplicate` |
+    /// `incompatible`. The axes travel too — the label is not the truth.
+    pub class: String,
+    /// Ownership axis: `managed` | `external`.
+    pub ownership: String,
+    /// How ownership was proven: `sha1` | `provider_version` | `` (none).
+    pub ownership_evidence: String,
+    /// F-099: the identities this file shares with another file in the folder.
+    pub duplicate_keys: Vec<DuplicateKeyDto>,
+    /// Compatibility axis: `compatible` | `incompatible` | `unknown`.
+    pub compatibility: String,
+    /// Why: `noTarget` | `unproven` | `range` | `gameVersion` | `loader`;
+    /// `null` when the file is compatible.
+    pub compatibility_reason: Option<String>,
+    /// The game version or loader the reason names.
+    pub compatibility_target: Option<String>,
+    /// F-100: the bytes no longer match the SHA-1 the lock records.
+    pub hash_mismatch: bool,
+}
+
+impl LocalFactDto {
+    pub fn from_fact(fact: &mm_core::instances::LocalContentFact) -> Self {
+        let reason = fact.compatibility.reason();
+        Self {
+            filename: fact.filename.clone(),
+            rel_path: fact.rel_path.clone(),
+            size: fact.size,
+            sha1: fact.sha1.clone(),
+            resource_type: format!("{:?}", fact.resource_type).to_lowercase(),
+            disabled: fact.disabled,
+            project_id: if fact.project_id.is_empty() {
+                None
+            } else {
+                Some(fact.project_id.clone())
+            },
+            class: fact.class().as_str().to_string(),
+            ownership: fact.ownership.as_str().to_string(),
+            ownership_evidence: fact.ownership.evidence().to_string(),
+            duplicate_keys: fact.duplicate_keys.iter().map(Into::into).collect(),
+            compatibility: fact.compatibility.as_str().to_string(),
+            compatibility_reason: reason.map(|r| r.code().to_string()),
+            compatibility_target: reason.and_then(|r| r.target()).map(str::to_string),
+            hash_mismatch: fact.hash_mismatch,
+        }
+    }
+}
+
+/// One identity a file shares with another (F-099).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DuplicateKeyDto {
+    /// `sha1` | `project` — which identity the files share.
+    pub kind: String,
+    /// The full key, e.g. `sha1:…` or `provider_project:modrinth:…`.
+    pub key: String,
+}
+
+impl From<&mm_core::instances::DuplicateKey> for DuplicateKeyDto {
+    fn from(key: &mm_core::instances::DuplicateKey) -> Self {
+        Self {
+            kind: key.kind().to_string(),
+            key: key.as_key(),
+        }
+    }
+}
+
+/// A folder-level finding the screen shows above the file list.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ContentWarningDto {
+    /// `duplicateLocalIdentity` | `managedHashMismatch`.
+    pub kind: String,
+    /// `sha1` | `project`, for the duplicate kinds.
+    pub key_kind: Option<String>,
+    /// The file concerned; absent for a folder-wide duplicate key.
+    pub rel_path: Option<String>,
+    /// The shared identity, for the duplicate kinds.
+    pub key: Option<String>,
+}
+
+impl ContentWarningDto {
+    pub fn from_core(warning: &mm_core::instances::ContentWarning) -> Self {
+        use mm_core::instances::ContentWarning;
+        match warning {
+            ContentWarning::DuplicateLocalIdentity(key) => Self {
+                kind: warning.kind().to_string(),
+                key_kind: Some(key.kind().to_string()),
+                rel_path: None,
+                key: Some(key.as_key()),
+            },
+            ContentWarning::ManagedHashMismatch { rel_path } => Self {
+                kind: warning.kind().to_string(),
+                key_kind: None,
+                rel_path: Some(rel_path.clone()),
+                key: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -439,6 +541,8 @@ pub struct InstanceSnapshotDto {
     pub loader_source: String,
     pub mods: Vec<LocalFactDto>,
     pub locked: Vec<LockEntryDto>,
+    /// F-099/F-100: duplicates and changed files, folder-wide.
+    pub content_warnings: Vec<ContentWarningDto>,
 }
 
 // --- updates (F-120) -----------------------------------------------------

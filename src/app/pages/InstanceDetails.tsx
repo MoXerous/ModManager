@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { Trans, useTranslation } from 'react-i18next';
 
 import type { InstanceSnapshotDto } from '../../bindings/InstanceSnapshotDto';
 import type { IpcError } from '../../bindings/IpcError';
+import type { LocalFactDto } from '../../bindings/LocalFactDto';
 import type { TogglePlanDto } from '../../bindings/TogglePlanDto';
 import type { UpdatePreviewDto } from '../../bindings/UpdatePreviewDto';
 import type { UpdateStatusDto } from '../../bindings/UpdateStatusDto';
@@ -25,6 +27,26 @@ import { RemoveDialog } from './RemoveDialog';
 
 type Action = 'enable' | 'disable';
 
+/**
+ * F-097: colour per class. Managed is the calm case; the other four each say
+ * something the user may want to act on, so each gets its own token rather
+ * than one blanket "warning" colour.
+ */
+function classClass(cls: string): string {
+  switch (cls) {
+    case 'managed':
+      return 'text-status-success';
+    case 'disabled':
+      return 'text-status-disabled';
+    case 'duplicate':
+      return 'text-status-warning';
+    case 'incompatible':
+      return 'text-status-issue';
+    default:
+      return 'text-muted-foreground';
+  }
+}
+
 function statusClass(status: UpdateStatusDto): string {
   switch (status) {
     case 'available':
@@ -36,6 +58,26 @@ function statusClass(status: UpdateStatusDto): string {
     case 'unsupported':
       return 'text-status-warning';
   }
+}
+
+/**
+ * F-097: the class label carries its evidence as a tooltip, the way the old
+ * app gave every class a reason string. External/unknown says *why* nothing
+ * owns the file (no record by SHA-1, project or version); a compatibility
+ * reason is added when one exists, because the two answer different questions
+ * and a tooltip can hold both.
+ */
+function classTitle(m: LocalFactDto, t: TFunction): string | undefined {
+  const parts: string[] = [];
+  if (m.class === 'externalUnknown') {
+    parts.push(t('details.classTip.externalUnknown'));
+  }
+  if (m.compatibilityReason) {
+    parts.push(
+      t(`details.compat.${m.compatibilityReason}`, { target: m.compatibilityTarget ?? '' }),
+    );
+  }
+  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 /**
@@ -141,9 +183,15 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [removeOpen, setRemoveOpen] = useState(false);
 
+  // `any` and `unknown` are sentinels, not loaders: a provider can only filter
+  // by a real one. The button stays disabled and the hint says why, rather
+  // than sending a request whose only possible answer is an empty page.
+  const targetLoader = (loader ?? '').trim().toLowerCase();
+  const targetVersion = (gameVersion ?? '').trim();
+
   const load = useCallback(() => {
     setError(null);
-    scanInstance(root)
+    scanInstance(root, targetVersion, targetLoader)
       .then((next) => {
         setSnap(next);
         // A rescan is the truth about what exists; keep only selections that
@@ -155,7 +203,7 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         });
       })
       .catch((e) => setError(toIpcError(e)));
-  }, [root]);
+  }, [root, targetVersion, targetLoader]);
 
   useEffect(load, [load]);
 
@@ -204,8 +252,6 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   // `any` and `unknown` are sentinels, not loaders: a provider can only filter
   // by a real one. The button stays disabled and the hint says why, rather
   // than sending a request whose only possible answer is an empty page.
-  const targetLoader = (loader ?? '').trim().toLowerCase();
-  const targetVersion = (gameVersion ?? '').trim();
   const hasTarget =
     targetVersion !== '' &&
     targetLoader !== '' &&
@@ -377,6 +423,43 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         loader={loader}
       />
 
+      {/* F-099/F-100: findings about the folder, not about one file. Shown
+          once above the list rather than repeated on every affected row. */}
+      {snap.contentWarnings.length > 0 && (
+        <div className="mx-5 mt-3 rounded-control border border-status-warning/40 bg-card px-3 py-2.5">
+          <ul className="flex flex-col gap-1">
+            {snap.contentWarnings.map((w) => (
+              <li
+                key={`${w.kind}:${w.relPath ?? ''}:${w.key ?? ''}`}
+                className="text-caption text-status-warning"
+              >
+                {/* F-097/F-099/F-100: the filename and the identity key are
+                    latin technical tokens inside an Arabic sentence. A bare
+                    `{{token}}` reverses them in RTL (`sha1:da39…` reads
+                    `…39ad:1ahs`), so each one is isolated with `bdi dir="ltr"`. */}
+                {w.kind === 'managedHashMismatch' ? (
+                  <Trans
+                    i18nKey="details.warn.managedHashMismatch"
+                    values={{ name: w.relPath ?? '' }}
+                    components={{ token: <bdi dir="ltr" className="font-mono" /> }}
+                  />
+                ) : (
+                  <Trans
+                    i18nKey={
+                      w.keyKind === 'sha1'
+                        ? 'details.warn.duplicateLocalIdentity.sha1'
+                        : 'details.warn.duplicateLocalIdentity.project'
+                    }
+                    values={{ key: w.key ?? '' }}
+                    components={{ token: <bdi dir="ltr" className="font-mono" /> }}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {plan && (
         <div className="mx-5 mt-3 rounded-control border border-border bg-card px-4 py-3">
           <p className="text-body">
@@ -461,7 +544,35 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
                     {m.relPath}
                   </span>
                 )}
+                {/* F-099: the keys are the evidence for the Duplicate class, so
+                    they belong on the row that carries it — not only in the
+                    folder-wide warning above. */}
+                {m.duplicateKeys.length > 0 && (
+                  <span
+                    className="flex flex-wrap items-center gap-x-2 text-caption text-status-warning"
+                    title={t('details.duplicateKeys')}
+                  >
+                    {m.duplicateKeys.map((k) => (
+                      <bdi key={k.key} dir="ltr" className="font-mono">
+                        {k.key}
+                      </bdi>
+                    ))}
+                  </span>
+                )}
               </span>
+              {/* F-097: the derived class, and why when it is a compatibility
+                  verdict. The axes stay in the data; this is only the label. */}
+              <span
+                className={cn('shrink-0 text-caption', classClass(m.class))}
+                title={classTitle(m, t)}
+              >
+                {t(`details.class.${m.class}`)}
+              </span>
+              {m.hashMismatch && (
+                <span className="shrink-0 text-caption text-status-warning">
+                  {t('details.badge.hashMismatch')}
+                </span>
+              )}
               <span dir="ltr" className="font-mono text-caption text-muted-foreground">
                 {formatBytes(m.size)}
               </span>

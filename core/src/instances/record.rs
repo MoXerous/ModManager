@@ -24,6 +24,11 @@ pub struct InstalledRecord {
     pub file_name: String,
     pub sha1: String,
     pub sha512: String,
+    /// The Minecraft versions the provider declared for this version. Part of
+    /// the record because the install is the only moment they are known: a
+    /// scan later has no network and the jar may declare a range or nothing
+    /// (F-097). Empty when the source never declared any.
+    pub game_versions: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +77,7 @@ pub fn record_install(
             filename: record.file_name.clone(),
             sha1: record.sha1.clone(),
             sha512: record.sha512.clone(),
+            game_versions: record.game_versions.clone(),
         };
         match lock
             .entries
@@ -217,6 +223,7 @@ mod tests {
             file_name: name.to_string(),
             sha1: format!("sha1-{project}"),
             sha512: format!("sha512-{project}"),
+            game_versions: Vec::new(),
         }
     }
 
@@ -254,6 +261,45 @@ mod tests {
             })
             .expect("query");
         rows.map(|r| r.expect("row")).collect()
+    }
+
+    /// F-097: the provider's declared Minecraft versions are the evidence a
+    /// later scan needs, and the install is the only moment they are known.
+    /// They must land in the lock, and a re-record must replace them rather
+    /// than append or keep a stale set.
+    #[test]
+    fn spec_f097_record_install_keeps_the_provider_game_versions() {
+        let dir = crate::test_tempdir();
+        let db = open(dir.path());
+        let root = dir.path().join("instance");
+        register(&db, &root, "i1");
+
+        let first = InstalledRecord {
+            game_versions: vec!["1.20.1".to_string(), "1.20.2".to_string()],
+            ..record("a.jar", "proj-a")
+        };
+        record_install(&db, &root, &[first]).expect("first");
+
+        let lock = read_lock(&root.join(LOCK_FILE_NAME)).expect("lock");
+        assert_eq!(
+            lock.entries[0].game_versions,
+            vec!["1.20.1".to_string(), "1.20.2".to_string()],
+            "the install is the only moment the provider's declaration is known"
+        );
+
+        let second = InstalledRecord {
+            game_versions: vec!["1.21.1".to_string()],
+            ..record("a.jar", "proj-a")
+        };
+        record_install(&db, &root, &[second]).expect("second");
+
+        let lock = read_lock(&root.join(LOCK_FILE_NAME)).expect("lock");
+        assert_eq!(lock.entries.len(), 1, "still one record for one file");
+        assert_eq!(
+            lock.entries[0].game_versions,
+            vec!["1.21.1".to_string()],
+            "a re-record replaces the recorded set"
+        );
     }
 
     #[test]

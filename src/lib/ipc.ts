@@ -100,8 +100,19 @@ export function buildInstallPlan(
   });
 }
 
-export function scanInstance(instanceRoot: string): Promise<InstanceSnapshotDto> {
-  return invoke<InstanceSnapshotDto>('scan_instance', { instanceRoot });
+/**
+ * F-097..F-100. Reads the instance folder and answers with the axes.
+ *
+ * The target is passed because compatibility is decided against this
+ * instance's own Minecraft version and loader; an empty string means "not
+ * known", which the scan reports as `unknown`, never as incompatible.
+ */
+export function scanInstance(
+  instanceRoot: string,
+  gameVersion: string,
+  loader: string,
+): Promise<InstanceSnapshotDto> {
+  return invoke<InstanceSnapshotDto>('scan_instance', { instanceRoot, gameVersion, loader });
 }
 
 /**

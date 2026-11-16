@@ -72,6 +72,11 @@ pub struct BatchItem {
     pub size: Option<u64>,
     pub sha1_hex: Option<String>,
     pub sha512_hex: Option<String>,
+    /// The provider's declared Minecraft versions for this version. Carried to
+    /// the lock record at the end of the install, because that is the only
+    /// moment the catalogue's own answer is known (F-097): a later scan has no
+    /// network, and the jar may declare a range or nothing.
+    pub game_versions: Vec<String>,
     /// Passed straight through to [`DownloadRequest`]. Production items leave
     /// this false, which is what makes the downloader https-only; a test
     /// serving wiremock on loopback sets it, exactly as the downloader's own

@@ -254,50 +254,52 @@
       "id": "F-097",
       "status": "partial",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\dto.rs::LocalFactDto (filename, rel_path, size, sha1, resource_type, disabled, project_id)",
-        "E:\\ModManager\\core\\src\\instances\\remove\\mod.rs::RemoveCandidate.external",
-        "E:\\ModManager\\core\\src\\jar_reader\\mod.rs::classify_local_resource_type"
+        "core/src/instances/content.rs::classify_content",
+        "core/src/instances/content.rs::compatibility",
+        "core/src/instances/lock.rs::LockEntry.game_versions",
+        "core/src/instances/record.rs::InstalledRecord.game_versions",
+        "src/app/pages/InstanceDetails.tsx::classTitle"
       ],
-      "test": "spec_f067_detects_disabled_suffix_and_segment",
-      "note": "Matches the reviewed split; no ownership verdict in the inventory view.",
-      "gap": "Two of the five classes exist: disabled is computed structurally in the scan, and managed/external ownership is derived only inside the removal preview (RemoveCandidate.external from the lock); the inventory view exposes only a lock-derived project_id per fact, with no ownership label, and the Duplicates and Incompatible classes are never computed.",
-      "review": "verified:confirmed"
+      "test": "spec_f097_recorded_provider_versions_are_preferred_over_the_jar",
+      "note": "جزئي: الفئاتُ الخمس (مملوك · خارجي/مجهول · معطّل · مكرّر · غير متوافق) والسُلَّمُ القديمُ (معطّل←مكرّر←غير متوافق←مملوك←خارجي) مُنفَّذة، والملكيةُ بأدلّة (SHA-1 أو هوية الإصدار)، والتكرارُ بالمفتاحين (SHA-1 وهوية المشروع)، وتعارضُ الهاش مُبلَّغ، والأدلّةُ معروضةٌ في الواجهة مع `<bdi>` للرموز اللاتينية. ويُحفظُ ما أعلنه المزوّدُ من نطاقاتِ الإصدارات وقتَ التثبيت في القفل ليُقاسَ التوافقُ بلا شبكة؛ **لكنّ تحليلَ النطاقات (>= · <= · ^ · ~ · 1.20.x · [a,b)) غيرُ منفَّذ**، فالنطاقُ المسجَّل يُقرأ «غير مثبت» بسببه.",
+      "gap": "تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها.",
+      "review": "fixed-s3: implemented, adversarially challenged (glm), findings fixed (recorded versions, evidence in the UI, RTL bdi)"
     },
     {
       "id": "F-098",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\instances\\mod.rs::LocalContentFact",
-        "E:\\ModManager\\core\\src\\instances\\mod.rs::scan_mods"
+        "core/src/instances/content.rs::LocalContentFact",
+        "core/src/instances/content.rs::ContentClass::class"
       ],
-      "test": null,
-      "note": "Confirmed as reviewed: the shape exists, the axes do not.",
-      "gap": "The struct-not-enum decision was taken (LocalContentFact's independent fields), but only two axes exist to compose: activation (disabled) and a resource type that is not the compatibility axis; ownership, duplicate and compatibility axes are never computed, so the documented managed+disabled+duplicate composition has nothing to compose and no test asserts coexistence.",
-      "review": "verified:confirmed"
+      "test": "spec_f098_managed_disabled_duplicate_and_incompatible_coexist",
+      "note": "حاضر: المحاورُ حقولٌ مستقلّةٌ على LocalContentFact (ملكيةٌ بأدلّة · معطّل · مفاتيحُ تكرار · تواف�� مع سبب)، وclass() مجرّدُ اشتقاقٍ يعرض الأعلى أولويةً فقط — فلا يحلّ حقلٌ محلَّ آخر.",
+      "gap": null,
+      "review": "fixed-s3: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-099",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\instances\\mod.rs::scan_mods (facts only, no cross-entry index)",
-        "grep 'duplicate' in core/src/instances → only DuplicatePath (instance registry)"
+        "core/src/instances/content.rs::duplicate_keys",
+        "core/src/instances/content.rs::DuplicateKey"
       ],
-      "test": null,
-      "note": "Raw material exists, the behaviour does not.",
-      "gap": "Duplicate detection is absent: every scanned file gets a SHA-1 (sha1_of) but nothing compares two entries or (provider, project_id, version_id) identities; grep for duplicate in core/src/instances finds only registry DuplicatePath errors (instance registration, unrelated); no per-file duplicate list, no warning.",
-      "review": "verified:confirmed"
+      "test": "spec_f099_identical_bytes_are_duplicates_by_sha1",
+      "note": "حاضر: كشفُ التكرار بمفتاحين (SHA-1 وهوية المزوّد/المشروع) مع تحذيرٍ لكل مفتاحٍ مشترك، وعدٍّ على مستوى المجلد.",
+      "gap": null,
+      "review": "fixed-s3: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-100",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\instances\\record.rs::record_install (lines 131-143: writes sha1/sha512)",
-        "E:\\ModManager\\core\\src\\instances\\mod.rs::scan_mods (computes sha1, never compares)"
+        "core/src/instances/content.rs::hashes_differ",
+        "core/src/instances/content.rs::ContentWarning::ManagedHashMismatch"
       ],
-      "test": null,
-      "note": "Confirmed: a modified-but-still-locked jar is indistinguishable from an untouched one.",
-      "gap": "No hash-mismatch reconciliation: the recorded sha1/sha512 live in installed_mods (record.rs writes both) and the scan computes the local sha1, but no code path reads the recorded value back against the file; no hash_mismatch flag, no managed_hash_mismatch warning.",
-      "review": "verified:confirmed"
+      "test": "spec_f100_a_locked_file_that_changed_reports_a_hash_mismatch",
+      "note": "حاضر: مطابقةُ الهاش المسجَّل بالمحلي (SHA-1 أو المزوّد/الإصدار) مع شرطِ بصمتين غيرِ فارغتين ومختلفتين، فالنقصُ في البيانات لا يُبلَّغ عنه كتغيير، ويُسجَّل hash_mismatch مع تحذير.",
+      "gap": null,
+      "review": "fixed-s3: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-108",

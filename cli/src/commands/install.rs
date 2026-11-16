@@ -108,6 +108,10 @@ pub async fn install(
             filename: landed,
             sha1: file.sha1.clone().unwrap_or_default(),
             sha512: file.sha512.clone().unwrap_or_default(),
+            // The provider's declaration, straight from the version record the
+            // resolver used (F-097). The jar's own metadata may carry a range
+            // or nothing, and a later scan has no network.
+            game_versions: version.game_versions.clone(),
         });
     }
     // Lock last: crash before this leaves jars without claims, never the

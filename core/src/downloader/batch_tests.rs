@@ -77,6 +77,7 @@ fn item(_dir: &std::path::Path, name: &str, body: &[u8]) -> BatchItem {
         size: Some(body.len() as u64),
         sha1_hex: Some(sha1),
         sha512_hex: None,
+        game_versions: Vec::new(),
         allow_insecure_loopback: true,
     }
 }

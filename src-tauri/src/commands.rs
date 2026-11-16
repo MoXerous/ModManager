@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use crate::dto::{
-    AppInfo, AppPathsDto, CheckUpdatesRequest, CreateInstancePlanDto, CreateInstanceRequest,
-    CreateRecoveryDto, CurseForgeKeyDto, DownloadHistoryEntryDto, DownloadHistoryQueryDto,
-    ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto, InstanceSnapshotDto,
-    InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto, LockEntryDto, PlanEntryDto,
-    PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto, RemoveEntryDto,
-    RemoveExecuteRequestDto, RemovePlanDto, RemovePreviewRequestDto, RemoveResultDto, RemoveRunDto,
-    SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
+    AppInfo, AppPathsDto, CheckUpdatesRequest, ContentWarningDto, CreateInstancePlanDto,
+    CreateInstanceRequest, CreateRecoveryDto, CurseForgeKeyDto, DownloadHistoryEntryDto,
+    DownloadHistoryQueryDto, ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto,
+    InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
+    LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
+    RemoveEntryDto, RemoveExecuteRequestDto, RemovePlanDto, RemovePreviewRequestDto,
+    RemoveResultDto, RemoveRunDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto,
+    UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::downloader::{ItemProgress, JournalOp};
@@ -288,67 +289,80 @@ pub async fn build_install_plan(
     })
 }
 
-/// Read-only instance inventory: mods facts + locked entries + loaders.
+/// Read-only instance inventory: mods facts (with every classification axis),
+/// locked entries and loaders.
 #[tauri::command]
-pub async fn scan_instance(instance_root: String) -> Result<InstanceSnapshotDto, IpcError> {
+pub async fn scan_instance(
+    instance_root: String,
+    game_version: String,
+    loader: String,
+) -> Result<InstanceSnapshotDto, IpcError> {
     let root = resolve_dir(&instance_root)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        use mm_core::instances::{read_lock, scan_mods, Instance};
-        use mm_core::jar_reader::{detect_loaders, ScanCache};
-        let mods = scan_mods(&Instance {
-            root: root.clone(),
-            minecraft_root: root.clone(),
-        });
-        let locked = match read_lock(&root.join("instance.lock.json")) {
-            Ok(l) => l
-                .entries
-                .iter()
-                .map(|e| LockEntryDto {
-                    provider: e.provider.clone(),
-                    project_id: e.project_id.clone(),
-                    slug: e.slug.clone(),
-                    version_id: e.version_id.clone(),
-                    filename: e.filename.clone(),
-                    sha1: e.sha1.clone(),
-                })
-                .collect(),
-            // A newer lock schema is a typed refusal, never an empty list
-            // (§5.10) — this is the only place that surfaces it.
-            Err(e @ mm_core::instances::LockError::NewerSchema { .. }) => {
-                return Err(IpcError::from_lock(&e));
-            }
-            Err(_) => Vec::new(),
-        };
-        // Authoritative launchers are empty for now; jar scan fills it
-        // (F-092/F-093 sources land with profile support in M2).
-        let mut cache = ScanCache::new();
-        let mods_dir = root.join("mods");
-        let loaders = detect_loaders(&[], &mods_dir, &mut cache);
-        let source = if loaders.is_empty() {
-            "unknown"
-        } else {
-            "jars"
-        };
-        Ok(InstanceSnapshotDto {
-            loaders: loaders.iter().map(|l| l.as_str().to_string()).collect(),
-            loader_source: source.to_string(),
-            mods: mods
-                .iter()
-                .map(|f| LocalFactDto {
-                    filename: f.filename.clone(),
-                    rel_path: f.rel_path.clone(),
-                    size: f.size,
-                    sha1: f.sha1.clone(),
-                    resource_type: format!("{:?}", f.resource_type).to_lowercase(),
-                    disabled: f.disabled,
-                    project_id: lock_entry_for(&locked, &f.filename).map(|l| l.project_id.clone()),
-                })
-                .collect(),
-            locked,
-        })
+    let target = mm_core::instances::ContentTarget {
+        game_version,
+        loader,
+    };
+    tauri::async_runtime::spawn_blocking(move || scan_instance_at(root, target))
+        .await
+        .map_err(IpcError::internal)?
+}
+
+/// The body of [`scan_instance`], split out so the mapping it owns — the axes
+/// onto the DTO, the lock onto both halves — is testable without a webview.
+pub(crate) fn scan_instance_at(
+    root: PathBuf,
+    target: mm_core::instances::ContentTarget,
+) -> Result<InstanceSnapshotDto, IpcError> {
+    use mm_core::instances::{classify_content, read_lock, scan_mods, Instance, LockFile};
+    use mm_core::jar_reader::{detect_loaders, ScanCache};
+    let facts = scan_mods(&Instance {
+        root: root.clone(),
+        minecraft_root: root.clone(),
+    });
+    let lock = match read_lock(&root.join(mm_core::instances::LOCK_FILE_NAME)) {
+        Ok(lock) => lock,
+        // A newer lock schema is a typed refusal, never an empty list
+        // (§5.10) — this is the only place that surfaces it.
+        Err(e @ mm_core::instances::LockError::NewerSchema { .. }) => {
+            return Err(IpcError::from_lock(&e));
+        }
+        // Any other read failure is "nothing recorded", which is the safe
+        // direction: the files simply stay external/unknown.
+        Err(_) => LockFile::default(),
+    };
+    let content = classify_content(facts, &lock, &target);
+    // Authoritative launchers are empty for now; jar scan fills it
+    // (F-092/F-093 sources land with profile support in M2).
+    let mut cache = ScanCache::new();
+    let mods_dir = root.join("mods");
+    let loaders = detect_loaders(&[], &mods_dir, &mut cache);
+    let source = if loaders.is_empty() {
+        "unknown"
+    } else {
+        "jars"
+    };
+    Ok(InstanceSnapshotDto {
+        loaders: loaders.iter().map(|l| l.as_str().to_string()).collect(),
+        loader_source: source.to_string(),
+        mods: content.facts.iter().map(LocalFactDto::from_fact).collect(),
+        locked: lock
+            .entries
+            .iter()
+            .map(|e| LockEntryDto {
+                provider: e.provider.clone(),
+                project_id: e.project_id.clone(),
+                slug: e.slug.clone(),
+                version_id: e.version_id.clone(),
+                filename: e.filename.clone(),
+                sha1: e.sha1.clone(),
+            })
+            .collect(),
+        content_warnings: content
+            .warnings
+            .iter()
+            .map(ContentWarningDto::from_core)
+            .collect(),
     })
-    .await
-    .map_err(IpcError::internal)?
 }
 
 /// Read-only update preview (F-120): no journal, no lock rewrite, no row.
@@ -582,26 +596,17 @@ fn relative_label(mods_dir: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// The lock records the installed name before a disable rename, so an exact
-/// match would mark every disabled file as external/unknown and demand the
-/// typed word for content this app installed itself.
-fn lock_matches(locked: &str, disk: &str) -> bool {
-    let wanted = locked.to_lowercase();
-    let actual = disk.to_lowercase();
-    actual == wanted
-        || actual
-            .strip_suffix(".disabled")
-            .is_some_and(|base| base == wanted.as_str())
-}
-
-fn lock_entry_for<'a>(locked: &'a [LockEntryDto], disk: &str) -> Option<&'a LockEntryDto> {
-    locked.iter().find(|l| lock_matches(&l.filename, disk))
-}
-
 /// Candidates for a remove plan: a file with no lock record is external or
 /// unknown, which is the only thing that makes the typed word mandatory.
 /// An unreadable lock is treated as empty — the safe direction.
+///
+/// The name join is core's [`mm_core::instances::lock_entry_for_name`], the
+/// same rule the scan uses to attach identity: the lock records the name a
+/// file had before a disable rename, so an exact match alone would mark every
+/// disabled file as external and demand the typed word for content this app
+/// installed itself.
 fn remove_candidates(root: &Path, mods_dir: &Path, raw: &[String]) -> Vec<RemoveCandidate> {
+    use mm_core::instances::lock_entry_for_name;
     let locked = mm_core::instances::read_lock(&root.join("instance.lock.json"))
         .map(|l| l.entries)
         .unwrap_or_default();
@@ -613,7 +618,7 @@ fn remove_candidates(root: &Path, mods_dir: &Path, raw: &[String]) -> Vec<Remove
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
-                !locked.iter().any(|l| lock_matches(&l.filename, disk))
+                lock_entry_for_name(&locked, disk).is_none()
             };
             RemoveCandidate { path, external }
         })
@@ -993,6 +998,11 @@ pub async fn execute_install_with(
             size: Some(file.size),
             sha1_hex: file.sha1.clone(),
             sha512_hex: file.sha512.clone(),
+            // The provider's own declaration, straight from the version record
+            // that resolved this entry. Not the jar's: reading the archive here
+            // would be a second parse of bytes the resolver never opened, and
+            // the jar may only carry a range (F-097).
+            game_versions: version.game_versions.clone(),
             allow_insecure_loopback,
         });
     }
@@ -1130,6 +1140,7 @@ pub async fn execute_install_with(
             file_name: item.filename.clone(),
             sha1: item.sha1_hex.clone().unwrap_or_default(),
             sha512: item.sha512_hex.clone().unwrap_or_default(),
+            game_versions: item.game_versions.clone(),
         })
         .collect();
     state
