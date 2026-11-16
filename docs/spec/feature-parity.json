@@ -333,56 +333,54 @@
       "id": "F-113",
       "status": "present",
       "evidence": [
-        "core/src/instances/backup/mod.rs::build_backup_plan / ::execute_backup (copy-only, dated folder inside the instance, no write into the live tree)",
-        "core/src/instances/backup/manifest.rs::BackupManifest / ::write_manifest (`mm.instance_backup.v1`, per-file SHA-256, atomic, no temp left)",
-        "src-tauri/src/commands/backup.rs::list_instance_backups / ::execute_instance_backup",
-        "src/app/pages/InstanceBackup.tsx::InstanceBackup (one-button create, unticked `saves`, skipped rows)"
+        "core/src/instances/backup/mod.rs::create_backup",
+        "core/src/instances/backup/manifest.rs::BackupManifest",
+        "src-tauri/src/commands/backup.rs::backup_instance",
+        "src/app/pages/InstanceBackup.tsx"
       ],
-      "test": "spec_f113_backup_copies_mods_and_config_and_writes_a_manifest",
-      "note": "حاضر: نسخةٌ مؤرَّخة داخل مجلد النسخة تجمع mods/ وconfig/ وملفاتها الوصفية، بنسخٍ فقط (لا نقل ولا حذف)، مع بيانٍ بمستوى الملف يحمل SHA-256 لكل ملف وبصمةَ المدخلات ويُكتب ذرّيًّا. مجلدٌ غائب أو رابطٌ يُسجَّل صفَّ skipped بسبب، والنسخة تستثني نفسها ومخلّفات الحذف.",
+      "test": "spec_f113_a_cancelled_backup_reports_cancelled_and_copies_nothing",
+      "note": "حاضر: نسخةٌ كاملةٌ ببيانٍ ذرّيّ (mm.instance_backup.v1) يكتب عبر write_atomic_unique، والإلغاءُ يُلغى العمليةَ ولا ينسخ شيئًا. انحرافٌ موثَّق: البيانُ لا يسجّل mtime (لأن النسخةَ لا تحفظه)، ومجلّدُ النسخ القديم .modrinth_bulk_downloader_backup مستبعَد.",
       "gap": null,
-      "review": "fixed-s6: implemented test-first from ADR 0007; design adversarially reviewed and corrected"
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-114",
       "status": "present",
       "evidence": [
-        "core/src/instances/backup/restore.rs::build_restore_plan (containment before the manifest is read, `EntrySource` targets only, one verdict per group incl. blocked rows)",
-        "core/src/instances/backup/restore.rs::execute_restore (typed word, manifest digest token, move-aside, hash-while-copying, per-group rollback)",
-        "core/src/instances/backup/restore.rs::pending_restores (a safety folder with no manifest, read-only)",
-        "src-tauri/src/commands/backup.rs::plan_instance_restore / ::execute_instance_restore / ::pending_instance_restores",
-        "src/app/pages/RestoreDialog.tsx::RestoreDialog · src/app/pages/InstanceBackup.tsx (pending-restore banner)"
+        "core/src/instances/backup/restore.rs::build_restore_plan",
+        "core/src/instances/backup/restore.rs::execute_restore",
+        "core/src/instances/backup/restore.rs::rollback",
+        "src-tauri/src/commands/backup.rs::restore_instance"
       ],
-      "test": "spec_f114_restore_moves_the_live_target_aside_then_copies",
-      "note": "حاضر: ثلاث بوابات قبل أي كتابة (الاحتواء، هوية الصفّ، بصمة البيان التي رآها المستخدم)، ثم لكل مجموعة يُزاح الهدف الحالي إلى مجلد أمان ويُنسخ البديل مع التحقق من البصمة أثناء الكتابة، وكلمة RESTORE مكتوبة، وتراجعٌ للمجموعة الفاشلة. الهدف يُشتقّ من EntrySource وحده، ومسار البيان لا يوجّه كتابة. ومجلد أمانٍ بلا بيان يُعرَض شعارًا للقراءة فقط.",
+      "test": "spec_f114_restore_refuses_a_forged_safety_path_outside_the_root",
+      "note": "حاضر: استرجاعٌ بخطةٍ قبل التنفيذ؛ الأهدافُ مشتقّةٌ من EntrySource وحده (والمسارُ المسجَّل حكمُ حجبٍ يُعاد فحصه عند التنفيذ)، والهويةُ instance_id تُطابَق (RestoreMismatch) والبصمةُ تأكيدٌ (BackupChanged)، والاسترجاعُ يزيحُ المجموعةَ ويتراجعُ عند الفشل — وفشلُ التراجعِ يُعلَنُ rollback-failed لا «تمَّ التراجع».",
       "gap": null,
-      "review": "fixed-s6: implemented test-first from ADR 0007; design adversarially reviewed and corrected"
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-115",
       "status": "present",
       "evidence": [
-        "core/src/instances/backup/mod.rs::sources (saves only when the flag is set) · ::execute_backup (a `saves-not-included` row when worlds exist and were not copied)",
-        "core/src/instances/backup/restore.rs::plan_entry (`saves-blocked-by-default` unless asked)",
-        "src/app/pages/InstanceBackup.tsx (unticked `saves` checkbox) · src/app/pages/RestoreDialog.tsx (separate restore-side opt-in)"
+        "core/src/instances/backup/restore.rs::recheck_entry",
+        "core/src/instances/backup/mod.rs::create_backup",
+        "src-tauri/src/commands/backup.rs::restore_instance"
       ],
-      "test": "spec_f115_restore_blocks_saves_entries_by_default",
-      "note": "حاضر: saves مستبعَد افتراضيًّا في النسخ (ويُسجَّل صفٌّ صريح بسبب saves-not-included) وفي الاستعادة (حجب saves-blocked-by-default)، ولا يُشمَل إلا بخانةٍ تُفعَّل صراحةً في الموضعين، فالعالم لا يُنسخ ولا يُستعاد بالنيابة عن المستخدم.",
+      "test": "spec_f115_restore_copies_saves_only_when_asked",
+      "note": "حاضر: مجلدُ saves اختياريٌّ صريحٌّ (include_saves=false افتراضيًّا)، وادّعاءُ البيانِ وحده لا يُبيح الاسترجاع (saves-blocked-by-default).",
       "gap": null,
-      "review": "fixed-s6: implemented test-first from ADR 0007; design adversarially reviewed and corrected"
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-118",
       "status": "present",
       "evidence": [
-        "core/src/instances/backup/worlds.rs::preview_worlds (direct children, dot names excluded, links listed and never followed, case-insensitive order)",
-        "src-tauri/src/commands/backup.rs::preview_instance_worlds",
-        "src/app/pages/InstanceBackup.tsx (read-only worlds table, no buttons)"
+        "core/src/instances/backup/worlds.rs::preview_worlds",
+        "src-tauri/src/commands/backup.rs::preview_instance_worlds"
       ],
-      "test": "spec_f118_worlds_preview_counts_datapacks_and_flags_missing_level_dat",
-      "note": "حاضر: جردٌ للقراءة فقط لأبناء saves/ المباشرين، يستثني أسماء النقطة، ولا يفتح رابطًا ولا يعدّه، ويرتّب بلا اعتبارٍ لحالة الأحرف، ويعيد رموز رسائل تترجمها الواجهة بدل جملٍ إنجليزية في النواة.",
+      "test": "spec_f118_worlds_preview_lists_direct_children_without_touching_the_tree",
+      "note": "حاضر: معاينةٌ للقراءةِ فقط لأبناء saves المباشرين (الأبناءُ بنقطةِ حذفٍ مستبعَدون من عدّ datapacks، والفرزُ غيرُ حسّاسٍ لحالة الأحرف، وغيرُ المجلّداتِ يُتجاهل، والروابطُ تُدرَج ولا تُفحَص) مع اختبارٍ يثبت أن الشجرةَ لم تتغيّر.",
       "gap": null,
-      "review": "fixed-s6: implemented test-first from ADR 0007; design adversarially reviewed and corrected"
+      "review": "fixed-s6: designed, adversarially challenged twice (glm: design + implementation), findings fixed"
     },
     {
       "id": "F-121",
