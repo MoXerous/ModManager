@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 25 |
+| حاضر — مُراجَع | 26 |
 | حاضر — بتتبّعِ اختبار | 97 |
 | جزئي — مُراجَع | 11 |
-| مفقود — مُراجَع | 16 |
+| مفقود — مُراجَع | 15 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**27** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**26** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -46,7 +46,6 @@
 | **F-131** | **التمييز «موجود» عن «مؤهَّل»** | updates | جزئي — مُراجَع | The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere. |
 | **F-132** | كاش لكل تشغيل في المخطّط | updates | جزئي — مُراجَع | The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour. |
 | **F-145** | مركز العمليات (قراءة فقط) | operations | جزئي — مُراجَع | No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record. |
-| **F-150** | **فشل مغلق بلا مخرج خام** | logging | مفقود — مُراجَع | No report-writing path exists: sanitize/sanitize_with are called from nowhere outside their own module (workspace grep), sanitize returns String and is infallible by construction, and logging::init only writes the raw activity log. The old contract (a sanitizer failure aborts the report and never writes a raw one) has neither a code path nor a test — the fail-closed property cannot be exercised at all. |
 | **F-157** | `export_manifest.json` | - | مفقود — مُراجَع | No in-archive policy record: write_export_zip emits only modrinth.index.json plus overrides (no export_manifest.json); ExcludedEntry/SkipReason decisions are shown in the preview UI and then discarded, so the artefact cannot be machine-audited after it leaves the app. |
 | **F-158** | **استيراد ميتا فقط بلا استخراج** | - | مفقود — مُراجَع | No archive import of the app's own export: the only import commands are the legacy old-home scan/plan/execute (F-181, reads app.sqlite3 + profile.json without extraction) and the .mrpack full install (F-068); there is no way to pick a profile-export zip, preview its manifest metadata-only, schema-check it, or create an instance from it. |
 | **F-164** | صفحة Discover | ui | جزئي — مُراجَع | No inspector: BrowsePage has search + facets + install plan dialog only; no project-details pane, no versions list or 'Show versions' action, no Selected/Favorites tabs, no context menu; clicking a card goes straight to the plan dialog. |
@@ -253,8 +252,8 @@
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
 |---|---|---|---|---|---|
 | **F-148** | تنقية الأسرار من السجلات | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/logging/sanitize.rs · كود: core/src/logging/sanitize.rs |
-| **F-149** | **السجل المحلي كامل وغير منقّى** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/logging/mod.rs · كود: core/src/logging/mod.rs |
-| **F-150** | **فشل مغلق بلا مخرج خام** | Keep | M1 | مفقود — مُراجَع | E:\ModManager\core\src\logging\sanitize.rs::sanitize (returns String, no Result) · E:\ModManager\core\src\logging\mod.rs::init (raw rolling log only) · workspace grep for 'sanitize\(' — only the definition and re-export |
+| **F-149** | **السجل المحلي كامل وغير منقّى** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/logging/mod.rs · كود: core/src/logging/mod.rs، core/src/logging/report.rs (+2) |
+| **F-150** | **فشل مغلق بلا مخرج خام** | Keep | M1 | حاضر — مُراجَع | core/src/logging/sanitize.rs::Policy · core/src/logging/sanitize.rs::verify_redacted · core/src/logging/report.rs::write_report · core/src/logging/report.rs::discard · src-tauri/src/state.rs::dialog_text |
 ### settings
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
