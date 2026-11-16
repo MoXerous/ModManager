@@ -32,6 +32,9 @@ fn create_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>
 /// purpose — `blocking_show` must not run on the main thread — and the exit
 /// happens when the dialog is dismissed.
 fn report_startup_failure(app: &tauri::App, failure: StartupFailure) {
+    // F-138: the sentence and the cause have different audiences. The log
+    // keeps the cause (sanitized); the dialog gets the sentence only.
+    mm_core::logging::error(failure.diagnostic());
     let handle = app.handle().clone();
     app.dialog()
         .message(failure.dialog_text())
@@ -39,9 +42,26 @@ fn report_startup_failure(app: &tauri::App, failure: StartupFailure) {
         .show(move |_| handle.exit(STARTUP_FAILURE_EXIT_CODE));
 }
 
+/// F-138: starts the activity log for the whole process, before the gate.
+///
+/// It has to exist *before* `.setup`, because the gate inside that hook is
+/// the failure it is here to record: a refused startup never gets a window to
+/// report in, so a cause that is not written now leaves with the process. The
+/// guard must live as long as the app: dropping it flushes the log.
+///
+/// Failing to start the log is not a startup failure of its own — the dialog
+/// still has its sentence — so the answer is `None`, not an error.
+fn start_logging() -> Option<mm_core::logging::LogGuard> {
+    let paths = mm_core::paths::Paths::resolve().ok()?;
+    mm_core::logging::init(paths.logs_dir()).ok()
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> i32 {
+    // F-139: the log first, because the very next thing that happens is the
+    // gate this log exists for.
+    let _log = start_logging();
     let built = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -56,7 +76,12 @@ pub fn run() -> i32 {
             match AppState::open() {
                 Ok(state) => {
                     app.manage(state);
-                    create_main_window(app)?;
+                    // F-139: a window the window layer cannot build is the
+                    // same story as a refused database: a `?` here would end
+                    // in that panic, so it takes the dialog + exit-2 path.
+                    if let Err(error) = create_main_window(app) {
+                        report_startup_failure(app, StartupFailure::window_failed(error.as_ref()));
+                    }
                 }
                 Err(failure) => report_startup_failure(app, failure),
             }
@@ -111,9 +136,43 @@ pub fn run() -> i32 {
         Ok(app) => app.run_return(|_, _| {}),
         // Nothing to show a dialog on: the window layer itself failed. This
         // is not the F-139 path (the database gate never ran).
-        Err(error) => {
-            eprintln!("ModManager cannot start: {error}");
-            1
-        }
+        Err(error) => record_build_failure(&error.to_string()),
+    }
+}
+
+/// F-139: the app never got built. There is no `App`, so no dialog — and a
+/// release Windows build has no console (`windows_subsystem = "windows"`), so
+/// the `eprintln!` this replaces left a silent exit behind. The log is the
+/// channel that is left; recording must not depend on it having been
+/// initialised, because an unresolvable data directory is one more way to
+/// reach this arm.
+///
+/// The code stays a generic failure: 2 means "the database gate refused",
+/// and this path never ran the gate.
+fn record_build_failure(error: &str) -> i32 {
+    mm_core::logging::error(format_args!(
+        "ModManager cannot start: {}",
+        mm_core::logging::sanitize(error)
+    ));
+    1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F-139: a failed build is recorded and answers a plain failure.
+    ///
+    /// The recording has to be safe with no subscriber installed (a failed
+    /// build can be caused by the directory the log would live in), and the
+    /// code must not borrow the refused-startup one: a script that reads 2
+    /// wants to say "the database was refused", which never happened here.
+    #[test]
+    fn spec_f139_a_failed_build_is_recorded_and_leaves_a_plain_failure() {
+        let code = record_build_failure(
+            r"webview2 not found under C:\Users\Alice\AppData\Local\ModManager",
+        );
+        assert_eq!(code, 1, "a failed build is not the refused startup");
+        assert_ne!(code, STARTUP_FAILURE_EXIT_CODE);
     }
 }

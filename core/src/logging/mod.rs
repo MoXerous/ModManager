@@ -49,6 +49,16 @@ pub fn init(dir: &Path) -> Result<LogGuard, LoggingError> {
     Ok(LogGuard { _guard: guard })
 }
 
+/// Records one line at error level, for a failure with no better channel.
+///
+/// The clients of this crate (the Tauri app, the CLI) do not depend on
+/// `tracing` themselves: the log's shape stays defined in this one file, and
+/// a message routed through here cannot drift from it. A no-op when [`init`]
+/// never ran, which is exactly the case a caller reaching for it may be in.
+pub fn error(message: impl std::fmt::Display) {
+    tracing::error!("{message}");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
