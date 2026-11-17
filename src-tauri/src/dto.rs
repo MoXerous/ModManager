@@ -112,6 +112,11 @@ pub enum ErrorCode {
     /// F-114: the backup's manifest changed after the plan was read (its SHA-256
     /// is the token the confirm carries). Nothing was written.
     BackupChanged,
+    /// F-158: the archive the user chose is not this application's export —
+    /// no `export_manifest.json` at the root, or one this build cannot read.
+    /// Not a failing disk and not a corrupt pack: a foreign file, which the
+    /// `.mrpack` install path exists for.
+    NotOurExport,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -1329,6 +1334,83 @@ pub struct ModpackExportSummaryDto {
     pub override_count: usize,
     #[ts(type = "number")]
     pub total_size: u64,
+}
+
+// --- Export archive import (F-158) ----------------------------------------
+
+/// What the webview asks for when previewing an export archive.
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportArchivePreviewRequest {
+    /// Absolute path of the export archive the user chose. Validated in Rust.
+    pub pack_path: String,
+}
+
+/// One path the manifest records as excluded, with core's stable reason key.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportArchiveExcludedDto {
+    pub path: String,
+    /// `transient`, `environment`, `secret`, `symlink`, `duplicate`,
+    /// `unsafe_name`; the UI translates `export.excluded.<reason>`.
+    pub reason: String,
+}
+
+/// The metadata-only preview of an export archive (F-158).
+///
+/// Nothing was extracted, written or planned to build this answer; the
+/// manifest's audit record is the content. `pack_sha512` is the token the
+/// import confirm sends back, the same contract `ModpackPlanDto` carries.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportArchivePreviewDto {
+    /// SHA-512 of the archive file, lowercase hex.
+    pub pack_sha512: String,
+    /// The manifest schema version the archive carries.
+    #[ts(type = "number")]
+    pub manifest_schema_version: u64,
+    pub name: String,
+    pub version_id: String,
+    pub summary: Option<String>,
+    pub game_version: String,
+    pub loader: String,
+    /// The digest the exporter recorded for the source instance's lock.
+    pub lock_sha512: String,
+    #[ts(type = "number")]
+    pub file_count: usize,
+    #[ts(type = "number")]
+    pub override_count: usize,
+    #[ts(type = "number")]
+    pub skipped_count: usize,
+    pub excluded: Vec<ExportArchiveExcludedDto>,
+    /// The paths the manifest records as included index files: what the
+    /// import will download. The write plan the user sees before confirming.
+    pub included_files: Vec<String>,
+    /// The paths the manifest records as included overrides: what the import
+    /// will copy out of the archive.
+    pub included_overrides: Vec<String>,
+}
+
+/// What the import confirm asks for: the archive, the new instance's folder
+/// and name, and the digest token the preview returned.
+///
+/// No plan body travels back: the create plan is rebuilt in Rust from the
+/// folder and name, and the pack apply re-reads and re-plans the archive —
+/// the same rule every execute command follows.
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportArchiveImportRequest {
+    pub pack_path: String,
+    /// Absolute path of the folder the new instance is created in. It must
+    /// not exist or be empty; `plan_create` refuses anything else.
+    pub instance_root: String,
+    pub instance_name: String,
+    /// `packSha512` from the preview; a mismatch is `packChanged`.
+    pub pack_sha512: String,
 }
 
 /// One progress event on the modpack channel.

@@ -20,6 +20,7 @@ import {
 } from '../../lib/ipc';
 import { formatBytes, formatNumber } from '../../lib/format';
 import { PackRecoveryBanner } from './PackRecoveryBanner';
+import { ModpackImport } from './ModpackImport';
 
 /**
  * One file the apply has reported on, reduced from the channel.
@@ -454,6 +455,10 @@ export function ModpackPage() {
       {!plan && rows.length === 0 && packPhase === null && result === null && (
         <EmptyState title={t('pack.emptyTitle')} body={t('pack.emptyBody')} />
       )}
+
+      {/* The mirror flow: an export archive of ours comes back as a new
+          instance, metadata previewed first, created second (F-157, F-158). */}
+      <ModpackImport />
     </div>
   );
 }

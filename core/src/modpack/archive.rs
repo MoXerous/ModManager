@@ -16,9 +16,12 @@
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::io::{Cursor, Read, Seek};
 
+use serde::Deserialize;
+use sha2::{Digest, Sha512};
 use unicode_normalization::UnicodeNormalization;
 use zip::ZipArchive;
 
+use super::export::{loader_key, MANIFEST_ENTRY, MANIFEST_SCHEMA};
 use super::mrpack::{
     parse_index, reserved_destination, IndexError, Pack, PackFile, Reserved, Side,
     CLIENT_OVERRIDE_LAYERS, SERVER_OVERRIDE_LAYER,
@@ -330,4 +333,284 @@ fn check_reserved(safe_path: &str, original: &str) -> Result<(), PackError> {
         }),
         None => Ok(()),
     }
+}
+
+// --- importing this app's own export (F-158) --------------------------------
+//
+// The export archive is a `.mrpack` plus one extra member, so the import is
+// the reader this module already is, with a manifest gate in front. Nothing
+// here extracts, writes, or plans: the preview is metadata only — the same
+// claim `plan_export` makes on the way out — and the install reuses
+// `plan_install` through the caller, never a second extractor.
+
+/// Why an export archive cannot be imported.
+#[derive(Debug, thiserror::Error)]
+pub enum ExportImportError {
+    /// The archive failed the shared archive-safety gate, or its index is
+    /// malformed: the same refusals a `.mrpack` install gets.
+    #[error(transparent)]
+    Pack(#[from] PackError),
+    /// The archive has no `export_manifest.json` at its root, so it is not
+    /// this application's export: a foreign pack is installed through the
+    /// `.mrpack` path, never mistaken for one of ours.
+    #[error("the archive has no {0} at its root; it is not this application's export")]
+    NotOurExport(&'static str),
+    /// The manifest is not valid JSON, or not the shape the schema names.
+    #[error("the export manifest is malformed: {0}")]
+    ManifestJson(String),
+    /// The manifest says a schema version this build does not read.
+    #[error("unsupported export manifest schema {found}; this build reads {supported}")]
+    SchemaVersion { found: u64, supported: u64 },
+    /// The manifest's recorded index digest is not the digest of the index
+    /// bytes in THIS archive: the manifest was written for another pack, or
+    /// was edited after the archive left the app.
+    #[error("the manifest records index {manifest}, but this archive's index is {archive}")]
+    IndexDigest { manifest: String, archive: String },
+    /// The manifest's `included` counts do not match the archive: the pack
+    /// carries fewer (or more) members than the manifest admits to.
+    #[error("the manifest records {manifest} {field}, but the archive carries {archive}")]
+    CountMismatch {
+        field: &'static str,
+        manifest: usize,
+        archive: usize,
+    },
+    /// The manifest names a loader the format's loader-key rule does not
+    /// know; accepting it would write it into the instance registry row.
+    #[error("the manifest names loader {loader:?}, which the format does not carry")]
+    InvalidLoader { loader: String },
+}
+
+/// The manifest's on-disk shape, as [`manifest_json`](super::export::manifest_json)
+/// writes it. `included` is nested on disk, so a manual two-level struct sees
+/// it without inventing a second manifest shape.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawManifestWithGroup {
+    schema_version: u64,
+    name: String,
+    version_id: String,
+    #[serde(default)]
+    summary: Option<String>,
+    game_version: String,
+    loader: String,
+    lock_sha512: String,
+    /// The digest of the `modrinth.index.json` bytes this archive carries.
+    /// Defaulted for tolerance at parse time so the schema-version refusal
+    /// keeps firing first; an absent digest then fails the digest gate.
+    #[serde(default)]
+    index_sha512: String,
+    #[serde(default)]
+    included: RawIncludedGroup,
+    /// Only the count crosses into the preview; the entries themselves are
+    /// the exporter's audit record.
+    #[serde(default)]
+    skipped: Vec<serde::de::IgnoredAny>,
+    #[serde(default)]
+    excluded: Vec<RawExcludedEntry>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawIncludedGroup {
+    /// The paths cross into the preview (the write plan the user confirms);
+    /// the counts are what the archive cross-check below audits.
+    #[serde(default)]
+    files: Vec<RawIncludedEntry>,
+    #[serde(default)]
+    overrides: Vec<RawIncludedEntry>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawIncludedEntry {
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawExcludedEntry {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// What a preview of an export archive says, before anything is installed.
+///
+/// Everything here comes from the manifest and the index, both read in place —
+/// no member is extracted to a filesystem and no instance is touched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportArchivePreview {
+    /// The manifest schema version the archive carries; the caller has already
+    /// seen it pass the gate.
+    pub manifest_schema_version: u64,
+    pub name: String,
+    pub version_id: String,
+    pub summary: Option<String>,
+    pub game_version: String,
+    pub loader: String,
+    /// The lock digest the exporter recorded: which instance state the pack
+    /// was built from.
+    pub lock_sha512: String,
+    /// Index files the manifest records as included.
+    pub file_count: usize,
+    /// Override members the manifest records as included.
+    pub override_count: usize,
+    /// Locked projects the exporter could not carry, with the export reasons.
+    pub skipped_count: usize,
+    /// Local paths kept out of the pack, path and stable reason key.
+    pub excluded: Vec<(String, String)>,
+    /// The paths the manifest records as included index files — what the
+    /// import will download. The plan the user confirms, from the manifest
+    /// itself, before anything is written (AGENTS.md §5.4).
+    pub included_files: Vec<String>,
+    /// The paths the manifest records as included overrides — what the
+    /// import will copy out of the archive.
+    pub included_overrides: Vec<String>,
+}
+
+/// Previews an export archive metadata-only: it reads the index out of the
+/// archive under the shared limits, then reads `export_manifest.json` bounded,
+/// and refuses anything that is not this application's export (F-158).
+///
+/// The archive-safety half is entirely [`read_pack`]'s — symlinks, absolute
+/// and traversing names, duplicates, encrypted members and bomb ratios are
+/// refused there, exactly as a `.mrpack` install refuses them — so this
+/// function adds only the manifest gate.
+pub fn preview_export_archive<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    limits: &ArchiveLimits,
+) -> Result<ExportArchivePreview, ExportImportError> {
+    preview_export_archive_bounded(archive, limits, MAX_INDEX_BYTES)
+}
+
+/// [`preview_export_archive`] with the manifest ceiling as a parameter, so the
+/// oversized-manifest refusal is testable without building an eight-megabyte
+/// fixture — the same seam [`read_pack_bounded`] has.
+pub fn preview_export_archive_bounded<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    limits: &ArchiveLimits,
+    max_manifest_bytes: u64,
+) -> Result<ExportArchivePreview, ExportImportError> {
+    let (pack, inventory) = read_pack(archive, limits)?;
+
+    let at = inventory
+        .iter()
+        .find(|m| !m.is_dir && m.name.eq_ignore_ascii_case(MANIFEST_ENTRY))
+        .ok_or(ExportImportError::NotOurExport(MANIFEST_ENTRY))?;
+    // Same ceiling the index gets: the manifest is attacker-controlled text
+    // too, and `read_limited` re-checks the real length after the read.
+    if at.size > max_manifest_bytes {
+        return Err(ExportImportError::Pack(PackError::IndexTooLarge {
+            size: at.size,
+            limit: max_manifest_bytes,
+        }));
+    }
+    let bytes =
+        read_limited(archive, &inventory, at.index, max_manifest_bytes).map_err(PackError::from)?;
+
+    let raw: RawManifestWithGroup = serde_json::from_slice(&bytes)
+        .map_err(|e| ExportImportError::ManifestJson(e.to_string()))?;
+    if raw.schema_version != MANIFEST_SCHEMA {
+        return Err(ExportImportError::SchemaVersion {
+            found: raw.schema_version,
+            supported: MANIFEST_SCHEMA,
+        });
+    }
+
+    // The manifest and the index must agree on the pack they describe; a
+    // manifest naming another pack is malformed for this archive.
+    if raw.name != pack.name || raw.version_id != pack.version_id {
+        return Err(ExportImportError::ManifestJson(format!(
+            "the manifest names {} {}, the index names {} {}",
+            raw.name, raw.version_id, pack.name, pack.version_id
+        )));
+    }
+
+    // Identity beyond the name: the manifest must name THIS archive's index
+    // bytes. A hand-written manifest that only copies `name` and `versionId`
+    // fails here, because it cannot know the digest of the index it claims.
+    let index_at = inventory
+        .iter()
+        .find(|m| !m.is_dir && m.name.eq_ignore_ascii_case(super::mrpack::INDEX_ENTRY))
+        .ok_or(PackError::MissingIndex(super::mrpack::INDEX_ENTRY))?;
+    let index_bytes = read_limited(archive, &inventory, index_at.index, MAX_INDEX_BYTES)
+        .map_err(PackError::from)?;
+    let archive_index_sha512 = sha512_hex(&index_bytes);
+    if !raw.index_sha512.eq_ignore_ascii_case(&archive_index_sha512) {
+        return Err(ExportImportError::IndexDigest {
+            manifest: raw.index_sha512.clone(),
+            archive: archive_index_sha512,
+        });
+    }
+
+    // What the manifest admits to must be what the archive carries: the
+    // manifest's `included` is the record the preview shows, and a count that
+    // disagrees means the record and the artefact are not the same export.
+    if raw.included.files.len() != pack.files.len() {
+        return Err(ExportImportError::CountMismatch {
+            field: "indexed files",
+            manifest: raw.included.files.len(),
+            archive: pack.files.len(),
+        });
+    }
+    let override_members = inventory
+        .iter()
+        .filter(|m| {
+            !m.is_dir
+                && CLIENT_OVERRIDE_LAYERS
+                    .iter()
+                    .any(|layer| m.name.starts_with(&format!("{layer}/")))
+        })
+        .count();
+    if raw.included.overrides.len() != override_members {
+        return Err(ExportImportError::CountMismatch {
+            field: "override files",
+            manifest: raw.included.overrides.len(),
+            archive: override_members,
+        });
+    }
+
+    // The loader reaches the instance registry row at import time, so it must
+    // be a loader the format actually carries — the same rule
+    // [`loader_key`](super::export::loader_key) applies when the index is
+    // written. An unknown name in the manifest is a manifest this build does
+    // not accept, before anything is planned or created.
+    if loader_key(&raw.loader).is_none() {
+        return Err(ExportImportError::InvalidLoader {
+            loader: raw.loader.clone(),
+        });
+    }
+
+    Ok(ExportArchivePreview {
+        manifest_schema_version: raw.schema_version,
+        name: raw.name,
+        version_id: raw.version_id,
+        summary: raw.summary,
+        game_version: raw.game_version,
+        loader: raw.loader,
+        lock_sha512: raw.lock_sha512,
+        file_count: raw.included.files.len(),
+        override_count: raw.included.overrides.len(),
+        skipped_count: raw.skipped.len(),
+        excluded: raw
+            .excluded
+            .into_iter()
+            .map(|e| (e.path, e.reason))
+            .collect(),
+        included_files: raw.included.files.into_iter().map(|e| e.path).collect(),
+        included_overrides: raw.included.overrides.into_iter().map(|e| e.path).collect(),
+    })
+}
+
+/// The lowercase-hex sha512 of bytes already in memory.
+fn sha512_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha512::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

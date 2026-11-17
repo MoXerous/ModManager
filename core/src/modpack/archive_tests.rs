@@ -7,7 +7,10 @@ use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-use super::archive::{plan_install, read_pack_bounded, InstallOp, PackError, MAX_INDEX_BYTES};
+use super::archive::{
+    plan_install, preview_export_archive_bounded, read_pack_bounded, InstallOp, PackError,
+    MAX_INDEX_BYTES,
+};
 use super::mrpack::IndexError;
 use crate::safety::inspect::ArchiveLimits;
 
@@ -321,4 +324,319 @@ fn spec_f069_a_custom_layer_name_in_the_index_does_not_create_a_layer() {
         safe_path: "options.txt".to_string(),
         source_layer: "client-overrides".to_string(),
     }));
+}
+
+// --- F-158: importing this app's own export archive -------------------------
+
+use super::archive::{preview_export_archive, ExportArchivePreview, ExportImportError};
+use crate::modpack::export::{
+    manifest_json, Exclusion, ExportMod, ExportPlan, ExportSkip, OverrideFile, SkipReason,
+};
+
+fn sha512_bytes(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha512::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A manifest shaped exactly like the exporter writes it, and naming the same
+/// pack the shared `default_index()` names, with one file, one override, one
+/// skip and one exclusion. The index digest is the digest of the index bytes
+/// the fixture's archive actually carries, so the manifest passes the gate a
+/// real export passes.
+fn export_manifest_json() -> String {
+    let plan = ExportPlan {
+        name: "Pack".to_string(),
+        version_id: "v1".to_string(),
+        summary: Some("Summary".to_string()),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![ExportMod {
+            project_id: "p1".to_string(),
+            version_id: "v1".to_string(),
+            title: "Sodium".to_string(),
+            project_type: "mod".to_string(),
+            folder: "mods",
+            file_name: "sodium.jar".to_string(),
+            url: "https://cdn.modrinth.com/s.jar".to_string(),
+            size: 10,
+            sha1: "a".repeat(40),
+            sha512: sha128('a'),
+        }],
+        overrides: vec![OverrideFile {
+            archive_path: "overrides/config/x.toml".to_string(),
+            source: std::path::PathBuf::new(),
+            size: 5,
+        }],
+        skipped: vec![ExportSkip {
+            project_id: "c1".to_string(),
+            version_id: "cv1".to_string(),
+            reason: SkipReason::UnsupportedProvider,
+        }],
+        excluded: vec![crate::modpack::export::ExcludedEntry {
+            path: "config/debug.log".to_string(),
+            reason: Exclusion::Secret,
+        }],
+        lock_sha512: sha128('a'),
+    };
+    serde_json::to_string(&manifest_json(
+        &plan,
+        &sha512_bytes(default_index().as_bytes()),
+    ))
+    .expect("manifest json")
+}
+
+/// The fixture manifest rewritten at one JSON pointer: the manifest is
+/// attacker-controlled text, and every identity check below is a refusal the
+/// tampering must meet.
+fn manifest_with(mutate: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut v: serde_json::Value =
+        serde_json::from_str(&export_manifest_json()).expect("fixture manifest");
+    mutate(&mut v);
+    v.to_string()
+}
+
+/// An export archive: the index the format wants, the manifest this app adds,
+/// and one override the executor would copy.
+fn export_bytes(manifest: Option<&str>) -> Vec<u8> {
+    let mut entries: Vec<(&str, String)> = vec![("modrinth.index.json", default_index())];
+    if let Some(m) = manifest {
+        entries.push(("export_manifest.json", m.to_string()));
+    }
+    entries.push(("overrides/config/x.toml", "a = 1".to_string()));
+    let refs: Vec<(&str, &str)> = entries.iter().map(|(n, b)| (*n, b.as_str())).collect();
+    zip_of(&refs)
+}
+
+fn preview(bytes: &[u8]) -> Result<ExportArchivePreview, ExportImportError> {
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip");
+    preview_export_archive(&mut z, &ArchiveLimits::default())
+}
+
+#[test]
+fn spec_f158_preview_reads_the_export_manifest_without_extracting() {
+    let bytes = export_bytes(Some(&export_manifest_json()));
+    let p = preview(&bytes).expect("our own export is previewable");
+    assert_eq!(p.name, "Pack");
+    assert_eq!(p.version_id, "v1");
+    assert_eq!(p.game_version, "1.21.1");
+    assert_eq!(p.loader, "fabric");
+    assert_eq!(p.lock_sha512, sha128('a'));
+    assert_eq!(p.file_count, 1);
+    assert_eq!(p.override_count, 1);
+    assert_eq!(p.skipped_count, 1);
+    assert_eq!(
+        p.excluded,
+        vec![("config/debug.log".to_string(), "secret".to_string())]
+    );
+}
+
+#[test]
+fn spec_f158_preview_refuses_a_foreign_archive_without_the_manifest() {
+    // A plain .mrpack is not this app's export: no manifest, no import.
+    let bytes = zip_of(&[("modrinth.index.json", &default_index())]);
+    assert!(matches!(
+        preview(&bytes),
+        Err(ExportImportError::NotOurExport(_))
+    ));
+}
+
+#[test]
+fn spec_f158_preview_refuses_an_unsupported_manifest_schema() {
+    let foreign = r#"{"schemaVersion":99,"name":"x","versionId":"v","gameVersion":"1","loader":"fabric","lockSha512":"","included":{"files":[],"overrides":[]},"skipped":[],"excluded":[]}"#;
+    let bytes = export_bytes(Some(foreign));
+    match preview(&bytes) {
+        Err(ExportImportError::SchemaVersion { found: 99, .. }) => {}
+        other => panic!("expected a schema refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn spec_f158_preview_refuses_a_malformed_manifest() {
+    let bytes = export_bytes(Some("{not json"));
+    assert!(matches!(
+        preview(&bytes),
+        Err(ExportImportError::ManifestJson(_))
+    ));
+}
+
+#[test]
+fn spec_f158_import_refuses_a_symlink_member_instead_of_skipping_it() {
+    // The manifest never gets read: the shared inspector refuses the archive
+    // outright, which is also what a `..` member meets (F-072 pins that one).
+    // The mutation check below is the point: the ONLY difference between the
+    // refused archive and the accepted control is the member's mode bits, so
+    // the refusal is the link rule alone — a reader that skips links instead
+    // of refusing them fails this test.
+    let link = archive_with_link_member(false);
+    assert!(matches!(
+        preview(&link),
+        Err(ExportImportError::Pack(PackError::Inspect(_)))
+    ));
+
+    // The control: the same archive with the member as a regular file. The
+    // manifest is consistent with it (one file, one override member), so the
+    // preview succeeds — proving the refusal came from the link, not from the
+    // manifest, the counts or the index.
+    let regular = archive_with_link_member(true);
+    let p = preview(&regular).expect("a regular member is not a link");
+    assert_eq!(p.name, "Pack");
+}
+
+/// The archive the symlink test builds: the index, a manifest consistent with
+/// one file and one override member, and `overrides/link.toml` — a symlink
+/// when `regular` is false, a plain file when it is true.
+fn archive_with_link_member(regular: bool) -> Vec<u8> {
+    let plan = ExportPlan {
+        name: "Pack".to_string(),
+        version_id: "v1".to_string(),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![ExportMod {
+            project_id: "p1".to_string(),
+            version_id: "v1".to_string(),
+            title: "Sodium".to_string(),
+            project_type: "mod".to_string(),
+            folder: "mods",
+            file_name: "sodium.jar".to_string(),
+            url: "https://cdn.modrinth.com/s.jar".to_string(),
+            size: 10,
+            sha1: "a".repeat(40),
+            sha512: sha128('a'),
+        }],
+        overrides: vec![OverrideFile {
+            archive_path: "overrides/link.toml".to_string(),
+            source: std::path::PathBuf::new(),
+            size: 9,
+        }],
+        lock_sha512: sha128('a'),
+        ..ExportPlan::default()
+    };
+    let manifest = serde_json::to_string(&manifest_json(
+        &plan,
+        &sha512_bytes(default_index().as_bytes()),
+    ))
+    .expect("manifest json");
+
+    let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+    if regular {
+        w.start_file("overrides/link.toml", SimpleFileOptions::default())
+            .expect("regular member");
+    } else {
+        w.start_file(
+            "overrides/link.toml",
+            SimpleFileOptions::default().external_attributes(0o120777 << 16),
+        )
+        .expect("link member");
+    }
+    w.write_all(b"../escape").expect("write");
+    w.start_file("modrinth.index.json", SimpleFileOptions::default())
+        .expect("index");
+    w.write_all(default_index().as_bytes()).expect("write");
+    w.start_file("export_manifest.json", SimpleFileOptions::default())
+        .expect("manifest");
+    w.write_all(manifest.as_bytes()).expect("write");
+    w.finish().expect("finish").into_inner()
+}
+
+// --- identity: the manifest must name THIS archive ---------------------------
+
+#[test]
+fn spec_f158_preview_refuses_a_manifest_naming_another_pack() {
+    let foreign = manifest_with(|v| {
+        v["name"] = "Other Pack".into();
+        v["versionId"] = "v9".into();
+    });
+    assert!(matches!(
+        preview(&export_bytes(Some(&foreign))),
+        Err(ExportImportError::ManifestJson(_))
+    ));
+}
+
+/// The transplant attack: a hand-written manifest claiming another archive's
+/// identity. The index digest it records is not the digest of the index in
+/// this archive, and that is a refusal of its own, not a malformed-JSON note.
+#[test]
+fn spec_f158_preview_refuses_a_manifest_whose_index_digest_disagrees() {
+    let foreign = manifest_with(|v| {
+        v["indexSha512"] = sha128('e').into();
+    });
+    match preview(&export_bytes(Some(&foreign))) {
+        Err(ExportImportError::IndexDigest { .. }) => {}
+        other => panic!("expected an index-digest refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn spec_f158_preview_refuses_manifest_counts_that_disagree_with_the_archive() {
+    // One override too few: the manifest cannot claim less than the archive
+    // carries, or the preview under-reports what the import will write.
+    let fewer = manifest_with(|v| {
+        v["included"]["overrides"] = serde_json::json!([]);
+    });
+    match preview(&export_bytes(Some(&fewer))) {
+        Err(ExportImportError::CountMismatch {
+            field,
+            manifest,
+            archive,
+        }) => {
+            assert_eq!(field, "override files");
+            assert_eq!(manifest, 0);
+            assert_eq!(archive, 1);
+        }
+        other => panic!("expected a count refusal, got {other:?}"),
+    }
+
+    // And one indexed file too many.
+    let more = manifest_with(|v| {
+        v["included"]["files"] = serde_json::json!([
+            { "path": "mods/sodium.jar", "size": 10 },
+            { "path": "mods/ghost.jar", "size": 1 },
+        ]);
+    });
+    match preview(&export_bytes(Some(&more))) {
+        Err(ExportImportError::CountMismatch {
+            field,
+            manifest,
+            archive,
+        }) => {
+            assert_eq!(field, "indexed files");
+            assert_eq!(manifest, 2);
+            assert_eq!(archive, 1);
+        }
+        other => panic!("expected a count refusal, got {other:?}"),
+    }
+}
+
+/// A loader the format's loader-key rule does not know must never reach the
+/// instance registry row the import creates.
+#[test]
+fn spec_f158_preview_refuses_a_loader_the_format_does_not_carry() {
+    let foreign = manifest_with(|v| {
+        v["loader"] = "rift".into();
+    });
+    match preview(&export_bytes(Some(&foreign))) {
+        Err(ExportImportError::InvalidLoader { loader }) => assert_eq!(loader, "rift"),
+        other => panic!("expected a loader refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn spec_f158_preview_refuses_an_oversized_manifest_before_reading_it() {
+    // The manifest ceiling is a parameter so it can be tested without an
+    // eight-megabyte fixture; `preview_export_archive` is what production
+    // calls and uses the index ceiling.
+    let bytes = export_bytes(Some(&export_manifest_json()));
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes.clone())).expect("zip");
+    match preview_export_archive_bounded(&mut z, &ArchiveLimits::default(), 16) {
+        Err(ExportImportError::Pack(PackError::IndexTooLarge { limit: 16, .. })) => {}
+        other => panic!("expected an oversized-manifest refusal, got {other:?}"),
+    }
+    // The production ceiling still admits the same archive.
+    let mut z2 = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+    assert!(
+        preview_export_archive_bounded(&mut z2, &ArchiveLimits::default(), MAX_INDEX_BYTES).is_ok()
+    );
 }

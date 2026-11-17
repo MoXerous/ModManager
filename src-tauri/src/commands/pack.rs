@@ -56,7 +56,8 @@ use zip::ZipArchive;
 
 use mm_core::journal::{Journal, JournalError, JournalOp, OperationKind, OperationRecord};
 use mm_core::modpack::archive::{
-    plan_install, read_pack, InstallOp, InstallPlan, PackError, PlanSkips,
+    plan_install, preview_export_archive, read_pack, ExportImportError, InstallOp, InstallPlan,
+    PackError, PlanSkips,
 };
 use mm_core::modpack::exec::{self, ExecError, PackEvent, PackIdentity};
 use mm_core::modpack::mrpack::{Pack, STAGING_DIR};
@@ -65,8 +66,9 @@ use mm_core::safety::extract::{extract_safely, ExtractError};
 use mm_core::safety::inspect::{ArchiveLimits, InspectError};
 
 use crate::dto::{
-    ErrorCode, IpcError, ModpackApplyResultDto, ModpackInstallRequest, ModpackPlanDto,
-    PackRecoveryDto, PackRecoveryResultDto, PackWriteDto, PackWriteKindDto,
+    ErrorCode, ExportArchiveImportRequest, ExportArchivePreviewDto, ExportArchivePreviewRequest,
+    IpcError, ModpackApplyResultDto, ModpackInstallRequest, ModpackPlanDto, PackRecoveryDto,
+    PackRecoveryResultDto, PackWriteDto, PackWriteKindDto,
 };
 use crate::progress::{
     is_decisive_pack_phase, pack_event_to_dto, refused_pack_event, ProgressThrottle,
@@ -1403,4 +1405,230 @@ pub async fn write_modpack_export_with(
         override_count: summary.override_count,
         total_size: summary.total_size,
     })
+}
+
+// --- Export archive import (F-158) -----------------------------------------
+//
+// The mirror image of the export above: the archive is the source and a new
+// instance is the destination. Every archive decision is core's — the shared
+// `read_pack` gate and the manifest check in `preview_export_archive` — and
+// this module only bridges: it re-gates the archive, creates the instance
+// through the registry, and hands the apply to the same `run_apply` a `.mrpack`
+// install takes.
+
+/// One `ExportImportError` in one place, so preview and import cannot
+/// disagree. The archive-safety refusals go through [`pack_error`] exactly as
+/// a `.mrpack` install reports them; what is new here is only "this file is
+/// not one of our exports", which is the file's fault, not the disk's.
+fn export_import_error(e: &ExportImportError) -> IpcError {
+    match e {
+        ExportImportError::Pack(p) => pack_error(p),
+        // Every manifest-gate refusal means the same thing to the user: this
+        // file is not an export this build will import, and nothing was done.
+        // The message distinguishes the cause for the log; the code stays one.
+        ExportImportError::NotOurExport(_)
+        | ExportImportError::ManifestJson(_)
+        | ExportImportError::IndexDigest { .. }
+        | ExportImportError::CountMismatch { .. }
+        | ExportImportError::InvalidLoader { .. } => IpcError::new(ErrorCode::NotOurExport, e),
+        // The manifest names a schema version this build does not read: the
+        // file was written by a different version of the app, which is what
+        // `newerSchema` says.
+        ExportImportError::SchemaVersion { .. } => IpcError::new(ErrorCode::NewerSchema, e),
+    }
+}
+
+fn export_preview_dto(
+    digest: &str,
+    p: &mm_core::modpack::archive::ExportArchivePreview,
+) -> ExportArchivePreviewDto {
+    ExportArchivePreviewDto {
+        pack_sha512: digest.to_string(),
+        manifest_schema_version: p.manifest_schema_version,
+        name: p.name.clone(),
+        version_id: p.version_id.clone(),
+        summary: p.summary.clone(),
+        game_version: p.game_version.clone(),
+        loader: p.loader.clone(),
+        lock_sha512: p.lock_sha512.clone(),
+        file_count: p.file_count,
+        override_count: p.override_count,
+        skipped_count: p.skipped_count,
+        excluded: p
+            .excluded
+            .iter()
+            .map(|(path, reason)| crate::dto::ExportArchiveExcludedDto {
+                path: path.clone(),
+                reason: reason.clone(),
+            })
+            .collect(),
+        included_files: p.included_files.clone(),
+        included_overrides: p.included_overrides.clone(),
+    }
+}
+
+/// Previews an export archive metadata-only (F-158): the manifest and the
+/// index are read out of the file, and nothing is extracted, written or
+/// planned. The registry is not consulted because nothing here touches a
+/// folder; the create plan the user confirms is the plain `plan_create_instance`
+/// command's, built from the folder and name they choose.
+#[tauri::command]
+pub async fn preview_modpack_export_archive(
+    req: ExportArchivePreviewRequest,
+) -> Result<ExportArchivePreviewDto, IpcError> {
+    preview_modpack_export_archive_with(req).await
+}
+
+/// The body of `preview_modpack_export_archive`, with the state as a
+/// parameter, for the same seam reason the other command bodies have.
+pub async fn preview_modpack_export_archive_with(
+    req: ExportArchivePreviewRequest,
+) -> Result<ExportArchivePreviewDto, IpcError> {
+    let pack_path = resolve_file(&req.pack_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut archive, digest) = open_archive(&pack_path)?;
+        let preview = preview_export_archive(&mut archive, &ArchiveLimits::default())
+            .map_err(|e| export_import_error(&e))?;
+        Ok(export_preview_dto(&digest, &preview))
+    })
+    .await
+    .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?
+}
+
+/// The import's target folder: absolute, and not an existing file.
+///
+/// Unlike [`resolve_dir`], this does NOT require the folder to exist — the
+/// import is what creates it — and unlike it, a missing folder is not `io`
+/// but the caller's request shape, because the folder is the user's chosen
+/// destination, not a file the app reads. What exists must be a folder or
+/// nothing; `plan_create` refuses the non-empty case with its own error.
+fn import_target_root(raw: &str) -> Result<PathBuf, IpcError> {
+    let p = PathBuf::from(raw.trim());
+    if p.as_os_str().is_empty() {
+        return Err(IpcError::invalid_input("empty instance path"));
+    }
+    if !p.is_absolute() {
+        return Err(IpcError::invalid_input(
+            "the import target must be an absolute path",
+        ));
+    }
+    if p.is_file() {
+        return Err(IpcError::invalid_input("the import target is a file"));
+    }
+    Ok(p)
+}
+
+/// Imports an export archive: creates a new instance, then applies the pack
+/// into it, streaming progress on a channel.
+///
+/// Production is https-only and takes the production downloader, exactly as
+/// `execute_modpack_install` does; the seam below carries the same two knobs
+/// for the same reason.
+#[tauri::command]
+pub async fn execute_modpack_archive_import(
+    state: tauri::State<'_, AppState>,
+    req: ExportArchiveImportRequest,
+    on_event: Channel<crate::dto::PackEventDto>,
+) -> Result<ModpackApplyResultDto, IpcError> {
+    use mm_core::providers::ModrinthClient;
+    let client = ModrinthClient::new().map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+    execute_modpack_archive_import_with(state.inner(), &client, req, on_event, false).await
+}
+
+/// The body of `execute_modpack_archive_import`, with the state, the provider
+/// and the downloader as parameters.
+///
+/// The order is the plan's: the archive is re-gated first (it must still be
+/// this app's export and still hash to the token the preview returned), then
+/// the create plan is rebuilt in Rust from the folder and name — never taken
+/// from the webview — then the instance is created through the registry, and
+/// only then is the pack applied, through the same [`run_apply`] a `.mrpack`
+/// install takes, into the folder that was just created and registered.
+///
+/// A refusal before the create leaves the disk untouched. A failure after the
+/// create leaves a registered instance holding whatever the apply had already
+/// written — a partially applied pack, not an empty one. The journal carries
+/// the apply's record, so the pack recovery describes it (a partially applied
+/// pack is one of its findings), and a retry applies the pack into the folder
+/// that already exists.
+pub async fn execute_modpack_archive_import_with(
+    state: &AppState,
+    provider: &dyn mm_core::providers::Provider,
+    req: ExportArchiveImportRequest,
+    on_event: Channel<crate::dto::PackEventDto>,
+    allow_insecure_loopback: bool,
+) -> Result<ModpackApplyResultDto, IpcError> {
+    use mm_core::downloader::Downloader;
+
+    let pack_path = resolve_file(&req.pack_path)?;
+    let target_root = import_target_root(&req.instance_root)?;
+
+    // 1. Re-gate the archive server-side. The digest check is the same token
+    //    contract the pack apply enforces again below: an archive replaced
+    //    between the preview and the confirm is refused before anything is
+    //    created. The manifest read is what keeps a foreign pack from being
+    //    turned into an instance named after itself.
+    let gate = {
+        let pack_path = pack_path.clone();
+        let expected = req.pack_sha512.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let (mut archive, digest) = open_archive(&pack_path)?;
+            if !digest.eq_ignore_ascii_case(&expected) {
+                return Err(IpcError::new(
+                    ErrorCode::PackChanged,
+                    format!(
+                        "{} is not the archive the plan was built from (planned {expected}, found {digest})",
+                        pack_path.display()
+                    ),
+                ));
+            }
+            let preview = preview_export_archive(&mut archive, &ArchiveLimits::default())
+                .map_err(|e| export_import_error(&e))?;
+            Ok((digest, preview.game_version, preview.loader))
+        })
+    }
+    .await
+    .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))??;
+    let (_digest, game_version, loader) = gate;
+
+    // 2. The create plan, rebuilt here: the same refusal a plain create gives
+    //    (a folder that exists, is not empty, or already holds an instance)
+    //    is the drift detection between the plan the screen showed and the
+    //    disk it is about to write.
+    let plan = mm_core::instances::registry::plan_create(
+        &target_root,
+        &req.instance_name,
+        Some(game_version),
+        Some(loader),
+        super::epoch_now(),
+    )
+    .map_err(|e| super::registry_error(&e))?;
+
+    // 3. The create: journal, folders, mirror, row. The pack apply below
+    //    requires the registry to own the folder, which this is what makes
+    //    true.
+    let row = state
+        .with_db_and_journal(move |db, journal| {
+            mm_core::instances::registry::execute_create(db, journal, &plan)
+                .map_err(|e| super::registry_error(&e))
+        })
+        .await?;
+
+    // 4. The apply, through the one path every pack install takes. The digest
+    //    token came from the preview; `run_apply` re-reads, re-plans and
+    //    refuses a mismatch, so the applied archive is the previewed one.
+    let install_req = ModpackInstallRequest {
+        pack_path: pack_path.to_string_lossy().into_owned(),
+        instance_root: row.path.to_string_lossy().into_owned(),
+        pack_sha512: Some(req.pack_sha512),
+    };
+    run_apply(
+        state,
+        provider,
+        install_req,
+        on_event,
+        allow_insecure_loopback,
+        Downloader::new(3),
+    )
+    .await
 }

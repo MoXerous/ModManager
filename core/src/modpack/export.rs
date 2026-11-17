@@ -152,6 +152,11 @@ pub enum Exclusion {
     Duplicate,
     /// The name cannot be represented safely inside a zip.
     UnsafeName,
+    /// The name ends in `.part`, the suffix the atomic-write protocol
+    /// reserves for in-flight bytes: the installer refuses to extract any
+    /// member named like one (F-041), so packing it would produce an export
+    /// this application can never import.
+    ReservedPart,
 }
 
 impl Exclusion {
@@ -164,6 +169,7 @@ impl Exclusion {
             Self::Symlink => "symlink",
             Self::Duplicate => "duplicate",
             Self::UnsafeName => "unsafe_name",
+            Self::ReservedPart => "reserved_part",
         }
     }
 }
@@ -487,11 +493,22 @@ fn file_sha512(path: &Path) -> Result<String, ExportError> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(hasher
+    Ok(sha512_finalize(hasher))
+}
+
+/// The lowercase-hex sha512 of bytes already in memory.
+fn sha512_of(bytes: &[u8]) -> String {
+    let mut hasher = Sha512::new();
+    hasher.update(bytes);
+    sha512_finalize(hasher)
+}
+
+fn sha512_finalize(hasher: Sha512) -> String {
+    hasher
         .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
-        .collect())
+        .collect()
 }
 
 // --- override collection ---------------------------------------------------
@@ -713,6 +730,18 @@ fn walk_override_dir(
             });
             continue;
         }
+        // F-041/F-157: the `.part` suffix is the installer's own (the
+        // atomic-write protocol's in-flight name, matched case-insensitively
+        // by `extract_safely`). Packing such a file would write an archive
+        // our own importer refuses, so it is excluded — and recorded, like
+        // every other exclusion.
+        if child_rel.to_ascii_lowercase().ends_with(".part") {
+            excluded.push(ExcludedEntry {
+                path: child_rel,
+                reason: Exclusion::ReservedPart,
+            });
+            continue;
+        }
         let archive_path = match safe_member_name(&format!("overrides/{child_rel}")) {
             Ok(p) => p,
             Err(_) => {
@@ -748,7 +777,74 @@ fn join_slash(prefix: &str, name: &str) -> String {
     }
 }
 
-// --- index and archive -----------------------------------------------------
+// --- index, manifest and archive -------------------------------------------
+
+/// The second entry this exporter writes, at the zip root: the machine-readable
+/// record of what the archive carries and what was left out (F-157).
+pub const MANIFEST_ENTRY: &str = "export_manifest.json";
+/// The manifest schema version this build writes and the importer reads.
+pub const MANIFEST_SCHEMA: u64 = 1;
+
+/// The export manifest, as a JSON value (F-157).
+///
+/// `write_export_zip` shows the user every inclusion and exclusion decision in
+/// the preview, and until now discarded those decisions at write time: an
+/// archive that left the app could not be audited. This member is the record.
+/// It carries the pack's identity, the digest of the lock the pack was built
+/// from, the digest of the index bytes it rides with (`indexSha512`, so a
+/// manifest cannot be transplanted into another archive), what is included
+/// (index files and overrides), and every skip and exclusion with its stable
+/// reason key — the same keys the UI translates.
+pub fn manifest_json(plan: &ExportPlan, index_sha512: &str) -> Value {
+    let mut manifest = Map::new();
+    manifest.insert("schemaVersion".to_string(), json!(MANIFEST_SCHEMA));
+    manifest.insert("name".to_string(), json!(plan.name));
+    manifest.insert("versionId".to_string(), json!(plan.version_id));
+    if let Some(summary) = &plan.summary {
+        manifest.insert("summary".to_string(), json!(summary));
+    }
+    manifest.insert("gameVersion".to_string(), json!(plan.game_version));
+    manifest.insert("loader".to_string(), json!(plan.loader));
+    manifest.insert("lockSha512".to_string(), json!(plan.lock_sha512));
+    manifest.insert("indexSha512".to_string(), json!(index_sha512));
+    manifest.insert(
+        "included".to_string(),
+        json!({
+            "files": plan.files.iter().map(|f| json!({
+                "path": f.destination(),
+                "size": f.size,
+            })).collect::<Vec<_>>(),
+            "overrides": plan.overrides.iter().map(|o| json!({
+                "path": o.archive_path,
+                "size": o.size,
+            })).collect::<Vec<_>>(),
+        }),
+    );
+    manifest.insert(
+        "skipped".to_string(),
+        json!(plan
+            .skipped
+            .iter()
+            .map(|s| json!({
+                "projectId": s.project_id,
+                "versionId": s.version_id,
+                "reason": s.reason.as_str(),
+            }))
+            .collect::<Vec<_>>()),
+    );
+    manifest.insert(
+        "excluded".to_string(),
+        json!(plan
+            .excluded
+            .iter()
+            .map(|e| json!({
+                "path": e.path,
+                "reason": e.reason.as_str(),
+            }))
+            .collect::<Vec<_>>()),
+    );
+    Value::Object(manifest)
+}
 
 /// The generated index, as a JSON value. Validates the plan's own output so a
 /// pack this application writes is a pack this application can read back.
@@ -811,6 +907,13 @@ pub fn write_export_zip(plan: &ExportPlan, output: &Path) -> Result<ExportSummar
 
     let index = serde_json::to_vec_pretty(&index_json(plan))
         .map_err(|e| ExportError::Zip(e.to_string()))?;
+    // F-157: the audit record rides the same staged archive, so a manifest can
+    // never exist for a pack that was not written: both members land in the
+    // same temporary file and reach `output` together in the atomic rename.
+    // The manifest carries the digest of THESE index bytes, so the importer
+    // can re-check the manifest against the archive it sits in.
+    let manifest = serde_json::to_vec_pretty(&manifest_json(plan, &sha512_of(&index)))
+        .map_err(|e| ExportError::Zip(e.to_string()))?;
     let (temp, temp_file) = unique_temp(output)?;
 
     let result = (|| -> Result<ExportSummary, ExportError> {
@@ -819,6 +922,10 @@ pub fn write_export_zip(plan: &ExportPlan, output: &Path) -> Result<ExportSummar
         zip.start_file(super::mrpack::INDEX_ENTRY, options)
             .map_err(|e| ExportError::Zip(e.to_string()))?;
         zip.write_all(&index)
+            .map_err(|e| ExportError::Zip(e.to_string()))?;
+        zip.start_file(MANIFEST_ENTRY, options)
+            .map_err(|e| ExportError::Zip(e.to_string()))?;
+        zip.write_all(&manifest)
             .map_err(|e| ExportError::Zip(e.to_string()))?;
         let mut total_size = index.len() as u64;
         for override_file in &plan.overrides {

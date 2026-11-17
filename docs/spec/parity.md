@@ -19,20 +19,20 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 107 | 107 |
+| مُختبَر بمعرّف المواصفة | 109 | 109 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
 | إشارة في الوثائق فقط | 2 | 2 |
-| بلا أثر | 34 | 34 |
+| بلا أثر | 32 | 32 |
 
-**107 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **36** بلا أثرٍ قابلٍ للتتبّع.
+**109 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **34** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
 | M1 | 72 | 63 | 3 | 6 |
-| M2 | 38 | 19 | 2 | 17 |
+| M2 | 38 | 21 | 2 | 15 |
 | M3 | 41 | 24 | 4 | 13 |
 | later | 1 | 1 | 0 | 0 |
 
@@ -71,8 +71,6 @@
 | **F-132** | كاش لكل تشغيل في المخطّط | updates | M3 |
 | **F-145** | مركز العمليات (قراءة فقط) | operations | M2 |
 | **F-155** | تصدير بروفايل zip | - | M2 |
-| **F-157** | `export_manifest.json` | - | M2 |
-| **F-158** | **استيراد ميتا فقط بلا استخراج** | - | M2 |
 | **F-162** | شريط تنقّل + صفحات مكدّسة | ui | M2 |
 | **F-169** | لوحة تنقّل لوحة المفاتيح (cmdk) | ui | M2 |
 | **F-170** | الثيم واللون | ui | M2 |
@@ -133,7 +131,7 @@
 
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
-| **F-041** | رفض اجتياز المسار | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/path.rs · كود: core/src/safety/extract.rs، core/src/safety/path.rs |
+| **F-041** | رفض اجتياز المسار | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/path.rs · كود: core/src/modpack/export.rs، core/src/safety/extract.rs (+1) · اختبار (ذكر): core/src/modpack/export_tests.rs |
 | **F-042** | رفض المسار المطلق وأقراص المنصّة | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/downloader/client.rs، core/src/safety/extract.rs (+1) · كود: core/src/downloader/client.rs، core/src/safety/inspect.rs |
 | **F-043** | حدود الحجم/العدد/نسبة الضغط | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/inspect.rs · كود: core/src/safety/inspect.rs، core/src/safety/path.rs |
 | **F-044** | رفض الروابط الرمزية والملفات الخاصة | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/inspect.rs · كود: core/src/safety/extract.rs، core/src/safety/inspect.rs |
@@ -172,7 +170,7 @@
 | **F-069** | **معاينة غير مُعدِّلة** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) |
 | **F-070** | تحقق صارم من الفهرس (9 فئات حواجب) | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/tests.rs |
 | **F-071** | التحقق من هاش الملفات البعيدة | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/exec_tests.rs |
-| **F-072** | **26 رمز خطأ مسمّى** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) |
+| **F-072** | **26 رمز خطأ مسمّى** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) · اختبار (ذكر): core/src/modpack/archive_tests.rs |
 | **F-073** | أولوية `overrides` < `client-overrides` | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs · كود: core/src/modpack/archive.rs، core/src/modpack/mrpack.rs |
 | **F-074** | تخطّي محتوى الخادم | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs · كود: core/src/modpack/archive.rs، core/src/modpack/mrpack.rs (+3) |
 | **F-075** | **نشر ذرّي بلا استبدال** | Keep | M3 | بلا أثر | — |
@@ -294,8 +292,8 @@
 |---|---|---|---|---|---|
 | **F-155** | تصدير بروفايل zip | Keep | M2 | بلا أثر | — |
 | **F-156** | **قائمة الاستبعاد** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/export_tests.rs · كود: core/src/modpack/export.rs · اختبار (ذكر): core/src/modpack/export_tests.rs |
-| **F-157** | `export_manifest.json` | Keep | M2 | بلا أثر | — |
-| **F-158** | **استيراد ميتا فقط بلا استخراج** | Keep | M2 | بلا أثر | — |
+| **F-157** | `export_manifest.json` | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/export_tests.rs · كود: core/src/modpack/export.rs، src/app/pages/ModpackPage.tsx (+1) · اختبار (ذكر): core/src/modpack/export_tests.rs |
+| **F-158** | **استيراد ميتا فقط بلا استخراج** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/modpack/archive_tests.rs، src-tauri/src/commands/pack_tests.rs · كود: core/src/modpack/archive.rs، src-tauri/src/commands/pack.rs (+5) · اختبار (ذكر): core/src/modpack/archive_tests.rs، core/src/modpack/export_tests.rs (+1) |
 | **F-159** | تصدير قائمة المودات (MD/CSV/TXT) | Drop | — | متروك | — |
 | **F-160** | استيراد/تصدير JSON | Drop | — | متروك | — |
 | **F-161** | اختيار هدف عالم لقاعدة البيانات | Defer | later | مؤجَّل | — |

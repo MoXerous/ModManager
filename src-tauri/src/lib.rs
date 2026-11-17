@@ -166,6 +166,8 @@ pub fn run() -> i32 {
             commands::pack::pending_pack_recoveries,
             commands::pack::recover_pack_apply,
             commands::pack::dismiss_pack_apply,
+            commands::pack::preview_modpack_export_archive,
+            commands::pack::execute_modpack_archive_import,
             commands::backup::list_instance_backups,
             commands::backup::execute_instance_backup,
             commands::backup::cancel_instance_transfer,

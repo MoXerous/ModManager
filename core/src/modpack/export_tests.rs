@@ -28,6 +28,14 @@ fn hex128(ch: char) -> String {
     (0..128).map(|_| ch).collect()
 }
 
+fn sha512_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha512::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn file(name: &str, url: &str, size: u64) -> ProjectFile {
     ProjectFile {
         filename: name.to_string(),
@@ -895,4 +903,236 @@ fn spec_f081_write_export_zip_refuses_an_empty_plan() {
         .expect_err("an empty pack is not a pack");
     assert!(matches!(error, ExportError::Empty));
     assert!(!dir.path().join("empty.mrpack").exists());
+}
+
+// --- F-157: the export manifest --------------------------------------------
+
+/// F-157: reads one member out of a written export, or `None` when the archive
+/// does not carry it.
+fn member_bytes(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let read = match archive.by_name(name) {
+        Ok(mut member) => {
+            let mut out = Vec::new();
+            std::io::Read::read_to_end(&mut member, &mut out).expect("read member");
+            Some(out)
+        }
+        Err(zip::result::ZipError::FileNotFound) => None,
+        Err(e) => panic!("reading {name} out of the archive: {e}"),
+    };
+    read
+}
+
+/// F-157: the written pack must be auditable after it leaves the app, so the
+/// archive carries `export_manifest.json` with the pack's identity, the lock
+/// digest the pack was built from, and the manifest's schema version.
+#[test]
+fn spec_f157_write_export_zip_carries_the_manifest_with_schema_and_identity() {
+    let dir = crate::test_tempdir();
+    let plan = ExportPlan {
+        name: "My Pack".to_string(),
+        version_id: "1.0.0".to_string(),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![export_mod("sodium.jar")],
+        lock_sha512: hex128('a'),
+        ..ExportPlan::default()
+    };
+    let output = dir.path().join("My Pack.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+
+    let bytes = std::fs::read(&output).expect("read");
+    let manifest = member_bytes(&bytes, "export_manifest.json")
+        .expect("the archive must carry export_manifest.json");
+    let v: serde_json::Value = serde_json::from_slice(&manifest).expect("manifest is JSON");
+    assert_eq!(v["schemaVersion"], 1, "the schema version the build reads");
+    assert_eq!(v["name"], "My Pack");
+    assert_eq!(v["versionId"], "1.0.0");
+    assert_eq!(v["gameVersion"], "1.21.1");
+    assert_eq!(v["loader"], "fabric");
+    // The digest: which lock the pack was built from, so the artefact can be
+    // compared against an instance later.
+    assert_eq!(v["lockSha512"], hex128('a'));
+}
+
+/// F-157: the decisions the preview shows must survive into the artefact. A
+/// shipped file, an excluded file with its reason, and a skipped lock entry
+/// with its reason are all recorded in the manifest the archive carries.
+#[tokio::test]
+async fn spec_f157_manifest_records_included_excluded_and_skipped_decisions() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path();
+    write_file(instance, "config/client.toml", b"key = true");
+    write_file(instance, "config/debug.log", b"secret noise");
+    write_lock(
+        &instance.join("instance.lock.json"),
+        &LockFile {
+            entries: vec![
+                entry("modrinth", "p1", "v1"),
+                entry("curseforge", "c1", "cv1"),
+            ],
+        },
+    )
+    .expect("lock");
+
+    let provider = fake_provider(
+        vec![project("p1", "Sodium", "mod")],
+        vec![version(
+            "v1",
+            "p1",
+            vec![file("sodium.jar", "https://cdn.modrinth.com/s.jar", 10)],
+        )],
+    );
+    let plan = plan_export(&provider, instance, &settings(&["config"]))
+        .await
+        .expect("plan");
+    let output = dir.path().join("My Pack.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+
+    let bytes = std::fs::read(&output).expect("read");
+    let manifest = member_bytes(&bytes, "export_manifest.json").expect("manifest member");
+    let v: serde_json::Value = serde_json::from_slice(&manifest).expect("manifest is JSON");
+
+    let files = v["included"]["files"].as_array().expect("included files");
+    assert!(
+        files
+            .iter()
+            .any(|f| f["path"] == "mods/sodium.jar" && f["size"] == 10),
+        "the index file is recorded: {files:?}"
+    );
+    let overrides = v["included"]["overrides"]
+        .as_array()
+        .expect("included overrides");
+    assert!(
+        overrides
+            .iter()
+            .any(|o| o["path"] == "overrides/config/client.toml"),
+        "the shipped override is recorded: {overrides:?}"
+    );
+    let excluded = v["excluded"].as_array().expect("excluded list");
+    assert!(
+        excluded
+            .iter()
+            .any(|e| e["path"] == "config/debug.log" && e["reason"] == "secret"),
+        "the exclusion and its reason are recorded: {excluded:?}"
+    );
+    let skipped = v["skipped"].as_array().expect("skipped list");
+    assert!(
+        skipped.iter().any(|s| s["projectId"] == "c1"
+            && s["versionId"] == "cv1"
+            && s["reason"] == "unsupported_provider"),
+        "the skipped entry and its reason are recorded: {skipped:?}"
+    );
+}
+
+/// F-157: the sha512 the importer can re-check the index against. A manifest
+/// without it can be transplanted into another archive that only renames the
+/// pack; with it, the manifest names exactly one index.
+#[test]
+fn spec_f157_manifest_carries_the_index_sha512() {
+    let dir = crate::test_tempdir();
+    let plan = ExportPlan {
+        name: "My Pack".to_string(),
+        version_id: "1.0.0".to_string(),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![export_mod("sodium.jar")],
+        lock_sha512: hex128('a'),
+        ..ExportPlan::default()
+    };
+    let output = dir.path().join("My Pack.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+
+    let bytes = std::fs::read(&output).expect("read");
+    let index = member_bytes(&bytes, "modrinth.index.json").expect("index member");
+    let manifest = member_bytes(&bytes, "export_manifest.json").expect("manifest member");
+    let v: serde_json::Value = serde_json::from_slice(&manifest).expect("manifest is JSON");
+    assert_eq!(v["indexSha512"], sha512_hex(&index));
+}
+
+// --- F-157: the `.part` suffix is the installer's, not the pack's -----------
+
+/// F-157: `extract_safely` refuses any member whose name ends in `.part`
+/// (the atomic-write protocol's reserved suffix), so an export that carries
+/// one is an export this very application can never import. The exporter
+/// excludes it and records the exclusion like every other decision.
+#[test]
+fn spec_f157_collect_overrides_excludes_part_suffix_files() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path();
+    write_file(instance, "config/options.toml", b"keep");
+    write_file(instance, "config/state.part", b"in-flight bytes");
+    // Case does not save it: the installer's check is case-insensitive. A
+    // nested path, because two names differing only by case are one file on
+    // Windows and the fixture must stay honest there.
+    write_file(
+        instance,
+        "config/nested/state.PART",
+        b"same rule, other case",
+    );
+
+    let (files, excluded) = collect_overrides(instance, &["config".to_string()]).expect("collect");
+    let kept: BTreeSet<&str> = files.iter().map(|f| f.archive_path.as_str()).collect();
+    assert_eq!(
+        kept,
+        BTreeSet::from(["overrides/config/options.toml"]),
+        "no .part member may be packed: {kept:?}"
+    );
+    let reasons: HashMap<&str, Exclusion> = excluded
+        .iter()
+        .map(|e| (e.path.as_str(), e.reason))
+        .collect();
+    assert_eq!(reasons["config/state.part"], Exclusion::ReservedPart);
+    assert_eq!(reasons["config/nested/state.PART"], Exclusion::ReservedPart);
+}
+
+/// F-157 + F-158: the round trip. An instance carrying a `.part` file must
+/// export into an archive this application can import again: the preview
+/// reads it, the plan accepts it, and the extraction — the step that refuses
+/// a `.part` member — succeeds. The manifest records the exclusion.
+#[tokio::test]
+async fn spec_f157_an_export_with_a_part_file_round_trips_through_the_importer() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path();
+    write_file(instance, "config/client.toml", b"key = true");
+    write_file(instance, "config/state.part", b"in-flight bytes");
+    write_lock(
+        &instance.join("instance.lock.json"),
+        &LockFile { entries: vec![] },
+    )
+    .expect("lock");
+
+    let provider = fake_provider(vec![], vec![]);
+    let plan = plan_export(&provider, instance, &settings(&["config"]))
+        .await
+        .expect("plan");
+    let output = dir.path().join("round.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+    let bytes = std::fs::read(&output).expect("read");
+
+    // The preview the import shows the user: it reads the manifest, which
+    // must record the `.part` exclusion.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("zip");
+    let preview = super::archive::preview_export_archive(&mut archive, &ArchiveLimits::default())
+        .expect("our own export is importable");
+    assert!(
+        preview
+            .excluded
+            .iter()
+            .any(|(path, reason)| path == "config/state.part" && reason == "reserved_part"),
+        "the .part exclusion is recorded: {:?}",
+        preview.excluded
+    );
+
+    // The same archive survives the installer's extraction, which is the
+    // step that refuses `.part` members (F-041).
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("zip");
+    let staging = dir.path().join("staging");
+    crate::safety::extract::extract_safely(
+        &mut archive,
+        &staging,
+        &ArchiveLimits::default(),
+        &mut |_| std::ops::ControlFlow::Continue(()),
+    )
+    .expect("an export this app wrote is one its installer can extract");
 }

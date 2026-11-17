@@ -12,6 +12,9 @@ import type { ContentStaleDto } from '../bindings/ContentStaleDto';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
 import type { DownloadHistoryEntryDto } from '../bindings/DownloadHistoryEntryDto';
+import type { ExportArchiveImportRequest } from '../bindings/ExportArchiveImportRequest';
+import type { ExportArchivePreviewDto } from '../bindings/ExportArchivePreviewDto';
+import type { ExportArchivePreviewRequest } from '../bindings/ExportArchivePreviewRequest';
 import type { InstallEventDto } from '../bindings/InstallEventDto';
 import type { InstallRequest } from '../bindings/InstallRequest';
 import type { InstallResultDto } from '../bindings/InstallResultDto';
@@ -506,6 +509,49 @@ export function writeModpackExport(
  */
 export function listExportFolders(instanceRoot: string): Promise<string[]> {
   return invoke<string[]>('list_export_folders', { instanceRoot });
+}
+
+// --- Export archive import (F-157, F-158) ---------------------------------
+//
+// The archive carries `export_manifest.json` (F-157) — this app's own audit
+// record — and the import reads it metadata-only before anything is created.
+// The same token rule binds the two steps: the preview's `packSha512` digest
+// must come back with the confirm, so an archive swapped in between is
+// refused instead of installed.
+
+/**
+ * F-158: previews one of this app's export archives, metadata-only.
+ *
+ * Nothing is extracted or written; the manifest and index are read from the
+ * file and cross-checked (same name and version id). A foreign archive, a
+ * malformed manifest or a newer schema version is a typed error
+ * (`notOurExport`, `newerSchema`), never a partial read.
+ */
+export function previewModpackExportArchive(
+  req: ExportArchivePreviewRequest,
+): Promise<ExportArchivePreviewDto> {
+  return invoke<ExportArchivePreviewDto>('preview_modpack_export_archive', { req });
+}
+
+/**
+ * F-158: imports the archive as a new instance, streaming one
+ * `PackEventDto` per phase change.
+ *
+ * `req.packSha512` must be the preview's `packSha512`; the command re-gates
+ * the archive against both the digest and the manifest, creates the instance
+ * through the registry, and only then applies the pack — the same apply path
+ * `executeModpackInstall` takes. A refusal before the create leaves nothing
+ * on disk.
+ */
+export async function executeModpackArchiveImport(
+  req: ExportArchiveImportRequest,
+  onEvent: (e: PackEventDto) => void,
+): Promise<ModpackApplyResultDto> {
+  const channel = progressChannel<PackEventDto>(onEvent);
+  return invoke<ModpackApplyResultDto>('execute_modpack_archive_import', {
+    req,
+    onEvent: channel,
+  });
 }
 
 // --- Pack recovery (F-076/F-146) -----------------------------------------
