@@ -218,6 +218,12 @@ export function ModpackImport() {
               </Chip>
             )}
           </div>
+          {preview.includedFiles.length > 0 && (
+            <PlanList title={t('pack.import.planTitle')} subtitle={t('export.list.files')} paths={preview.includedFiles} />
+          )}
+          {preview.includedOverrides.length > 0 && (
+            <PlanList title={t('export.list.overrides')} paths={preview.includedOverrides} />
+          )}
           {preview.excluded.length > 0 && (
             <ul className="mt-2 flex flex-col gap-1">
               {preview.excluded.map((e) => (
@@ -348,6 +354,33 @@ function Chip({ children, tone }: { children: ReactNode; tone?: 'issue' }) {
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * The write plan the manifest records: the paths the import will write,
+ * shown before the user confirms — the same honesty the `.mrpack` flow owes
+ * the user (AGENTS.md §5.4). Building this list read the manifest in place
+ * only; nothing was written to plan it.
+ */
+function PlanList({ title, subtitle, paths }: { title: string; subtitle?: string; paths: string[] }) {
+  return (
+    <div className="mt-2 flex flex-col gap-0.5 rounded-control border border-border bg-card px-2.5 py-1.5">
+      <p className="text-caption text-foreground">{title}</p>
+      {subtitle && <p className="text-caption text-muted-foreground">{subtitle}</p>}
+      <ul className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+        {paths.map((path) => (
+          <li
+            key={path}
+            dir="ltr"
+            title={path}
+            className="truncate font-mono text-caption text-foreground"
+          >
+            {path}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

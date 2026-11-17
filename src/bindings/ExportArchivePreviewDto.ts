@@ -20,4 +20,14 @@ manifestSchemaVersion: number, name: string, versionId: string, summary: string 
 /**
  * The digest the exporter recorded for the source instance's lock.
  */
-lockSha512: string, fileCount: number, overrideCount: number, skippedCount: number, excluded: Array<ExportArchiveExcludedDto>, };
+lockSha512: string, fileCount: number, overrideCount: number, skippedCount: number, excluded: Array<ExportArchiveExcludedDto>, 
+/**
+ * The paths the manifest records as included index files: what the
+ * import will download. The write plan the user sees before confirming.
+ */
+includedFiles: Array<string>, 
+/**
+ * The paths the manifest records as included overrides: what the import
+ * will copy out of the archive.
+ */
+includedOverrides: Array<string>, };

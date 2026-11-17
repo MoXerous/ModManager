@@ -1423,9 +1423,14 @@ pub async fn write_modpack_export_with(
 fn export_import_error(e: &ExportImportError) -> IpcError {
     match e {
         ExportImportError::Pack(p) => pack_error(p),
-        ExportImportError::NotOurExport(_) | ExportImportError::ManifestJson(_) => {
-            IpcError::new(ErrorCode::NotOurExport, e)
-        }
+        // Every manifest-gate refusal means the same thing to the user: this
+        // file is not an export this build will import, and nothing was done.
+        // The message distinguishes the cause for the log; the code stays one.
+        ExportImportError::NotOurExport(_)
+        | ExportImportError::ManifestJson(_)
+        | ExportImportError::IndexDigest { .. }
+        | ExportImportError::CountMismatch { .. }
+        | ExportImportError::InvalidLoader { .. } => IpcError::new(ErrorCode::NotOurExport, e),
         // The manifest names a schema version this build does not read: the
         // file was written by a different version of the app, which is what
         // `newerSchema` says.
@@ -1457,6 +1462,8 @@ fn export_preview_dto(
                 reason: reason.clone(),
             })
             .collect(),
+        included_files: p.included_files.clone(),
+        included_overrides: p.included_overrides.clone(),
     }
 }
 
@@ -1539,9 +1546,11 @@ pub async fn execute_modpack_archive_import(
 /// install takes, into the folder that was just created and registered.
 ///
 /// A refusal before the create leaves the disk untouched. A failure after the
-/// create leaves an empty registered instance — the create is journaled, so
-/// the existing instance recovery describes it, and a retry applies the pack
-/// into the folder that already exists.
+/// create leaves a registered instance holding whatever the apply had already
+/// written — a partially applied pack, not an empty one. The journal carries
+/// the apply's record, so the pack recovery describes it (a partially applied
+/// pack is one of its findings), and a retry applies the pack into the folder
+/// that already exists.
 pub async fn execute_modpack_archive_import_with(
     state: &AppState,
     provider: &dyn mm_core::providers::Provider,

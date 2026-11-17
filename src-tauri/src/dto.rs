@@ -1386,6 +1386,12 @@ pub struct ExportArchivePreviewDto {
     #[ts(type = "number")]
     pub skipped_count: usize,
     pub excluded: Vec<ExportArchiveExcludedDto>,
+    /// The paths the manifest records as included index files: what the
+    /// import will download. The write plan the user sees before confirming.
+    pub included_files: Vec<String>,
+    /// The paths the manifest records as included overrides: what the import
+    /// will copy out of the archive.
+    pub included_overrides: Vec<String>,
 }
 
 /// What the import confirm asks for: the archive, the new instance's folder

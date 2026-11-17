@@ -152,6 +152,11 @@ pub enum Exclusion {
     Duplicate,
     /// The name cannot be represented safely inside a zip.
     UnsafeName,
+    /// The name ends in `.part`, the suffix the atomic-write protocol
+    /// reserves for in-flight bytes: the installer refuses to extract any
+    /// member named like one (F-041), so packing it would produce an export
+    /// this application can never import.
+    ReservedPart,
 }
 
 impl Exclusion {
@@ -164,6 +169,7 @@ impl Exclusion {
             Self::Symlink => "symlink",
             Self::Duplicate => "duplicate",
             Self::UnsafeName => "unsafe_name",
+            Self::ReservedPart => "reserved_part",
         }
     }
 }
@@ -487,11 +493,22 @@ fn file_sha512(path: &Path) -> Result<String, ExportError> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(hasher
+    Ok(sha512_finalize(hasher))
+}
+
+/// The lowercase-hex sha512 of bytes already in memory.
+fn sha512_of(bytes: &[u8]) -> String {
+    let mut hasher = Sha512::new();
+    hasher.update(bytes);
+    sha512_finalize(hasher)
+}
+
+fn sha512_finalize(hasher: Sha512) -> String {
+    hasher
         .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
-        .collect())
+        .collect()
 }
 
 // --- override collection ---------------------------------------------------
@@ -713,6 +730,18 @@ fn walk_override_dir(
             });
             continue;
         }
+        // F-041/F-157: the `.part` suffix is the installer's own (the
+        // atomic-write protocol's in-flight name, matched case-insensitively
+        // by `extract_safely`). Packing such a file would write an archive
+        // our own importer refuses, so it is excluded — and recorded, like
+        // every other exclusion.
+        if child_rel.to_ascii_lowercase().ends_with(".part") {
+            excluded.push(ExcludedEntry {
+                path: child_rel,
+                reason: Exclusion::ReservedPart,
+            });
+            continue;
+        }
         let archive_path = match safe_member_name(&format!("overrides/{child_rel}")) {
             Ok(p) => p,
             Err(_) => {
@@ -762,9 +791,11 @@ pub const MANIFEST_SCHEMA: u64 = 1;
 /// the preview, and until now discarded those decisions at write time: an
 /// archive that left the app could not be audited. This member is the record.
 /// It carries the pack's identity, the digest of the lock the pack was built
-/// from, what is included (index files and overrides), and every skip and
-/// exclusion with its stable reason key — the same keys the UI translates.
-pub fn manifest_json(plan: &ExportPlan) -> Value {
+/// from, the digest of the index bytes it rides with (`indexSha512`, so a
+/// manifest cannot be transplanted into another archive), what is included
+/// (index files and overrides), and every skip and exclusion with its stable
+/// reason key — the same keys the UI translates.
+pub fn manifest_json(plan: &ExportPlan, index_sha512: &str) -> Value {
     let mut manifest = Map::new();
     manifest.insert("schemaVersion".to_string(), json!(MANIFEST_SCHEMA));
     manifest.insert("name".to_string(), json!(plan.name));
@@ -775,6 +806,7 @@ pub fn manifest_json(plan: &ExportPlan) -> Value {
     manifest.insert("gameVersion".to_string(), json!(plan.game_version));
     manifest.insert("loader".to_string(), json!(plan.loader));
     manifest.insert("lockSha512".to_string(), json!(plan.lock_sha512));
+    manifest.insert("indexSha512".to_string(), json!(index_sha512));
     manifest.insert(
         "included".to_string(),
         json!({
@@ -878,7 +910,9 @@ pub fn write_export_zip(plan: &ExportPlan, output: &Path) -> Result<ExportSummar
     // F-157: the audit record rides the same staged archive, so a manifest can
     // never exist for a pack that was not written: both members land in the
     // same temporary file and reach `output` together in the atomic rename.
-    let manifest = serde_json::to_vec_pretty(&manifest_json(plan))
+    // The manifest carries the digest of THESE index bytes, so the importer
+    // can re-check the manifest against the archive it sits in.
+    let manifest = serde_json::to_vec_pretty(&manifest_json(plan, &sha512_of(&index)))
         .map_err(|e| ExportError::Zip(e.to_string()))?;
     let (temp, temp_file) = unique_temp(output)?;
 

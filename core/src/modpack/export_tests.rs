@@ -28,6 +28,14 @@ fn hex128(ch: char) -> String {
     (0..128).map(|_| ch).collect()
 }
 
+fn sha512_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha512::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn file(name: &str, url: &str, size: u64) -> ProjectFile {
     ProjectFile {
         filename: name.to_string(),
@@ -1015,4 +1023,116 @@ async fn spec_f157_manifest_records_included_excluded_and_skipped_decisions() {
             && s["reason"] == "unsupported_provider"),
         "the skipped entry and its reason are recorded: {skipped:?}"
     );
+}
+
+/// F-157: the sha512 the importer can re-check the index against. A manifest
+/// without it can be transplanted into another archive that only renames the
+/// pack; with it, the manifest names exactly one index.
+#[test]
+fn spec_f157_manifest_carries_the_index_sha512() {
+    let dir = crate::test_tempdir();
+    let plan = ExportPlan {
+        name: "My Pack".to_string(),
+        version_id: "1.0.0".to_string(),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![export_mod("sodium.jar")],
+        lock_sha512: hex128('a'),
+        ..ExportPlan::default()
+    };
+    let output = dir.path().join("My Pack.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+
+    let bytes = std::fs::read(&output).expect("read");
+    let index = member_bytes(&bytes, "modrinth.index.json").expect("index member");
+    let manifest = member_bytes(&bytes, "export_manifest.json").expect("manifest member");
+    let v: serde_json::Value = serde_json::from_slice(&manifest).expect("manifest is JSON");
+    assert_eq!(v["indexSha512"], sha512_hex(&index));
+}
+
+// --- F-157: the `.part` suffix is the installer's, not the pack's -----------
+
+/// F-157: `extract_safely` refuses any member whose name ends in `.part`
+/// (the atomic-write protocol's reserved suffix), so an export that carries
+/// one is an export this very application can never import. The exporter
+/// excludes it and records the exclusion like every other decision.
+#[test]
+fn spec_f157_collect_overrides_excludes_part_suffix_files() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path();
+    write_file(instance, "config/options.toml", b"keep");
+    write_file(instance, "config/state.part", b"in-flight bytes");
+    // Case does not save it: the installer's check is case-insensitive. A
+    // nested path, because two names differing only by case are one file on
+    // Windows and the fixture must stay honest there.
+    write_file(
+        instance,
+        "config/nested/state.PART",
+        b"same rule, other case",
+    );
+
+    let (files, excluded) = collect_overrides(instance, &["config".to_string()]).expect("collect");
+    let kept: BTreeSet<&str> = files.iter().map(|f| f.archive_path.as_str()).collect();
+    assert_eq!(
+        kept,
+        BTreeSet::from(["overrides/config/options.toml"]),
+        "no .part member may be packed: {kept:?}"
+    );
+    let reasons: HashMap<&str, Exclusion> = excluded
+        .iter()
+        .map(|e| (e.path.as_str(), e.reason))
+        .collect();
+    assert_eq!(reasons["config/state.part"], Exclusion::ReservedPart);
+    assert_eq!(reasons["config/nested/state.PART"], Exclusion::ReservedPart);
+}
+
+/// F-157 + F-158: the round trip. An instance carrying a `.part` file must
+/// export into an archive this application can import again: the preview
+/// reads it, the plan accepts it, and the extraction — the step that refuses
+/// a `.part` member — succeeds. The manifest records the exclusion.
+#[tokio::test]
+async fn spec_f157_an_export_with_a_part_file_round_trips_through_the_importer() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path();
+    write_file(instance, "config/client.toml", b"key = true");
+    write_file(instance, "config/state.part", b"in-flight bytes");
+    write_lock(
+        &instance.join("instance.lock.json"),
+        &LockFile { entries: vec![] },
+    )
+    .expect("lock");
+
+    let provider = fake_provider(vec![], vec![]);
+    let plan = plan_export(&provider, instance, &settings(&["config"]))
+        .await
+        .expect("plan");
+    let output = dir.path().join("round.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+    let bytes = std::fs::read(&output).expect("read");
+
+    // The preview the import shows the user: it reads the manifest, which
+    // must record the `.part` exclusion.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("zip");
+    let preview = super::archive::preview_export_archive(&mut archive, &ArchiveLimits::default())
+        .expect("our own export is importable");
+    assert!(
+        preview
+            .excluded
+            .iter()
+            .any(|(path, reason)| path == "config/state.part" && reason == "reserved_part"),
+        "the .part exclusion is recorded: {:?}",
+        preview.excluded
+    );
+
+    // The same archive survives the installer's extraction, which is the
+    // step that refuses `.part` members (F-041).
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("zip");
+    let staging = dir.path().join("staging");
+    crate::safety::extract::extract_safely(
+        &mut archive,
+        &staging,
+        &ArchiveLimits::default(),
+        &mut |_| std::ops::ControlFlow::Continue(()),
+    )
+    .expect("an export this app wrote is one its installer can extract");
 }

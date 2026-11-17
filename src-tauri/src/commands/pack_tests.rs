@@ -1700,6 +1700,8 @@ fn export_archive_bytes(file_url: &str, jar: &[u8]) -> Vec<u8> {
         "gameVersion": "1.21.1",
         "loader": "fabric",
         "lockSha512": sha512_hex(b"the-lock"),
+        // F-158: the digest the gate re-checks against the index bytes.
+        "indexSha512": sha512_hex(index.as_bytes()),
         "included": {
             "files": [{ "path": "mods/packfile.jar", "size": jar.len() }],
             "overrides": [{ "path": "overrides/config/pack.toml", "size": 21 }],
@@ -1864,6 +1866,52 @@ fn spec_f158_execute_import_refuses_a_foreign_archive_and_creates_nothing() {
         .expect_err("a foreign archive must be refused");
 
         assert_eq!(err.code, ErrorCode::NotOurExport, "{err:?}");
+        assert!(!target.exists(), "the refusal created the target folder");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("reopen db");
+        assert_eq!(
+            mm_core::db::instances::list(&db).expect("list").len(),
+            0,
+            "the refusal registered an instance"
+        );
+    });
+}
+
+#[test]
+fn spec_f158_execute_import_refuses_a_swapped_archive_before_creating_anything() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let jar = jar_bytes();
+        // The preview reads one archive; a different archive sits at the same
+        // path by the time the user confirms. The digest token is what binds
+        // the confirm to the preview, and a mismatch is `packChanged` before
+        // anything is created.
+        let pack_path = dir.path().join("the-export.mrpack");
+        std::fs::write(
+            &pack_path,
+            export_archive_bytes("http://127.0.0.1:1/data/packfile.jar", &jar),
+        )
+        .expect("write the previewed archive");
+        let state = AppState::from_db(mm_core::db::open(&dir.path().join("t.db")).expect("db"));
+
+        let target = dir.path().join("Imported");
+        let err = execute_modpack_archive_import_with(
+            &state,
+            &mm_core::providers::ModrinthClient::with_base("http://127.0.0.1:1").expect("provider"),
+            crate::dto::ExportArchiveImportRequest {
+                pack_path: pack_path.to_string_lossy().into_owned(),
+                instance_root: target.to_string_lossy().into_owned(),
+                instance_name: "Imported".to_string(),
+                // The token from the preview of the archive that no longer
+                // sits at the path.
+                pack_sha512: sha512_hex(&[0u8; 32]),
+            },
+            recording_channel(&(Arc::new(Mutex::new(vec![])))),
+            true,
+        )
+        .await
+        .expect_err("a swapped archive must be refused");
+
+        assert_eq!(err.code, ErrorCode::PackChanged, "{err:?}");
         assert!(!target.exists(), "the refusal created the target folder");
         let db = mm_core::db::open(&dir.path().join("t.db")).expect("reopen db");
         assert_eq!(
