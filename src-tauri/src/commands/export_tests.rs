@@ -48,6 +48,7 @@ fn project(id: &str, title: &str, kind: &str) -> Project {
         versions: Vec::new(),
         downloads: 0,
         icon_url: None,
+        ..Project::default()
     }
 }
 

@@ -3,6 +3,8 @@
 use super::*;
 use crate::dto::ErrorCode;
 
+mod browse_tests;
+
 #[test]
 fn spec_f104_registry_errors_map_to_codes() {
     use mm_core::db::instances::InstanceRowError;

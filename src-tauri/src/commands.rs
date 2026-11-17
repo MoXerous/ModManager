@@ -11,9 +11,9 @@ use crate::dto::{
     DownloadHistoryQueryDto, ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto,
     InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
     LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
-    RemoveEntryDto, RemoveExecuteRequestDto, RemovePlanDto, RemovePreviewRequestDto,
-    RemoveResultDto, RemoveRunDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto,
-    UpdatePreviewDto, WarningDto,
+    ProjectVersionDto, RemoveEntryDto, RemoveExecuteRequestDto, RemovePlanDto,
+    RemovePreviewRequestDto, RemoveResultDto, RemoveRunDto, SearchPageDto, SearchQueryDto,
+    TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::db::Db;
@@ -253,6 +253,53 @@ pub(crate) async fn search_with(
             .collect(),
         total: page.total,
     })
+}
+
+/// F-164: a project's versions, for the inspector's list.
+///
+/// Read-only, and it asks the provider rather than the resolver: "Show
+/// versions" answers what exists, not what would install. `gameVersion` and
+/// `loader` narrow the list when the screen already knows the target; both are
+/// optional so a probe of the whole list is still possible.
+#[tauri::command]
+pub async fn list_project_versions(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+    project_id: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<ProjectVersionDto>, IpcError> {
+    let client = crate::providers::build(state.inner(), &provider)?;
+    versions_with(
+        client.as_ref(),
+        &project_id,
+        game_version.as_deref(),
+        loader.as_deref(),
+    )
+    .await
+}
+
+/// The body of `list_project_versions`: the provider is a parameter so a test
+/// can point a real client at wiremock.
+pub(crate) async fn versions_with(
+    provider: &dyn mm_core::providers::Provider,
+    project_id: &str,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+) -> Result<Vec<ProjectVersionDto>, IpcError> {
+    let id = project_id.trim();
+    if id.is_empty() {
+        return Err(IpcError::invalid_input(
+            "a project id is required to list versions",
+        ));
+    }
+    let game = game_version.map(str::trim).filter(|v| !v.is_empty());
+    let loader = loader.map(str::trim).filter(|v| !v.is_empty());
+    let versions = provider
+        .get_versions(id, game, loader.map(str::to_lowercase).as_deref())
+        .await
+        .map_err(|e| IpcError::from_provider(&e))?;
+    Ok(versions.iter().map(ProjectVersionDto::from_core).collect())
 }
 
 /// Resolve-only preview: never writes, never downloads (F-063, dry-run by

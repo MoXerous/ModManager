@@ -173,6 +173,7 @@ fn full_project(id: &str) -> Project {
         versions: vec!["v1".to_string()],
         downloads: 10,
         icon_url: None,
+        ..Project::default()
     }
 }
 
@@ -189,6 +190,7 @@ fn stub_project(id: &str) -> Project {
         versions: Vec::new(),
         downloads: 0,
         icon_url: None,
+        ..Project::default()
     }
 }
 

@@ -34,6 +34,7 @@ import type { PackEventDto } from '../bindings/PackEventDto';
 import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
 import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
 import type { PendingRestoreDto } from '../bindings/PendingRestoreDto';
+import type { ProjectVersionDto } from '../bindings/ProjectVersionDto';
 import type { RemovePlanDto } from '../bindings/RemovePlanDto';
 import type { RemoveRunDto } from '../bindings/RemoveRunDto';
 import type { RestoreEventDto } from '../bindings/RestoreEventDto';
@@ -90,6 +91,27 @@ export function searchProjects(query: SearchQuery): Promise<SearchPageDto> {
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     },
+  });
+}
+
+/**
+ * F-164. A project's versions, for the inspector's list.
+ *
+ * Read-only and provider-backed: this answers "what versions exist", never
+ * "what would a download do" (that is `buildInstallPlan`). The target narrows
+ * the list when the screen already knows it; an empty value sends no filter.
+ */
+export function listProjectVersions(
+  provider: string,
+  projectId: string,
+  gameVersion?: string,
+  loader?: string,
+): Promise<ProjectVersionDto[]> {
+  return invoke<ProjectVersionDto[]>('list_project_versions', {
+    provider,
+    projectId,
+    gameVersion: gameVersion?.trim() || null,
+    loader: loader?.trim() || null,
   });
 }
 

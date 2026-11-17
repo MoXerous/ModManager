@@ -186,8 +186,36 @@ struct ModDto {
     categories: Vec<CategoryDto>,
     #[serde(default)]
     latest_files_indexes: Vec<LatestFileIndexDto>,
+    /// The captured search rows carry the newest files; `default` covers a
+    /// response that does not.
+    #[serde(default)]
+    latest_files: Vec<LatestFileSummaryDto>,
+    #[serde(default)]
+    links: LinksDto,
+    /// The catalogue's follower number. `thumbsUpCount` is a different,
+    /// near-empty counter on this API and is not it.
+    #[serde(default)]
+    favorite_count: u64,
+    #[serde(default)]
+    date_created: String,
     download_count: u64,
     logo: Option<LogoDto>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LatestFileSummaryDto {
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    file_date: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LinksDto {
+    #[serde(default)]
+    website_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -346,6 +374,17 @@ fn map_project(project: ModDto) -> Project {
             versions.push(index.game_version.clone());
         }
     }
+    // The newest file is the version this row would install, so its label and
+    // date are the Version and Date columns.
+    let newest = project.latest_files.first();
+    let web_url = if project.links.website_url.trim().is_empty() {
+        Some(format!(
+            "https://www.curseforge.com/minecraft/mc-mods/{}",
+            project.slug
+        ))
+    } else {
+        Some(project.links.website_url.clone())
+    };
     Project {
         id: project.id.to_string(),
         slug: Some(project.slug),
@@ -366,10 +405,22 @@ fn map_project(project: ModDto) -> Project {
             .collect(),
         versions,
         downloads: project.download_count,
+        followers: project.favorite_count,
         icon_url: project
             .logo
             .map(|logo| logo.url)
             .filter(|url| !url.is_empty()),
+        published: newest
+            .map(|file| file.file_date.clone())
+            .filter(|date| !date.is_empty())
+            .unwrap_or(project.date_created),
+        // CurseForge states no client/server side; empty, never guessed.
+        client_side: String::new(),
+        server_side: String::new(),
+        latest_version: newest
+            .map(|file| file.display_name.clone())
+            .filter(|name| !name.is_empty()),
+        web_url,
     }
 }
 
@@ -686,6 +737,37 @@ mod tests {
             Some("test-key"),
             "every request must carry x-api-key"
         );
+    }
+
+    /// F-165: the 13-column table's Followers, Version, Date and URL columns
+    /// come from the CurseForge mod record. `favoriteCount` is the catalogue's
+    /// follower number (`thumbsUpCount` is a different, near-empty counter), and
+    /// the newest file's `displayName` is the version label the provider gives.
+    #[tokio::test]
+    async fn spec_f165_search_rows_carry_the_table_columns() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/mods/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH))
+            .mount(&server)
+            .await;
+
+        let page = test_client(&server).search(&query()).await.expect("search");
+        let hit = &page.hits[0];
+        assert_eq!(hit.followers, 54768);
+        assert_eq!(
+            hit.latest_version.as_deref(),
+            Some("jei_1.12.2-4.16.1.301.jar")
+        );
+        assert_eq!(hit.published, "2020-08-24T01:01:39.123Z");
+        assert_eq!(
+            hit.web_url.as_deref(),
+            Some("https://www.curseforge.com/minecraft/mc-mods/jei")
+        );
+        // CurseForge states no side and no project date in the search row;
+        // empty is the honest answer, never a guessed "both".
+        assert_eq!(hit.client_side, "");
+        assert_eq!(hit.server_side, "");
     }
 
     #[tokio::test]

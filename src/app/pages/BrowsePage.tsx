@@ -9,6 +9,8 @@ import { Combobox } from '@/components/ui/Combobox';
 import { Segmented } from '@/components/ui/Segmented';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
+import { Inspector } from '../browse/Inspector';
+import { ResultsTable } from '../browse/ResultsTable';
 import { InstallPlanDialog } from './InstallPlanDialog';
 import {
   curseforgeKeyStatus,
@@ -71,6 +73,10 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   // The project whose plan is open. The dialog builds and shows the plan; the
   // row itself only asks for it.
   const [planTarget, setPlanTarget] = useState<ProjectDto | null>(null);
+  // The row the inspector is showing (F-164). A row click opens it; it keeps
+  // the snapshot it was opened from, so a replaced result page does not blank
+  // the pane mid-read.
+  const [inspected, setInspected] = useState<ProjectDto | null>(null);
   const [instances, setInstances] = useState<InstanceSummaryDto[]>([]);
   const [target, setTarget] = useState('');
   // Advisory: a failed read must not stop a search, so this only gates the
@@ -132,6 +138,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
       setLoaded(0);
       setError(null);
       setMoreError(null);
+      setInspected(null);
       void curseforgeKeyStatus()
         .then(setKeyStatus)
         .catch(() => setKeyStatus(null));
@@ -149,6 +156,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
     setLoaded(0);
     setError(null);
     setMoreError(null);
+    setInspected(null);
   }, []);
 
   const targetInstance = instances.find((i) => i.id === target) ?? null;
@@ -186,6 +194,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         setHits([]);
         setTotal(null);
         setLoaded(0);
+        setInspected(null);
       } else {
         setLoadingMore(true);
       }
@@ -367,31 +376,32 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col">
       {header}
       <p className="px-5 pt-3 text-small text-muted-foreground">
         {t('browse.results', { count: total })}
       </p>
-      {hits.length === 0 ? (
-        <EmptyState
-          title={t('browse.noResultsTitle')}
-          body={t('browse.noResultsBody')}
-          className="px-5 pt-2"
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
-          {hits.map((p) => (
-            <Card
-              key={`${p.providerId}:${p.id}`}
-              project={p}
-              canInstall={canInstall}
-              onInstall={openPlan}
+      <div className="flex min-h-0 flex-1 px-5 pt-2">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {hits.length === 0 ? (
+            <EmptyState
+              title={t('browse.noResultsTitle')}
+              body={t('browse.noResultsBody')}
             />
-          ))}
+          ) : (
+            <ResultsTable rows={hits} onOpen={setInspected} />
+          )}
         </div>
-      )}
+        <Inspector
+          project={inspected}
+          gameVersion={gameVersion}
+          loader={loader}
+          canInstall={canInstall}
+          onInstall={openPlan}
+        />
+      </div>
       {loaded < total && (
-        <div className="flex flex-col items-start gap-1.5 px-5 pb-5">
+        <div className="flex flex-col items-start gap-1.5 px-5 py-3">
           {moreError && (
             <p role="alert" className="text-small text-status-issue">
               {t('browse.loadMoreFailed', { reason: t(`error.${moreError.code}`) })}
@@ -421,53 +431,5 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         }}
       />
     </div>
-  );
-}
-
-function Card({
-  project,
-  canInstall,
-  onInstall,
-}: {
-  project: ProjectDto;
-  canInstall: boolean;
-  onInstall: (project: ProjectDto) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <article className="flex flex-col gap-2 rounded-card border border-border bg-card p-3.5">
-      <div className="flex items-start gap-2.5">
-        {project.iconUrl ? (
-          <img
-            src={project.iconUrl}
-            alt=""
-            aria-hidden
-            className="size-9 shrink-0 rounded-chip object-cover"
-          />
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-body font-medium">{project.title}</p>
-          <p className="truncate text-caption text-muted-foreground">{project.author}</p>
-        </div>
-      </div>
-      <p className="line-clamp-2 text-small text-muted-foreground">{project.description}</p>
-      <div className="mt-auto flex items-center gap-2 pt-1">
-        <span className="rounded-chip border border-border px-[7px] py-px text-caption text-muted-foreground">
-          {t('browse.downloads', { count: project.downloads })}
-        </span>
-        <span className="rounded-chip border border-border px-[7px] py-px text-caption text-muted-foreground">
-          {project.projectType}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          className="ms-auto"
-          disabled={!canInstall}
-          onClick={() => onInstall(project)}
-        >
-          {t('install.start')}
-        </Button>
-      </div>
-    </article>
   );
 }

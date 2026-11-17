@@ -127,6 +127,7 @@ pub fn run() -> i32 {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::search_projects,
+            commands::list_project_versions,
             commands::build_install_plan,
             commands::scan_instance,
             commands::check_instance_updates,

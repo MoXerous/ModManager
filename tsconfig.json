@@ -10,6 +10,7 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
+    "types": ["node"],
     "paths": { "@/*": ["./src/*"] },
     "isolatedModules": true,
     "noEmit": true,

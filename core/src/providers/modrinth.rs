@@ -65,6 +65,20 @@ struct SearchHit {
     categories: Vec<String>,
     versions: Vec<String>,
     downloads: u64,
+    /// Search hits spell the count `follows`; the project endpoint spells the
+    /// same number `followers`.
+    #[serde(default)]
+    follows: u64,
+    #[serde(default)]
+    date_created: String,
+    #[serde(default)]
+    client_side: String,
+    #[serde(default)]
+    server_side: String,
+    /// The newest version's **id**; the label and date come from the bulk
+    /// versions call `fill_latest_versions` makes once per page.
+    #[serde(default)]
+    latest_version: Option<String>,
     icon_url: Option<String>,
 }
 
@@ -83,6 +97,16 @@ struct ProjectDto {
     project_type: String,
     description: String,
     downloads: u64,
+    /// The project endpoint's spelling; `follows` is accepted too so one shape
+    /// serves both endpoints.
+    #[serde(default, alias = "follows")]
+    followers: u64,
+    #[serde(default)]
+    date_created: String,
+    #[serde(default)]
+    client_side: String,
+    #[serde(default)]
+    server_side: String,
     categories: Vec<String>,
     versions: Vec<String>,
     icon_url: Option<String>,
@@ -136,6 +160,20 @@ struct VersionDto {
 
 fn listed_status() -> String {
     "listed".to_string()
+}
+
+/// The project's own page. Built from the documented URL shape
+/// (`modrinth.com/{type}/{slug}`), never from a field Modrinth might not send.
+fn project_page_url(project_type: &str, slug_or_id: &str) -> Option<String> {
+    let kind = if project_type.is_empty() {
+        "mod"
+    } else {
+        project_type
+    };
+    if slug_or_id.is_empty() {
+        return None;
+    }
+    Some(format!("https://modrinth.com/{kind}/{slug_or_id}"))
 }
 
 fn map_file(f: FileDto) -> ProjectFile {
@@ -315,6 +353,48 @@ impl ModrinthClient {
         }
         serde_json::to_string(&groups).unwrap_or_else(|_| "[]".to_string())
     }
+
+    /// F-165: swap each row's newest-version **id** for its label and date.
+    ///
+    /// One bulk call answers the whole page (`/versions?ids=[…]`), so a row
+    /// never costs a request of its own. Best effort by design: a failed lookup
+    /// leaves the project's own date in place and an empty version cell, which
+    /// is worth more than an empty screen.
+    async fn fill_latest_versions(&self, hits: &mut [Project]) {
+        let ids: Vec<String> = hits
+            .iter()
+            .filter_map(|h| h.latest_version.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let query = vec![(
+            "ids".to_string(),
+            serde_json::to_string(&ids).unwrap_or_default(),
+        )];
+        let filled = match self
+            .request(reqwest::Method::GET, "/versions", query, None)
+            .await
+        {
+            Ok(r) if r.status == 200 => Self::parse::<Vec<VersionDto>>(&r).ok(),
+            _ => None,
+        };
+        let mut labels: HashMap<String, (String, String)> = HashMap::new();
+        for v in filled.unwrap_or_default() {
+            labels.insert(v.id, (v.version_number, v.date_published));
+        }
+        for hit in hits.iter_mut() {
+            let Some(id) = hit.latest_version.take() else {
+                continue;
+            };
+            if let Some((label, date)) = labels.remove(&id) {
+                hit.latest_version = Some(label);
+                if !date.is_empty() {
+                    hit.published = date;
+                }
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -324,7 +404,9 @@ impl Provider for ModrinthClient {
     }
 
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, ProviderError> {
-        self.search_inner(q, true).await
+        let mut page = self.search_inner(q, true).await?;
+        self.fill_latest_versions(&mut page.hits).await;
+        Ok(page)
     }
 
     async fn get_project(&self, id_or_slug: &str) -> Result<Project, ProviderError> {
@@ -343,6 +425,12 @@ impl Provider for ModrinthClient {
             return Err(ProviderError::Api { status: r.status });
         }
         let p: ProjectDto = Self::parse(&r)?;
+        let project_type = if p.project_type.is_empty() {
+            "mod".to_string()
+        } else {
+            p.project_type
+        };
+        let web_url = project_page_url(&project_type, p.slug.as_deref().unwrap_or(p.id.as_str()));
         Ok(Project {
             id: p.id,
             slug: p.slug,
@@ -351,15 +439,19 @@ impl Provider for ModrinthClient {
             // The project endpoint carries a team id, not a username;
             // usernames come from search hits. Team resolution is deferred.
             author: String::new(),
-            project_type: if p.project_type.is_empty() {
-                "mod".to_string()
-            } else {
-                p.project_type
-            },
+            project_type,
             categories: p.categories,
             versions: p.versions,
             downloads: p.downloads,
+            followers: p.followers,
             icon_url: p.icon_url,
+            published: p.date_created,
+            client_side: p.client_side,
+            server_side: p.server_side,
+            // The project record lists version ids and no label; the details
+            // pane's versions list is what answers a project's versions.
+            latest_version: None,
+            web_url,
         })
     }
 
@@ -489,21 +581,38 @@ impl ModrinthClient {
             hits: resp
                 .hits
                 .into_iter()
-                .map(|h| Project {
-                    id: h.project_id,
-                    slug: h.slug,
-                    title: h.title,
-                    description: h.description,
-                    author: h.author,
-                    project_type: if h.project_type.is_empty() {
+                .map(|h| {
+                    let project_type = if h.project_type.is_empty() {
                         "mod".to_string()
                     } else {
                         h.project_type
-                    },
-                    categories: h.categories,
-                    versions: h.versions,
-                    downloads: h.downloads,
-                    icon_url: h.icon_url,
+                    };
+                    let web_url = project_page_url(
+                        &project_type,
+                        h.slug.as_deref().unwrap_or(h.project_id.as_str()),
+                    );
+                    Project {
+                        id: h.project_id,
+                        slug: h.slug,
+                        title: h.title,
+                        description: h.description,
+                        author: h.author,
+                        project_type,
+                        categories: h.categories,
+                        versions: h.versions,
+                        downloads: h.downloads,
+                        followers: h.follows,
+                        icon_url: h.icon_url,
+                        // Until `fill_latest_versions` says otherwise, the
+                        // project's own creation date is the honest date.
+                        published: h.date_created,
+                        client_side: h.client_side,
+                        server_side: h.server_side,
+                        // Held as the version *id* so the bulk call can swap in
+                        // the label; `None` when the hit carried no version.
+                        latest_version: h.latest_version,
+                        web_url,
+                    }
                 })
                 .collect(),
         })
@@ -537,6 +646,7 @@ mod tests {
         "project_type": "mod", "downloads": 100, "followers": 10,
         "categories": ["fabric"], "loaders": ["fabric"], "versions": ["oGwyXeEI"],
         "icon_url": null, "team": "t", "status": "approved",
+        "date_created": "2021-01-01T00:00:00Z",
         "license": {"id": "MIT"}, "gallery": []
     }"#;
 
@@ -589,6 +699,18 @@ mod tests {
         }
     }
 
+    /// Only the `/search` calls: a successful page also makes one bulk
+    /// versions call (F-165), which these retry tests do not count.
+    async fn search_calls(server: &MockServer) -> usize {
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .filter(|r| r.url.path() == "/search")
+            .count()
+    }
+
     #[tokio::test]
     async fn spec_f001_search_parses_hits_and_total() {
         let server = MockServer::start().await;
@@ -606,6 +728,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spec_f165_search_rows_carry_the_table_columns() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH_BODY))
+            .mount(&server)
+            .await;
+        // The Version and Date columns are the newest version's, and one bulk
+        // call answers them for the whole page: a row must never cost a request
+        // of its own (a 20-row page would be 21 round trips).
+        Mock::given(method("GET"))
+            .and(path("/versions"))
+            .and(query_param("ids", r#"["oGwyXeEI"]"#))
+            .respond_with(ResponseTemplate::new(200).set_body_string(VERSIONS_BODY))
+            .mount(&server)
+            .await;
+
+        let page = test_client(&server).search(&query()).await.expect("search");
+        let row = &page.hits[0];
+        assert_eq!(row.followers, 10);
+        assert_eq!(row.client_side, "required");
+        assert_eq!(row.server_side, "optional");
+        assert_eq!(row.categories, vec!["fabric", "technology"]);
+        // F-165: the resolved version label, not the version *id* the search
+        // hit carries.
+        assert_eq!(row.latest_version.as_deref(), Some("1.0.0"));
+        assert_eq!(row.published, "2024-01-01T00:00:00Z");
+        assert_eq!(
+            row.web_url.as_deref(),
+            Some("https://modrinth.com/mod/fabric-api")
+        );
+    }
+
+    /// The bulk call is an enrichment, not the search: a catalogue that
+    /// answers hits and then fails the versions call still has rows, and the
+    /// table shows the project's own date instead of a blank one.
+    #[tokio::test]
+    async fn spec_f165_a_failed_version_lookup_keeps_the_row() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH_BODY))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/versions"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let page = test_client(&server).search(&query()).await.expect("search");
+        let row = &page.hits[0];
+        assert_eq!(row.latest_version, None);
+        // `date_created` is still a real published date.
+        assert_eq!(row.published, "2021-01-01T00:00:00Z");
+        assert_eq!(row.followers, 10);
+    }
+
+    #[tokio::test]
     async fn spec_f002_project_maps_fields() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -620,6 +801,32 @@ mod tests {
         assert_eq!(p.id, "P7dR8mSH");
         assert_eq!(p.slug.as_deref(), Some("fabric-api"));
         assert_eq!(p.downloads, 100);
+    }
+
+    /// F-164: the details pane reads the one project record, so it must carry
+    /// the same columns the search row does.
+    #[tokio::test]
+    async fn spec_f164_project_record_carries_the_details_pane_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/project/fabric-api"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(PROJECT_BODY))
+            .mount(&server)
+            .await;
+        let p = test_client(&server)
+            .get_project("fabric-api")
+            .await
+            .expect("project");
+        // The project endpoint spells the count `followers`, search spells it
+        // `follows`: both are the same number.
+        assert_eq!(p.followers, 10);
+        assert_eq!(p.client_side, "required");
+        assert_eq!(p.server_side, "optional");
+        assert_eq!(p.published, "2021-01-01T00:00:00Z");
+        assert_eq!(
+            p.web_url.as_deref(),
+            Some("https://modrinth.com/mod/fabric-api")
+        );
     }
 
     #[tokio::test]
@@ -719,7 +926,9 @@ mod tests {
             Err(ProviderError::RateLimited { reset_seconds: 120 })
         ));
         assert!(t0.elapsed() < std::time::Duration::from_secs(10));
-        assert_eq!(server.received_requests().await.expect("count").len(), 1);
+        // `/search` only: a successful page also fires the one bulk versions
+        // call that fills the table's Version/Date columns (F-165).
+        assert_eq!(search_calls(&server).await, 1);
     }
 
     #[tokio::test]
@@ -738,7 +947,7 @@ mod tests {
             .await;
         let page = test_client(&server).search(&query()).await.expect("retry");
         assert_eq!(page.total, 3905);
-        assert_eq!(server.received_requests().await.expect("count").len(), 2);
+        assert_eq!(search_calls(&server).await, 2);
     }
 
     #[tokio::test]
@@ -772,7 +981,13 @@ mod tests {
         q.project_type = "plugin".to_string();
         let page = test_client(&server).search(&q).await.expect("fallback");
         assert_eq!(page.total, 3905);
-        let reqs = server.received_requests().await.expect("reqs");
+        let reqs: Vec<wiremock::Request> = server
+            .received_requests()
+            .await
+            .expect("reqs")
+            .into_iter()
+            .filter(|r| r.url.path() == "/search")
+            .collect();
         assert_eq!(reqs.len(), 2);
         // Second request carries project_type:mod, never plugin.
         let facets = reqs[1]
