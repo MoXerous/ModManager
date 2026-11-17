@@ -25,7 +25,7 @@ import {
 } from '../../lib/ipc';
 import { formatBytes } from '../../lib/format';
 import { type ProviderId, PROVIDERS, getGameTarget } from '../gameTarget';
-import { isForInstance, markStale, refreshed, type StalenessState } from '../instances/staleness';
+import { afterRescan, isForInstance, markStale, type StalenessState } from '../instances/staleness';
 import { InstanceBackup } from './InstanceBackup';
 import { InstanceExport } from './InstanceExport';
 import { RemoveDialog } from './RemoveDialog';
@@ -190,6 +190,9 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   // F-168: the watcher's hint. Advisory only — a missed event is a missed
   // hint, never a broken screen, so arming and subscribing ignore failures.
   const [staleness, setStaleness] = useState<StalenessState>(() => ({ stale: false }));
+  // F-168: the refresh's own failure. It must not replace the table (the rows
+  // on screen are still what was last read), so it renders next to the hint.
+  const [rescanError, setRescanError] = useState<IpcError | null>(null);
 
   // `any` and `unknown` are sentinels, not loaders: a provider can only filter
   // by a real one. The button stays disabled and the hint says why, rather
@@ -197,21 +200,37 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   const targetLoader = (loader ?? '').trim().toLowerCase();
   const targetVersion = (gameVersion ?? '').trim();
 
-  const load = useCallback(() => {
-    setError(null);
-    scanInstance(root, targetVersion, targetLoader)
-      .then((next) => {
-        setSnap(next);
-        // A rescan is the truth about what exists; keep only selections that
-        // still point at a file, so a removal cannot leave a ghost selected.
-        setSelected((prev) => {
-          const live = new Set(next.mods.map((m) => m.relPath));
-          const pruned = new Set([...prev].filter((p) => live.has(p)));
-          return pruned.size === prev.size ? prev : pruned;
+  /**
+   * F-168: the rescan. `markFresh` is the refresh button's intent: the hint
+   * is cleared only when the scan actually succeeded — a failed scan has not
+   * re-read the disk, so the hint keeps its grounds and the failure shows.
+   */
+  const load = useCallback(
+    (options?: { markFresh?: boolean }) => {
+      setError(null);
+      setRescanError(null);
+      scanInstance(root, targetVersion, targetLoader)
+        .then((next) => {
+          setSnap(next);
+          if (options?.markFresh) {
+            setStaleness((prev) => afterRescan(prev, true));
+          }
+          // A rescan is the truth about what exists; keep only selections that
+          // still point at a file, so a removal cannot leave a ghost selected.
+          setSelected((prev) => {
+            const live = new Set(next.mods.map((m) => m.relPath));
+            const pruned = new Set([...prev].filter((p) => live.has(p)));
+            return pruned.size === prev.size ? prev : pruned;
+          });
+        })
+        .catch((e) => {
+          const ipc = toIpcError(e);
+          setError(ipc);
+          setRescanError(ipc);
         });
-      })
-      .catch((e) => setError(toIpcError(e)));
-  }, [root, targetVersion, targetLoader]);
+    },
+    [root, targetVersion, targetLoader],
+  );
 
   useEffect(load, [load]);
 
@@ -363,16 +382,14 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
               {t('details.staleHint')}
             </span>
           )}
-          {/* F-168: the manual refresh — re-runs the scan and clears the
-              hint, because a scan that just ran cannot be stale. */}
+          {/* F-168: the manual refresh — the hint is cleared by the rescan's
+              success, not by the click, so a failed scan keeps the hint and
+              shows why next to it. */}
           <Button
             type="button"
             variant="outline"
             disabled={busy}
-            onClick={() => {
-              setStaleness(refreshed);
-              load();
-            }}
+            onClick={() => load({ markFresh: true })}
           >
             {t('details.actionRefresh')}
           </Button>
@@ -421,6 +438,12 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
           </Button>
         </div>
       </div>
+
+      {rescanError && (
+        <p role="alert" className="px-5 pt-2 text-small text-status-issue">
+          {t('details.rescanFailed', { reason: t(`error.${rescanError.code}`) })}
+        </p>
+      )}
 
       {/* The check is its own card, not one more button in the toggle row:
           it carries a provider choice and a result table, and mixing those

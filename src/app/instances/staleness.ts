@@ -4,7 +4,8 @@
  * The watcher signals per instance root; the screen decides what the signal
  * means. Three rules, kept pure because the component around them is DOM:
  * a signal for the open instance marks the content stale, a signal for any
- * other instance is ignored, and a manual refresh (a re-scan) clears it.
+ * other instance is ignored, and a manual refresh clears it only once the
+ * re-scan has succeeded.
  */
 
 /** Whether the event's root is the instance this screen is showing. */
@@ -26,7 +27,11 @@ export function markStale(_state: StalenessState): StalenessState {
   return { stale: true };
 }
 
-/** The manual refresh: the scan was re-run, so the hint has no grounds. */
-export function refreshed(_state: StalenessState): StalenessState {
-  return { stale: false };
+/**
+ * The rescan's verdict on the hint. Only a scan that succeeded may clear it:
+ * a failed scan has not re-read the disk, so the hint keeps its grounds and
+ * the failure is shown next to it.
+ */
+export function afterRescan(state: StalenessState, ok: boolean): StalenessState {
+  return ok ? { stale: false } : state;
 }

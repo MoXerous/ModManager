@@ -44,6 +44,8 @@ pub async fn unwatch_instance_content(state: tauri::State<'_, AppState>) -> Resu
 /// (the scan's only recursive walk, `disabled_mods/` included). When `mods/`
 /// does not exist yet (a fresh instance), the instance root itself is
 /// watched instead, so the first jar ever dropped in is still seen; the
+/// relevance rule then keeps everything outside the content folders
+/// (`logs/`, `config/`, `screenshots/`) from signalling staleness, and the
 /// suppression rule keeps the app's own writes quiet.
 pub(crate) fn start_content_watch(
     state: &AppState,
@@ -57,13 +59,15 @@ pub(crate) fn start_content_watch(
         vec![root.clone()]
     };
     let (tx, rx) = std::sync::mpsc::channel();
-    let handle = mm_core::watcher::watch(
-        watched,
-        mm_core::watcher::WatchConfig::default(),
-        state.own_writes().clone(),
-        tx,
-    )
-    .map_err(|e| IpcError::new(ErrorCode::Io, e))?;
+    let config = mm_core::watcher::WatchConfig {
+        // F-168: only the content folders may signal, whichever directory is
+        // watched. `disabled_mods/` lives inside `mods/`, but the prefix is
+        // stated so the rule holds even if the scan's shape ever widens.
+        relevant_under: vec![root.join("mods"), root.join("disabled_mods")],
+        ..mm_core::watcher::WatchConfig::default()
+    };
+    let handle = mm_core::watcher::watch(watched, config, state.own_writes().clone(), tx)
+        .map_err(|e| IpcError::new(ErrorCode::Io, e))?;
     let dto_root = root.to_string_lossy().to_string();
     // The bridge thread: one signal → one typed event. It ends when the
     // watcher ends, because the watcher owns the sender.

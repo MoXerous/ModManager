@@ -69,6 +69,14 @@ pub fn suppressed(
         .any(|(root, at)| path.starts_with(root) && now.duration_since(*at) <= window)
 }
 
+/// F-168: an event path is relevant when it sits under one of the content
+/// folders. Pure, so the rule is testable without an OS watcher. Empty
+/// prefixes admit everything, so a watcher without the instance shape keeps
+/// today's behaviour.
+pub fn relevant(path: &Path, prefixes: &[PathBuf]) -> bool {
+    prefixes.is_empty() || prefixes.iter().any(|prefix| path.starts_with(prefix))
+}
+
 /// The debounce decision for one watched folder set. Admit every event path;
 /// the burst is "due" once the quiet window has elapsed since the last one.
 #[derive(Debug)]
@@ -106,11 +114,17 @@ impl BurstWindow {
     }
 }
 
-/// The two durations a watcher runs with; tests shrink them.
-#[derive(Debug, Clone, Copy)]
+/// The durations and the relevance rule a watcher runs with; tests shrink
+/// them.
+#[derive(Debug, Clone)]
 pub struct WatchConfig {
     pub debounce: Duration,
     pub suppression: Duration,
+    /// F-168: an event path outside every prefix here is dropped before the
+    /// burst window. Empty admits everything — the rule only binds when the
+    /// watched set is wider than the content folders (a fresh instance whose
+    /// root is watched until `mods/` exists).
+    pub relevant_under: Vec<PathBuf>,
 }
 
 impl Default for WatchConfig {
@@ -118,6 +132,7 @@ impl Default for WatchConfig {
         Self {
             debounce: DEFAULT_DEBOUNCE,
             suppression: DEFAULT_SUPPRESSION,
+            relevant_under: Vec::new(),
         }
     }
 }
@@ -198,7 +213,13 @@ pub fn watch(
                         if is_content(&event.kind) {
                             let at = Instant::now();
                             for path in event.paths {
-                                burst.admit(at, path);
+                                // F-168: a path outside the content folders
+                                // (logs/, config/) says nothing about
+                                // staleness, even when the whole root is
+                                // watched.
+                                if relevant(&path, &config.relevant_under) {
+                                    burst.admit(at, path);
+                                }
                             }
                         }
                     }
@@ -244,6 +265,7 @@ mod tests {
         WatchConfig {
             debounce: Duration::from_millis(150),
             suppression: Duration::from_secs(5),
+            relevant_under: Vec::new(),
         }
     }
 
@@ -312,6 +334,61 @@ mod tests {
         ));
     }
 
+    /// F-168: the relevance rule is pure, so the folder logic is pinned
+    /// without an OS watcher.
+    #[test]
+    fn spec_f168_an_event_outside_the_content_folders_is_not_relevant() {
+        let root = PathBuf::from("/instance");
+        let prefixes = vec![root.join("mods"), root.join("disabled_mods")];
+        assert!(relevant(&root.join("mods").join("a.jar"), &prefixes));
+        assert!(relevant(
+            &root.join("disabled_mods").join("b.jar"),
+            &prefixes
+        ));
+        assert!(
+            !relevant(&root.join("logs").join("app.log"), &prefixes),
+            "a write to logs/ says nothing about staleness"
+        );
+        assert!(
+            relevant(&root.join("logs").join("app.log"), &[]),
+            "empty prefixes admit everything"
+        );
+    }
+
+    /// The fresh-instance shape: `mods/` does not exist, so the instance root
+    /// itself is watched. A write to `logs/` must stay quiet; the first
+    /// content folder event must still signal.
+    #[test]
+    fn spec_f168_a_write_outside_the_content_folders_does_not_signal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let logs = dir.path().join("logs");
+        std::fs::create_dir(&logs).expect("logs dir");
+        let cfg = WatchConfig {
+            debounce: Duration::from_millis(300),
+            suppression: Duration::from_secs(5),
+            relevant_under: vec![dir.path().join("mods"), dir.path().join("disabled_mods")],
+        };
+        let (tx, rx) = mpsc::channel();
+        let handle =
+            watch(vec![dir.path().to_path_buf()], cfg, new_own_writes(), tx).expect("watch");
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(logs.join("app.log"), b"log").expect("write a log");
+        let quiet = rx.recv_timeout(Duration::from_millis(1500));
+        assert!(
+            matches!(quiet, Err(mpsc::RecvTimeoutError::Timeout)),
+            "a write to logs/ must not signal staleness, got {quiet:?}"
+        );
+        // The mirror half: once the content folders exist, their events are
+        // exactly the ones that signal.
+        std::fs::create_dir(dir.path().join("mods")).expect("mods dir");
+        let signal = rx.recv_timeout(Duration::from_secs(5));
+        handle.stop();
+        assert!(
+            signal.is_ok(),
+            "an event under mods/ is staleness, got {signal:?}"
+        );
+    }
+
     /// The real watcher, against a real folder: a file the user (or any other
     /// process) drops into `mods` makes the content stale.
     #[test]
@@ -341,6 +418,7 @@ mod tests {
         let cfg = WatchConfig {
             debounce: Duration::from_millis(300),
             suppression: Duration::from_secs(5),
+            relevant_under: Vec::new(),
         };
         let handle =
             watch(vec![dir.path().to_path_buf()], cfg, new_own_writes(), tx).expect("watch");

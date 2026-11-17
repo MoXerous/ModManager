@@ -49,6 +49,13 @@ interface Props {
   /** A row the user clicked to inspect. */
   onOpen: (project: ProjectDto) => void;
   /**
+   * F-165: opens a project's page in the system browser. The old table's URL
+   * cell opened the page (`QDesktopServices.openUrl`); the webview cannot, so
+   * the request goes through the opener command. Omitted — no opener — and
+   * the cell falls back to read-only text.
+   */
+  onOpenUrl?: (project: ProjectDto) => void;
+  /**
    * F-166: asked when the visible window nears the end of the loaded rows.
    * The caller decides what to do (load the next page); the table only says
    * where the user is. Omitted — nothing left to load — and the call never
@@ -62,7 +69,7 @@ interface Props {
  * without reloading, with a per-row Select and a per-project favourite, and
  * only the visible rows mounted (the old table was a `QTableView`).
  */
-export function ResultsTable({ rows, onOpen, onNearEnd }: Props) {
+export function ResultsTable({ rows, onOpen, onOpenUrl, onNearEnd }: Props) {
   const { t } = useTranslation();
   const [sort, setSort] = useState<{ column: SortColumn; direction: SortDirection } | null>(null);
   const virtual = useVirtualRows(rows.length, ROW_HEIGHT, 8, HEADER_HEIGHT);
@@ -145,6 +152,7 @@ export function ResultsTable({ rows, onOpen, onNearEnd }: Props) {
             selected={selectedKeys.has(projectKey(project))}
             favourite={favouriteKeys.has(projectKey(project))}
             onOpen={onOpen}
+            onOpenUrl={onOpenUrl}
           />
         ))}
         <div style={{ height: virtual.bottomPad }} aria-hidden />
@@ -164,11 +172,13 @@ function Row({
   selected,
   favourite,
   onOpen,
+  onOpenUrl,
 }: {
   project: ProjectDto;
   selected: boolean;
   favourite: boolean;
   onOpen: (project: ProjectDto) => void;
+  onOpenUrl?: (project: ProjectDto) => void;
 }) {
   const { t } = useTranslation();
   const resolved = project.latestVersion !== null;
@@ -218,7 +228,14 @@ function Row({
         {date ?? ''}
       </div>
       <div role="gridcell" className="truncate px-2 text-muted-foreground">
-        {env ?? t('browse.env.unknown')}
+        {/* F-165: the technical token stays left-to-right inside an RTL
+            layout — `C:required / S:optional` reversed reads as its parts
+            swapped, which is not the same verdict. */}
+        {env ? (
+          <bdi dir="ltr">{env}</bdi>
+        ) : (
+          t('browse.env.unknown')
+        )}
       </div>
       <div role="gridcell" className="truncate px-2 text-end tabular-nums">
         {formatNumber(project.downloads)}
@@ -230,7 +247,25 @@ function Row({
         {project.categories.join(', ')}
       </div>
       <div role="gridcell" className="truncate px-2 text-caption text-muted-foreground">
-        {project.webUrl ?? ''}
+        {/* F-165: the old table opened the project page from this cell
+            (`QDesktopServices.openUrl`); a bare button keeps the row click
+            from also firing, and the opener command carries the URL. */}
+        {project.webUrl && onOpenUrl ? (
+          <button
+            type="button"
+            dir="ltr"
+            title={project.webUrl}
+            className="max-w-full truncate hover:text-foreground hover:underline"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenUrl(project);
+            }}
+          >
+            {project.webUrl}
+          </button>
+        ) : (
+          <span dir="ltr">{project.webUrl ?? ''}</span>
+        )}
       </div>
     </div>
   );

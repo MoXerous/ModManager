@@ -48,6 +48,18 @@ export class RequestGate {
   isCurrent(generation: number): boolean {
     return generation === this.current;
   }
+
+  /**
+   * F-166: end every request in flight without sending a new one.
+   *
+   * A reset that arrives without a request — a provider switch, a facet
+   * change, a cache hit — must still close the window: an older request that
+   * lands after the reset sees a current generation and would render over
+   * the new rows. Taking a new generation is the invalidation.
+   */
+  invalidate(): void {
+    this.current += 1;
+  }
 }
 
 /** One page's worth of state, as the screen keeps it. */

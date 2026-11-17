@@ -10,7 +10,7 @@ import { ErrorState } from '../../components/state';
 import { formatNumber } from '../../lib/format';
 import { listProjectVersions, toIpcError } from '../../lib/ipc';
 import { dateCell, envCell } from './columns';
-import { removeFavourite, removeSelected, useBrowseSelection } from './selectionStore';
+import { clearSelection, removeFavourite, removeSelected, useBrowseSelection } from './selectionStore';
 
 /** The inspector's three tabs, the old app's right-hand rail. */
 const TABS = ['details', 'selected', 'favourites'] as const;
@@ -203,9 +203,25 @@ function ProjectList({ kind }: { kind: 'selected' | 'favourites' }) {
     kind === 'selected' ? removeSelected(key) : removeFavourite(key);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <p className="text-small text-muted-foreground">
-        {t(`browse.inspector.${kind}Count`, { count: entries.length })}
-      </p>
+      {/* The old table's "Clear all selections": one action for the whole
+          list, next to the count. Only the Selected list has it — the
+          favourites are kept one by one on purpose. */}
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 text-small text-muted-foreground">
+          {t(`browse.inspector.${kind}Count`, { count: entries.length })}
+        </p>
+        {kind === 'selected' && entries.length > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => clearSelection()}
+            aria-label={t('browse.inspector.clearSelection')}
+          >
+            {t('browse.inspector.clearSelection')}
+          </Button>
+        )}
+      </div>
       {entries.length === 0 ? (
         <p className="text-small text-muted-foreground">{t(`browse.inspector.${kind}Empty`)}</p>
       ) : (

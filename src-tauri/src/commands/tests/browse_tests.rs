@@ -11,6 +11,8 @@ use mm_core::providers::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use super::super::project_page_url;
+
 fn project() -> Project {
     Project {
         id: "P7dR8mSH".to_string(),
@@ -50,6 +52,32 @@ fn spec_f165_project_dto_carries_the_table_columns() {
     // The columns that were already there keep their values.
     assert_eq!(dto.downloads, 100);
     assert_eq!(dto.provider_id, "modrinth");
+}
+
+/// F-165: the URL column opens the project's own page, and the opener command
+/// refuses everything that is not a catalogue page: non-https, unknown hosts,
+/// and non-URLs never reach the operating system.
+#[test]
+fn spec_f165_open_project_url_opens_only_catalogue_pages() {
+    for url in [
+        "https://modrinth.com/mod/fabric-api",
+        "https://www.curseforge.com/minecraft/mc-mods/jei",
+        "https://cdn.modrinth.com/icon.png",
+    ] {
+        assert!(
+            project_page_url(url).is_ok(),
+            "a provider page passes: {url}"
+        );
+    }
+    for url in [
+        "http://modrinth.com/mod/fabric-api",
+        "file://C:/Windows/System32/calc.exe",
+        "https://evil.example.com/mod/fabric-api",
+        "not a url at all",
+    ] {
+        let error = project_page_url(url).expect_err("a non-catalogue URL is refused");
+        assert_eq!(error.code, ErrorCode::InvalidInput, "refusal for {url}");
+    }
 }
 
 /// F-164: the versions list is its own small record — the download plan is a

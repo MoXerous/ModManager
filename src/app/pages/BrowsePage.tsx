@@ -22,6 +22,7 @@ import { InstallPlanDialog } from './InstallPlanDialog';
 import {
   curseforgeKeyStatus,
   listInstances,
+  openProjectUrl,
   searchProjects,
   toIpcError,
 } from '../../lib/ipc';
@@ -48,6 +49,12 @@ interface Props {
 
 /** One screenful. `offset` is a row count, so this is the page's stride. */
 const PAGE_SIZE = 20;
+
+/**
+ * F-166: the search's project type, stated on both doors — the wire and the
+ * cache key — so the two defaults can never drift apart.
+ */
+const PROJECT_TYPE = 'mod';
 
 /**
  * F-166: the page cache outlives this screen. The component state dies on
@@ -94,6 +101,9 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const [inspected, setInspected] = useState<ProjectDto | null>(null);
   const [instances, setInstances] = useState<InstanceSummaryDto[]>([]);
   const [target, setTarget] = useState('');
+  // F-165: the URL column's opener failure. The cell is one click among rows,
+  // so the error is a line, not a screen.
+  const [urlError, setUrlError] = useState<IpcError | null>(null);
   // Advisory: a failed read must not stop a search, so this only gates the
   // hint. The real refusal happens in the command and renders through
   // ErrorState.
@@ -151,6 +161,9 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const selectProvider = useCallback(
     (next: ProviderId) => {
       setGameTarget({ provider: next });
+      // F-166: the reset ends no request, so it ends them all: a page already
+      // in flight for the old provider must not render over the new state.
+      gateRef.current.invalidate();
       setHits([]);
       setTotal(null);
       setLoaded(0);
@@ -169,6 +182,9 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
    *  that the next install cannot honour, because the install reads the facet,
    *  not the row. */
   const resetResults = useCallback(() => {
+    // F-166: same as the provider switch — the in-flight answer is for a
+    // question the user just changed.
+    gateRef.current.invalidate();
     setHits([]);
     setTotal(null);
     setLoaded(0);
@@ -216,12 +232,18 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         provider,
         gameVersion: gameVersion.trim() || undefined,
         loader: loader.trim().toLowerCase() || undefined,
+        // F-166: the wire and the cache key state the same type, so a future
+        // modpack search cannot collide with a mod search.
+        projectType: PROJECT_TYPE,
       });
       if (!options?.refresh) {
         const cached = searchCache.get(key, offset);
         if (cached) {
           // A cache hit is synchronous: no spinner, no round trip. The same
-          // shape a fetch would have produced is applied at once.
+          // shape a fetch would have produced is applied at once. It is also
+          // a reset that sends no request, so the in-flight one ends here —
+          // its late answer must not land on top of the cached page.
+          gateRef.current.invalidate();
           if (offset === 0) {
             setHits(cached.hits);
             setInspected(null);
@@ -256,6 +278,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         // filter", and "Fabric" typed with a capital is still the fabric facet.
         gameVersion: gameVersion.trim() || undefined,
         loader: loader.trim().toLowerCase() || undefined,
+        projectType: PROJECT_TYPE,
         limit: PAGE_SIZE,
         offset,
       })
@@ -340,6 +363,16 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
    */
   const openPlan = useCallback((project: ProjectDto) => {
     setPlanTarget(project);
+  }, []);
+
+  /** F-165: the URL cell opens the project page through the opener command;
+   *  a refusal (unknown host, opener failure) is a line, not a dead click. */
+  const openProjectPage = useCallback((project: ProjectDto) => {
+    if (!project.webUrl) {
+      return;
+    }
+    setUrlError(null);
+    openProjectUrl(project.webUrl).catch((e) => setUrlError(toIpcError(e)));
   }, []);
 
   // A name, not a path: the list already shows where each instance is, and a
@@ -477,6 +510,11 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
       <p className="px-5 pt-3 text-small text-muted-foreground">
         {t('browse.results', { count: total })}
       </p>
+      {urlError && (
+        <p role="alert" className="px-5 text-small text-status-issue">
+          {t('browse.openUrlFailed', { reason: t(`error.${urlError.code}`) })}
+        </p>
+      )}
       <div className="flex min-h-0 flex-1 px-5 pt-2">
         <div className="flex min-w-0 flex-1 flex-col">
           {hits.length === 0 ? (
@@ -485,7 +523,12 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
               body={t('browse.noResultsBody')}
             />
           ) : (
-            <ResultsTable rows={hits} onOpen={setInspected} onNearEnd={onNearEnd} />
+            <ResultsTable
+              rows={hits}
+              onOpen={setInspected}
+              onOpenUrl={openProjectPage}
+              onNearEnd={onNearEnd}
+            />
           )}
         </div>
         <Inspector

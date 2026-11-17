@@ -75,6 +75,22 @@ describe('scroll-triggered paging (F-166)', () => {
     assert.equal(gate.isCurrent(second), false, 'the previous generation is now stale');
   });
 
+  it('spec_f166_a_cache_hit_or_a_reset_invalidates_the_in_flight_response', () => {
+    // The race: a page-2 request is in flight when the user switches provider
+    // (or edits a facet, or hits a cached page — every path that resets the
+    // rows without sending a request). The reset alone does not end the
+    // in-flight request, so it must be invalidated explicitly or its late
+    // answer renders over the new results.
+    const gate = new RequestGate();
+    const inFlight = gate.next();
+    gate.invalidate();
+    assert.equal(
+      gate.isCurrent(inFlight),
+      false,
+      'a response arriving after a reset must be dropped',
+    );
+  });
+
   it('spec_f166_returning_to_the_same_query_key_reads_the_cache', () => {
     const cache = new SearchCache();
     const key = queryKeyOf({
@@ -107,6 +123,29 @@ describe('scroll-triggered paging (F-166)', () => {
     assert.notEqual(
       queryKeyOf({ query: 'sodium', provider: 'modrinth' }),
       queryKeyOf({ query: 'sodium', provider: 'curseforge' }),
+    );
+  });
+
+  it('spec_f166_a_modpack_search_never_collides_with_a_mod_search', () => {
+    // F-166: the project type is part of the question. The page states it
+    // explicitly on both doors — the wire and this key — and this lock keeps
+    // the key's own default aligned with the wire's: an omitted type and an
+    // explicit "mod" must be one question, and "modpack" another.
+    const mod = queryKeyOf({
+      query: 'sodium',
+      provider: 'modrinth',
+      projectType: 'mod',
+    });
+    const modpack = queryKeyOf({
+      query: 'sodium',
+      provider: 'modrinth',
+      projectType: 'modpack',
+    });
+    assert.notEqual(mod, modpack, 'a future modpack search must not read the mod cache');
+    assert.equal(
+      queryKeyOf({ query: 'sodium', provider: 'modrinth' }),
+      mod,
+      'an omitted type is the mod search, never something else',
     );
   });
 

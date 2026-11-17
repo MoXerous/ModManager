@@ -97,6 +97,16 @@ export function searchProjects(query: SearchQuery): Promise<SearchPageDto> {
 }
 
 /**
+ * F-165: opens the project's own page in the system browser — the old app's
+ * `QDesktopServices.openUrl` on its URL column. The URL is checked in Rust
+ * (https, catalogue hosts only); a refusal or an opener failure is a typed
+ * error, never a silent no-op.
+ */
+export function openProjectUrl(url: string): Promise<void> {
+  return invoke<void>('open_project_url', { url });
+}
+
+/**
  * F-164. A project's versions, for the inspector's list.
  *
  * Read-only and provider-backed: this answers "what versions exist", never

@@ -904,6 +904,46 @@ pub async fn open_instance_folder(
     .map_err(IpcError::io)
 }
 
+/// F-165: opens a project's web page in the system browser — the old app's
+/// `QDesktopServices.openUrl` on its URL column.
+///
+/// Deliberately a command, not a plugin call from the webview: the URL is
+/// untrusted input (§5.2), so only the two catalogues' own pages pass, https
+/// only. A refused URL is our refusal, not a silent no-op; an opener failure
+/// is the typed `io` error.
+#[tauri::command]
+pub async fn open_project_url(app: tauri::AppHandle, url: String) -> Result<(), IpcError> {
+    let checked = project_page_url(&url)?;
+    tauri::async_runtime::spawn_blocking(move || app.opener().open_url(checked, None::<&str>))
+        .await
+        .map_err(|e| IpcError::internal(e.to_string()))?
+        .map_err(IpcError::io)
+}
+
+/// The URL check for [`open_project_url`]: https, and a host of one of the
+/// two catalogues (a subdomain of one counts; `www.` is one). Pure, so the
+/// rule is testable without opening a browser.
+pub(crate) fn project_page_url(raw: &str) -> Result<String, IpcError> {
+    let parsed = tauri::Url::parse(raw)
+        .map_err(|_| IpcError::invalid_input("the project page is not a valid URL"))?;
+    if parsed.scheme() != "https" {
+        return Err(IpcError::invalid_input(
+            "the project page must be an https URL",
+        ));
+    }
+    let host = parsed.host_str().unwrap_or("");
+    let known = host == "modrinth.com"
+        || host == "curseforge.com"
+        || host.ends_with(".modrinth.com")
+        || host.ends_with(".curseforge.com");
+    if !known {
+        return Err(IpcError::invalid_input(
+            "the project page is not a catalogue host",
+        ));
+    }
+    Ok(parsed.into())
+}
+
 /// F-063: runs a resolved install plan, streaming progress on a channel.
 ///
 /// The channel is the point. `download()` fires for every chunk; this is the

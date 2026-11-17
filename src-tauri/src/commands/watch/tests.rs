@@ -46,8 +46,11 @@ fn spec_f168_a_new_watch_replaces_the_previous_instance_watch() {
         "a replaced watcher is stopped and its channel closes"
     );
 
-    // The second is the live one, and it signals with the SECOND root.
-    std::fs::write(second.path().join("new.jar"), b"jar").expect("write");
+    // The second is the live one, and it signals with the SECOND root. The
+    // write goes into the content folder: a root-level file is not what the
+    // scan reads, so it is not staleness (F-168 relevance).
+    std::fs::create_dir(second.path().join("mods")).expect("mods dir");
+    std::fs::write(second.path().join("mods").join("new.jar"), b"jar").expect("write");
     rx2.recv_timeout(Duration::from_secs(5)).expect("signal");
 }
 
@@ -67,7 +70,8 @@ fn spec_f168_the_stale_signal_names_the_instance_root_only() {
     })
     .expect("watch");
     std::thread::sleep(Duration::from_millis(100));
-    std::fs::write(instance.path().join("moved.jar"), b"jar").expect("write");
+    std::fs::create_dir(instance.path().join("mods")).expect("mods dir");
+    std::fs::write(instance.path().join("mods").join("moved.jar"), b"jar").expect("write");
     // Wait for at least one emission.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -88,6 +92,35 @@ fn spec_f168_the_stale_signal_names_the_instance_root_only() {
             "the event names the watched root"
         );
     }
+}
+
+/// The fresh-instance shape: with no `mods/` folder the instance root itself
+/// is watched, and a write to `logs/` must not hint staleness; a content
+/// write must.
+#[test]
+fn spec_f168_an_event_from_logs_does_not_hint_when_the_root_is_watched() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = AppState::from_db(mm_core::db::open(&dir.path().join("t.db")).expect("db"));
+    let instance = tempfile::tempdir().expect("tempdir");
+    let logs = instance.path().join("logs");
+    std::fs::create_dir(&logs).expect("logs dir");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let root = instance.path().to_path_buf();
+    super::start_content_watch(&state, root, move |_| {
+        let _ = tx.send(());
+    })
+    .expect("watch");
+    std::thread::sleep(Duration::from_millis(100));
+    std::fs::write(logs.join("app.log"), b"log").expect("write a log");
+    let quiet = rx.recv_timeout(Duration::from_millis(1500));
+    assert!(
+        matches!(quiet, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+        "a write to logs/ must not hint staleness, got {quiet:?}"
+    );
+    // The first event under the content folders is still the hint.
+    std::fs::create_dir(instance.path().join("mods")).expect("mods dir");
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("a mods/ event is staleness");
 }
 
 /// Explicit teardown: `unwatch` stops the watcher and clears the slot.
