@@ -590,27 +590,29 @@
     },
     {
       "id": "F-157",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\modpack\\export.rs::write_export_zip (lines 812-836: INDEX_ENTRY + overrides only)",
-        "E:\\ModManager\\core\\src\\modpack\\export.rs::index_json (pack contents only, no exclusions)"
+        "core/src/modpack/export.rs::manifest_json",
+        "core/src/modpack/export.rs::collect_overrides",
+        "src-tauri/src/commands/pack.rs::write_modpack_export"
       ],
-      "test": null,
-      "note": "Verified the zip member list; the exclusion inventory never reaches the file.",
-      "gap": "No in-archive policy record: write_export_zip emits only modrinth.index.json plus overrides (no export_manifest.json); ExcludedEntry/SkipReason decisions are shown in the preview UI and then discarded, so the artefact cannot be machine-audited after it leaves the app.",
-      "review": "verified:confirmed"
+      "test": "spec_f157_an_export_with_a_part_file_round_trips_through_the_importer",
+      "note": "حاضر: biانُ التصدير (export_manifest.json) في الأرشيف يسجّل القرارات (indexSha512 · included · skipped · excluded بأسبابها) بلا مساراتٍ مطلقة، ويستثني أعضاء .part حتى يصبح التصديرُ قابلاً لإعادة الاستيراد (دائرةٌ مكتملةٌ مُختبَرة).",
+      "gap": null,
+      "review": "fixed-s8: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-158",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (lines 50-52: legacy trio only)",
-        "E:\\ModManager\\core\\src\\legacy\\import.rs::plan_import (old home only)"
+        "core/src/modpack/archive.rs::preview_export_archive_bounded",
+        "src-tauri/src/commands/pack.rs::execute_modpack_archive_import_with",
+        "src/app/pages/ModpackImport.tsx::PlanList"
       ],
-      "test": null,
-      "note": "plan_modpack_install is the pack installer, not the metadata-only export preview the spec row describes.",
-      "gap": "No archive import of the app's own export: the only import commands are the legacy old-home scan/plan/execute (F-181, reads app.sqlite3 + profile.json without extraction) and the .mrpack full install (F-068); there is no way to pick a profile-export zip, preview its manifest metadata-only, schema-check it, or create an instance from it.",
-      "review": "verified:confirmed"
+      "test": "spec_f158_preview_refuses_a_manifest_whose_index_digest_disagrees",
+      "note": "حاضر: معاينةٌ بيانات-فقط بلا استخراج ولا كتابة، وهويةٌ مُثبتة (indexSha512 + عدود included + loader مُتحقَّق)، وخطةٌ تُعرض قبل التنفيذ، ورفضٌ للروابط/المسارات الخارجة/Absolute/المكرَّرة والمخطّطات الأجنبية والبيان المتغيّر. **انحرافٌ مقصودٌ مسجَّل**: القديم كان ينشئ بروفايلَ بياناتٍ فقط بلا استخراج؛ الجديد يُنشئ نسخةً ويطبّق الحزمة كاملةً (أكثر فائدةً للمستخدم، وسلوكٌ مختلفٌ عن نصّ المواصفة).",
+      "gap": null,
+      "review": "fixed-s8: implemented, adversarially challenged (glm), findings fixed"
     },
     {
       "id": "F-162",

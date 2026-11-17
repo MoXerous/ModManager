@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 34 |
+| حاضر — مُراجَع | 36 |
 | حاضر — بتتبّعِ اختبار | 97 |
 | جزئي — مُراجَع | 8 |
-| مفقود — مُراجَع | 10 |
+| مفقود — مُراجَع | 8 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**18** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**16** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -42,8 +42,6 @@
 | **F-131** | **التمييز «موجود» عن «مؤهَّل»** | updates | جزئي — مُراجَع | The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere. |
 | **F-132** | كاش لكل تشغيل في المخطّط | updates | جزئي — مُراجَع | The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour. |
 | **F-145** | مركز العمليات (قراءة فقط) | operations | جزئي — مُراجَع | No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record. |
-| **F-157** | `export_manifest.json` | - | مفقود — مُراجَع | No in-archive policy record: write_export_zip emits only modrinth.index.json plus overrides (no export_manifest.json); ExcludedEntry/SkipReason decisions are shown in the preview UI and then discarded, so the artefact cannot be machine-audited after it leaves the app. |
-| **F-158** | **استيراد ميتا فقط بلا استخراج** | - | مفقود — مُراجَع | No archive import of the app's own export: the only import commands are the legacy old-home scan/plan/execute (F-181, reads app.sqlite3 + profile.json without extraction) and the .mrpack full install (F-068); there is no way to pick a profile-export zip, preview its manifest metadata-only, schema-check it, or create an instance from it. |
 
 ## التفاصيل
 
@@ -99,7 +97,7 @@
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
 |---|---|---|---|---|---|
-| **F-041** | رفض اجتياز المسار | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/path.rs · كود: core/src/safety/extract.rs، core/src/safety/path.rs |
+| **F-041** | رفض اجتياز المسار | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/path.rs · كود: core/src/modpack/export.rs، core/src/safety/extract.rs (+1) · اختبار (ذكر): core/src/modpack/export_tests.rs |
 | **F-042** | رفض المسار المطلق وأقراص المنصّة | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/downloader/client.rs، core/src/safety/extract.rs (+1) · كود: core/src/downloader/client.rs، core/src/safety/inspect.rs |
 | **F-043** | حدود الحجم/العدد/نسبة الضغط | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/inspect.rs · كود: core/src/safety/inspect.rs، core/src/safety/path.rs |
 | **F-044** | رفض الروابط الرمزية والملفات الخاصة | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/safety/extract.rs، core/src/safety/inspect.rs · كود: core/src/safety/extract.rs، core/src/safety/inspect.rs |
@@ -138,7 +136,7 @@
 | **F-069** | **معاينة غير مُعدِّلة** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) |
 | **F-070** | تحقق صارم من الفهرس (9 فئات حواجب) | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/tests.rs |
 | **F-071** | التحقق من هاش الملفات البعيدة | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/exec_tests.rs |
-| **F-072** | **26 رمز خطأ مسمّى** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) |
+| **F-072** | **26 رمز خطأ مسمّى** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/archive_tests.rs، core/src/modpack/exec_tests.rs (+1) · اختبار (ذكر): core/src/modpack/archive_tests.rs |
 | **F-073** | أولوية `overrides` < `client-overrides` | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/archive_tests.rs · كود: core/src/modpack/archive.rs، core/src/modpack/mrpack.rs |
 | **F-074** | تخطّي محتوى الخادم | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/archive_tests.rs · كود: core/src/modpack/archive.rs، core/src/modpack/mrpack.rs (+3) |
 | **F-075** | **نشر ذرّي بلا استبدال** | Keep | M3 | خارج النطاق — مُراجَع | core/src/modpack/exec.rs::PlanExecutor::apply (writes into a pre-existing registered instance in place) · core/src/modpack/exec.rs::apply_download (two-phase: `.part` → hash check → `commit_part` rename) · core/src/safety/atomic.rs::commit_part / ::write_part / ::write_atomic · docs/todo.md (design decision recorded: in-place apply, no backup, resume instead of rollback — explicitly divergent from the old atomic directory publish) |
@@ -260,8 +258,8 @@
 |---|---|---|---|---|---|
 | **F-155** | تصدير بروفايل zip | Keep | M2 | حاضر — مُراجَع | src/app/pages/InstanceExport.tsx::InstanceExport (preview -> plan review -> Write, every edit invalidates the plan) · src/lib/ipc.ts::planModpackExport / writeModpackExport / listExportFolders · src-tauri/src/commands/pack.rs::plan_modpack_export, write_modpack_export, list_export_folders · core/src/modpack/export.rs::collect_overrides / exclusion_reason / index_json / write_export_zip · core/src/modpack/export.rs::EXCLUDED_DIR_NAMES (13) / EXCLUDED_FILE_NAMES (6) / EXCLUDED_SUFFIXES (13) / SENSITIVE_NAME_TOKENS (12) · src/i18n/en.json::export.planTitle|export.action.plan|export.action.write|export.count.files|export.count.excluded|export.skip.*|export.excluded.* |
 | **F-156** | **قائمة الاستبعاد** | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/modpack/export_tests.rs · كود: core/src/modpack/export.rs · اختبار (ذكر): core/src/modpack/export_tests.rs |
-| **F-157** | `export_manifest.json` | Keep | M2 | مفقود — مُراجَع | E:\ModManager\core\src\modpack\export.rs::write_export_zip (lines 812-836: INDEX_ENTRY + overrides only) · E:\ModManager\core\src\modpack\export.rs::index_json (pack contents only, no exclusions) |
-| **F-158** | **استيراد ميتا فقط بلا استخراج** | Keep | M2 | مفقود — مُراجَع | E:\ModManager\src-tauri\src\lib.rs::generate_handler (lines 50-52: legacy trio only) · E:\ModManager\core\src\legacy\import.rs::plan_import (old home only) |
+| **F-157** | `export_manifest.json` | Keep | M2 | حاضر — مُراجَع | core/src/modpack/export.rs::manifest_json · core/src/modpack/export.rs::collect_overrides · src-tauri/src/commands/pack.rs::write_modpack_export |
+| **F-158** | **استيراد ميتا فقط بلا استخراج** | Keep | M2 | حاضر — مُراجَع | core/src/modpack/archive.rs::preview_export_archive_bounded · src-tauri/src/commands/pack.rs::execute_modpack_archive_import_with · src/app/pages/ModpackImport.tsx::PlanList |
 | **F-159** | تصدير قائمة المودات (MD/CSV/TXT) | Drop | — | مُستبعد (قرارُ المواصفة) | — |
 | **F-160** | استيراد/تصدير JSON | Drop | — | مُستبعد (قرارُ المواصفة) | — |
 | **F-161** | اختيار هدف عالم لقاعدة البيانات | Defer | later | مؤجَّل (قرارُ المواصفة) | — |
