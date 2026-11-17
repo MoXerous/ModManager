@@ -11,9 +11,9 @@ use crate::dto::{
     DownloadHistoryQueryDto, ErrorCode, InstallPlanDto, InstallRequest, InstallResultDto,
     InstanceSnapshotDto, InstanceSummaryDto, IpcError, LinkInstanceRequest, LocalFactDto,
     LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
-    RemoveEntryDto, RemoveExecuteRequestDto, RemovePlanDto, RemovePreviewRequestDto,
-    RemoveResultDto, RemoveRunDto, SearchPageDto, SearchQueryDto, TogglePlanDto, ToggleResultDto,
-    UpdatePreviewDto, WarningDto,
+    ProjectVersionDto, RemoveEntryDto, RemoveExecuteRequestDto, RemovePlanDto,
+    RemovePreviewRequestDto, RemoveResultDto, RemoveRunDto, SearchPageDto, SearchQueryDto,
+    TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::db::Db;
@@ -29,6 +29,9 @@ pub mod backup;
 
 /// F-181: the read-only preview of the old application's data.
 pub mod legacy;
+
+/// F-168: the content watcher bridge.
+pub mod watch;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
 use tauri_plugin_opener::OpenerExt;
 
@@ -255,6 +258,53 @@ pub(crate) async fn search_with(
     })
 }
 
+/// F-164: a project's versions, for the inspector's list.
+///
+/// Read-only, and it asks the provider rather than the resolver: "Show
+/// versions" answers what exists, not what would install. `gameVersion` and
+/// `loader` narrow the list when the screen already knows the target; both are
+/// optional so a probe of the whole list is still possible.
+#[tauri::command]
+pub async fn list_project_versions(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+    project_id: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<ProjectVersionDto>, IpcError> {
+    let client = crate::providers::build(state.inner(), &provider)?;
+    versions_with(
+        client.as_ref(),
+        &project_id,
+        game_version.as_deref(),
+        loader.as_deref(),
+    )
+    .await
+}
+
+/// The body of `list_project_versions`: the provider is a parameter so a test
+/// can point a real client at wiremock.
+pub(crate) async fn versions_with(
+    provider: &dyn mm_core::providers::Provider,
+    project_id: &str,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+) -> Result<Vec<ProjectVersionDto>, IpcError> {
+    let id = project_id.trim();
+    if id.is_empty() {
+        return Err(IpcError::invalid_input(
+            "a project id is required to list versions",
+        ));
+    }
+    let game = game_version.map(str::trim).filter(|v| !v.is_empty());
+    let loader = loader.map(str::trim).filter(|v| !v.is_empty());
+    let versions = provider
+        .get_versions(id, game, loader.map(str::to_lowercase).as_deref())
+        .await
+        .map_err(|e| IpcError::from_provider(&e))?;
+    Ok(versions.iter().map(ProjectVersionDto::from_core).collect())
+}
+
 /// Resolve-only preview: never writes, never downloads (F-063, dry-run by
 /// construction). `existing_files` feeds the F-065 info warning.
 #[tauri::command]
@@ -436,8 +486,13 @@ pub async fn preview_toggle(req: PreviewToggleDto) -> Result<TogglePlanDto, IpcE
 /// Rename-only mutation. The plan is **recomputed server-side** from the
 /// same inputs — a plan body from the webview is never trusted.
 #[tauri::command]
-pub async fn execute_toggle(req: PreviewToggleDto) -> Result<Vec<ToggleResultDto>, IpcError> {
+pub async fn execute_toggle(
+    state: tauri::State<'_, AppState>,
+    req: PreviewToggleDto,
+) -> Result<Vec<ToggleResultDto>, IpcError> {
     let mods_dir = mods_dir_of(&resolve_dir(&req.instance_root)?);
+    // F-168: a rename is the app's own write — the watcher must stay quiet.
+    state.note_own_write(&mods_dir);
     let files = relative_paths(&mods_dir, &req.files);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::toggle::{execute_toggle, preview_toggle};
@@ -497,10 +552,13 @@ pub async fn preview_remove_content(
 /// trusted; external/unknown entries refuse the whole run without the word.
 #[tauri::command]
 pub async fn execute_remove_content(
+    state: tauri::State<'_, AppState>,
     req: RemoveExecuteRequestDto,
 ) -> Result<RemoveRunDto, IpcError> {
     let root = resolve_dir(&req.instance_root)?;
     let mods_dir = mods_dir_of(&root);
+    // F-168: the removal moves files — the app's own write, not staleness.
+    state.note_own_write(&mods_dir);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::remove::{build_remove_preview, execute_remove, RemoveError};
         let candidates = remove_candidates(&root, &mods_dir, &req.files);
@@ -532,7 +590,7 @@ pub async fn execute_remove_content(
 /// Canonicalize a webview-supplied directory: missing or non-dir → typed
 /// error. Symlinks resolve through canonicalize, so the caller gets the
 /// real target.
-fn resolve_dir(raw: &str) -> Result<PathBuf, IpcError> {
+pub(crate) fn resolve_dir(raw: &str) -> Result<PathBuf, IpcError> {
     let p = PathBuf::from(raw.trim());
     if p.as_os_str().is_empty() {
         return Err(IpcError::invalid_input("empty path"));
@@ -846,6 +904,46 @@ pub async fn open_instance_folder(
     .map_err(IpcError::io)
 }
 
+/// F-165: opens a project's web page in the system browser — the old app's
+/// `QDesktopServices.openUrl` on its URL column.
+///
+/// Deliberately a command, not a plugin call from the webview: the URL is
+/// untrusted input (§5.2), so only the two catalogues' own pages pass, https
+/// only. A refused URL is our refusal, not a silent no-op; an opener failure
+/// is the typed `io` error.
+#[tauri::command]
+pub async fn open_project_url(app: tauri::AppHandle, url: String) -> Result<(), IpcError> {
+    let checked = project_page_url(&url)?;
+    tauri::async_runtime::spawn_blocking(move || app.opener().open_url(checked, None::<&str>))
+        .await
+        .map_err(|e| IpcError::internal(e.to_string()))?
+        .map_err(IpcError::io)
+}
+
+/// The URL check for [`open_project_url`]: https, and a host of one of the
+/// two catalogues (a subdomain of one counts; `www.` is one). Pure, so the
+/// rule is testable without opening a browser.
+pub(crate) fn project_page_url(raw: &str) -> Result<String, IpcError> {
+    let parsed = tauri::Url::parse(raw)
+        .map_err(|_| IpcError::invalid_input("the project page is not a valid URL"))?;
+    if parsed.scheme() != "https" {
+        return Err(IpcError::invalid_input(
+            "the project page must be an https URL",
+        ));
+    }
+    let host = parsed.host_str().unwrap_or("");
+    let known = host == "modrinth.com"
+        || host == "curseforge.com"
+        || host.ends_with(".modrinth.com")
+        || host.ends_with(".curseforge.com");
+    if !known {
+        return Err(IpcError::invalid_input(
+            "the project page is not a catalogue host",
+        ));
+    }
+    Ok(parsed.into())
+}
+
 /// F-063: runs a resolved install plan, streaming progress on a channel.
 ///
 /// The channel is the point. `download()` fires for every chunk; this is the
@@ -924,6 +1022,10 @@ pub async fn execute_install_with(
             "the instance root must be an absolute path",
         ));
     }
+    // F-168: from here on the batch writes into the instance. The watcher's
+    // suppression window starts now; it is refreshed when the batch settles,
+    // so the trailing writes are quiet too.
+    state.note_own_write(&root);
 
     // An install must be recordable. Checking the registry before the network
     // turns a folder that could never be recorded into one clear refusal;
@@ -1151,6 +1253,9 @@ pub async fn execute_install_with(
             game_versions: item.game_versions.clone(),
         })
         .collect();
+    // F-168: the batch has settled — refresh the suppression so the writes
+    // still landing do not mark the content stale, then read the record back.
+    state.note_own_write(&root);
     state
         .with_db(move |db| {
             mm_core::instances::record_install(db, &record_root, &records).map_err(|e| {

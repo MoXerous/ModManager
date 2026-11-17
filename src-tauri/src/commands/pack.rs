@@ -516,6 +516,8 @@ pub(super) async fn run_apply(
     // The registry gate comes before any staging work: a folder this app does
     // not own is never touched, not even to remove a stale tree inside it.
     let (root, instance_id) = registered_root(state, &req.instance_root).await?;
+    // F-168: the apply writes into the instance — the watcher stays quiet.
+    state.note_own_write(&root);
     let staging = root.join(STAGING_DIR);
 
     // Serialized before the first reset: two applies on one root share the

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
@@ -9,10 +9,20 @@ import { Combobox } from '@/components/ui/Combobox';
 import { Segmented } from '@/components/ui/Segmented';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
+import { Inspector } from '../browse/Inspector';
+import {
+  PAGING_DEBOUNCE_MS,
+  RequestGate,
+  SearchCache,
+  debounce,
+  queryKeyOf,
+} from '../browse/paging';
+import { ResultsTable } from '../browse/ResultsTable';
 import { InstallPlanDialog } from './InstallPlanDialog';
 import {
   curseforgeKeyStatus,
   listInstances,
+  openProjectUrl,
   searchProjects,
   toIpcError,
 } from '../../lib/ipc';
@@ -39,6 +49,20 @@ interface Props {
 
 /** One screenful. `offset` is a row count, so this is the page's stride. */
 const PAGE_SIZE = 20;
+
+/**
+ * F-166: the search's project type, stated on both doors — the wire and the
+ * cache key — so the two defaults can never drift apart.
+ */
+const PROJECT_TYPE = 'mod';
+
+/**
+ * F-166: the page cache outlives this screen. The component state dies on
+ * remount, but "returning to the same query key must not refetch from
+ * scratch" only holds if the answers stay somewhere; the selection store
+ * already set the precedent of a module singleton.
+ */
+const searchCache = SearchCache.shared;
 
 /**
  * Append a page without repeating a project.
@@ -71,12 +95,22 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   // The project whose plan is open. The dialog builds and shows the plan; the
   // row itself only asks for it.
   const [planTarget, setPlanTarget] = useState<ProjectDto | null>(null);
+  // The row the inspector is showing (F-164). A row click opens it; it keeps
+  // the snapshot it was opened from, so a replaced result page does not blank
+  // the pane mid-read.
+  const [inspected, setInspected] = useState<ProjectDto | null>(null);
   const [instances, setInstances] = useState<InstanceSummaryDto[]>([]);
   const [target, setTarget] = useState('');
+  // F-165: the URL column's opener failure. The cell is one click among rows,
+  // so the error is a line, not a screen.
+  const [urlError, setUrlError] = useState<IpcError | null>(null);
   // Advisory: a failed read must not stop a search, so this only gates the
   // hint. The real refusal happens in the command and renders through
   // ErrorState.
   const [keyStatus, setKeyStatus] = useState<CurseForgeKeyDto | null>(null);
+  // F-166: a response whose request was superseded must never render. Tauri
+  // `invoke()` has no AbortSignal, so the guard is a generation counter.
+  const gateRef = useRef(new RequestGate());
 
   useEffect(() => {
     void curseforgeKeyStatus()
@@ -127,11 +161,15 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   const selectProvider = useCallback(
     (next: ProviderId) => {
       setGameTarget({ provider: next });
+      // F-166: the reset ends no request, so it ends them all: a page already
+      // in flight for the old provider must not render over the new state.
+      gateRef.current.invalidate();
       setHits([]);
       setTotal(null);
       setLoaded(0);
       setError(null);
       setMoreError(null);
+      setInspected(null);
       void curseforgeKeyStatus()
         .then(setKeyStatus)
         .catch(() => setKeyStatus(null));
@@ -144,11 +182,15 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
    *  that the next install cannot honour, because the install reads the facet,
    *  not the row. */
   const resetResults = useCallback(() => {
+    // F-166: same as the provider switch — the in-flight answer is for a
+    // question the user just changed.
+    gateRef.current.invalidate();
     setHits([]);
     setTotal(null);
     setLoaded(0);
     setError(null);
     setMoreError(null);
+    setInspected(null);
   }, []);
 
   const targetInstance = instances.find((i) => i.id === target) ?? null;
@@ -174,23 +216,61 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
    * larger offset appends, and a failed append leaves the rows the user is
    * reading in place — losing page one because page two timed out is worse
    * than a short page one.
+   *
+   * F-166: the page is served from the cache when the same question was
+   * already answered (a manual refresh bypasses it), and the response is
+   * dropped unless its request is still the newest one.
    */
   const runSearch = useCallback(
-    (offset: number) => {
+    (offset: number, options?: { refresh?: boolean }) => {
       const text = query.trim();
       if (text.length === 0) {
         return;
+      }
+      const key = queryKeyOf({
+        query: text,
+        provider,
+        gameVersion: gameVersion.trim() || undefined,
+        loader: loader.trim().toLowerCase() || undefined,
+        // F-166: the wire and the cache key state the same type, so a future
+        // modpack search cannot collide with a mod search.
+        projectType: PROJECT_TYPE,
+      });
+      if (!options?.refresh) {
+        const cached = searchCache.get(key, offset);
+        if (cached) {
+          // A cache hit is synchronous: no spinner, no round trip. The same
+          // shape a fetch would have produced is applied at once. It is also
+          // a reset that sends no request, so the in-flight one ends here —
+          // its late answer must not land on top of the cached page.
+          gateRef.current.invalidate();
+          if (offset === 0) {
+            setHits(cached.hits);
+            setInspected(null);
+          } else {
+            setHits((prev) => appendUnique(prev, cached.hits));
+          }
+          setTotal(cached.total);
+          setLoaded(cached.loaded);
+          setError(null);
+          setMoreError(null);
+          setSearching(false);
+          setLoadingMore(false);
+          return;
+        }
       }
       if (offset === 0) {
         setSearching(true);
         setHits([]);
         setTotal(null);
         setLoaded(0);
+        setInspected(null);
       } else {
         setLoadingMore(true);
       }
       setError(null);
       setMoreError(null);
+      const generation = gateRef.current.next();
       searchProjects({
         query: text,
         provider,
@@ -198,16 +278,30 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         // filter", and "Fabric" typed with a capital is still the fabric facet.
         gameVersion: gameVersion.trim() || undefined,
         loader: loader.trim().toLowerCase() || undefined,
+        projectType: PROJECT_TYPE,
         limit: PAGE_SIZE,
         offset,
       })
         .then((page) => {
+          // F-166: a superseded request must never render. Replacing this
+          // check with a set would put a late answer to the old question on
+          // top of the new one.
+          if (!gateRef.current.isCurrent(generation)) {
+            return;
+          }
           // A catalogue that says "more" and returns nothing would leave a
           // button whose only possible result is another empty page. The
           // requested offset is then the honest end of the list.
           const exhausted = page.hits.length === 0;
-          setTotal(exhausted ? offset : page.total);
-          setLoaded(offset + page.hits.length);
+          const answeredTotal = exhausted ? offset : page.total;
+          const answeredLoaded = offset + page.hits.length;
+          searchCache.put(key, offset, {
+            hits: page.hits,
+            total: answeredTotal,
+            loaded: answeredLoaded,
+          });
+          setTotal(answeredTotal);
+          setLoaded(answeredLoaded);
           setHits((prev) => (offset === 0 ? page.hits : appendUnique(prev, page.hits)));
         })
         .catch((e) => {
@@ -232,11 +326,34 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
 
   const search = useCallback(() => runSearch(0), [runSearch]);
 
+  /**
+   * F-166: the manual refresh. It bypasses the cache and throws the old
+   * answers away, so the next search of the same question is a real fetch.
+   */
+  const refreshSearch = useCallback(() => {
+    searchCache.clear();
+    runSearch(0, { refresh: true });
+  }, [runSearch]);
+
   const loadMore = useCallback(() => {
     if (!searching && !loadingMore) {
       runSearch(loaded);
     }
   }, [loaded, loadingMore, runSearch, searching]);
+
+  // F-166: the scroll trigger is debounced once, outside the render: the
+  // table calls it on every scroll frame, and only after 120 ms of quiet
+  // does a request actually start. A ref keeps the wrapper calling the
+  // current `loadMore` without rebuilding the debounce mid-scroll.
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => {
+    loadMoreRef.current = loadMore;
+  }, [loadMore]);
+  const onNearEnd = useMemo(
+    () => debounce(() => loadMoreRef.current(), PAGING_DEBOUNCE_MS),
+    [],
+  );
+  useEffect(() => () => onNearEnd.cancel(), [onNearEnd]);
 
   /**
    * Opening the review is the only thing a click does: `execute_install` is
@@ -246,6 +363,16 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
    */
   const openPlan = useCallback((project: ProjectDto) => {
     setPlanTarget(project);
+  }, []);
+
+  /** F-165: the URL cell opens the project page through the opener command;
+   *  a refusal (unknown host, opener failure) is a line, not a dead click. */
+  const openProjectPage = useCallback((project: ProjectDto) => {
+    if (!project.webUrl) {
+      return;
+    }
+    setUrlError(null);
+    openProjectUrl(project.webUrl).catch((e) => setUrlError(toIpcError(e)));
   }, []);
 
   // A name, not a path: the list already shows where each instance is, and a
@@ -268,6 +395,17 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         />
         <Button type="button" onClick={search} disabled={searching}>
           {t('browse.actionSearch')}
+        </Button>
+        {/* F-166: the manual refresh — it invalidates the cache, so a repeat
+            of the same question is a real fetch again. */}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={refreshSearch}
+          disabled={searching}
+          aria-label={t('browse.actionRefresh')}
+        >
+          {t('browse.actionRefresh')}
         </Button>
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted-foreground">
@@ -367,31 +505,42 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col">
       {header}
       <p className="px-5 pt-3 text-small text-muted-foreground">
         {t('browse.results', { count: total })}
       </p>
-      {hits.length === 0 ? (
-        <EmptyState
-          title={t('browse.noResultsTitle')}
-          body={t('browse.noResultsBody')}
-          className="px-5 pt-2"
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
-          {hits.map((p) => (
-            <Card
-              key={`${p.providerId}:${p.id}`}
-              project={p}
-              canInstall={canInstall}
-              onInstall={openPlan}
-            />
-          ))}
-        </div>
+      {urlError && (
+        <p role="alert" className="px-5 text-small text-status-issue">
+          {t('browse.openUrlFailed', { reason: t(`error.${urlError.code}`) })}
+        </p>
       )}
+      <div className="flex min-h-0 flex-1 px-5 pt-2">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {hits.length === 0 ? (
+            <EmptyState
+              title={t('browse.noResultsTitle')}
+              body={t('browse.noResultsBody')}
+            />
+          ) : (
+            <ResultsTable
+              rows={hits}
+              onOpen={setInspected}
+              onOpenUrl={openProjectPage}
+              onNearEnd={onNearEnd}
+            />
+          )}
+        </div>
+        <Inspector
+          project={inspected}
+          gameVersion={gameVersion}
+          loader={loader}
+          canInstall={canInstall}
+          onInstall={openPlan}
+        />
+      </div>
       {loaded < total && (
-        <div className="flex flex-col items-start gap-1.5 px-5 pb-5">
+        <div className="flex flex-col items-start gap-1.5 px-5 py-3">
           {moreError && (
             <p role="alert" className="text-small text-status-issue">
               {t('browse.loadMoreFailed', { reason: t(`error.${moreError.code}`) })}
@@ -421,53 +570,5 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         }}
       />
     </div>
-  );
-}
-
-function Card({
-  project,
-  canInstall,
-  onInstall,
-}: {
-  project: ProjectDto;
-  canInstall: boolean;
-  onInstall: (project: ProjectDto) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <article className="flex flex-col gap-2 rounded-card border border-border bg-card p-3.5">
-      <div className="flex items-start gap-2.5">
-        {project.iconUrl ? (
-          <img
-            src={project.iconUrl}
-            alt=""
-            aria-hidden
-            className="size-9 shrink-0 rounded-chip object-cover"
-          />
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-body font-medium">{project.title}</p>
-          <p className="truncate text-caption text-muted-foreground">{project.author}</p>
-        </div>
-      </div>
-      <p className="line-clamp-2 text-small text-muted-foreground">{project.description}</p>
-      <div className="mt-auto flex items-center gap-2 pt-1">
-        <span className="rounded-chip border border-border px-[7px] py-px text-caption text-muted-foreground">
-          {t('browse.downloads', { count: project.downloads })}
-        </span>
-        <span className="rounded-chip border border-border px-[7px] py-px text-caption text-muted-foreground">
-          {project.projectType}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          className="ms-auto"
-          disabled={!canInstall}
-          onClick={() => onInstall(project)}
-        >
-          {t('install.start')}
-        </Button>
-      </div>
-    </article>
   );
 }

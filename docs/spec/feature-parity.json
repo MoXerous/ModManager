@@ -629,52 +629,57 @@
     },
     {
       "id": "F-164",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src\\app\\pages\\BrowsePage.tsx::BrowsePage",
-        "E:\\ModManager\\src\\lib\\ipc.ts::searchProjects (the only browse call besides key status)"
+        "src/app/browse/Inspector.tsx",
+        "src-tauri/src/commands.rs::list_project_versions",
+        "src/lib/ipc.ts::listProjectVersions"
       ],
-      "test": null,
-      "note": "Grep for Inspector/ShowVersions/versions in src found nothing on the browse side.",
-      "gap": "No inspector: BrowsePage has search + facets + install plan dialog only; no project-details pane, no versions list or 'Show versions' action, no Selected/Favorites tabs, no context menu; clicking a card goes straight to the plan dialog.",
-      "review": "verified:confirmed"
+      "test": "spec_f164_inspector_shows_details_and_versions_from_the_provider",
+      "note": "حاضر: مفتّشٌ بلوحةِ تفاصيل وقائمةِ إصداراتٍ وزر «Show versions» وتبويبا Selected/Favourites مع إزالةٍ لكل صفٍّ وزر «Clear all selections». انحرافاتٌ مسجَّلة: الاختيارُ والمفضّلةُ جلسةٌ فقط (القديمُ يخزّنهما)، ونصُّ الحالة/Icons من غنى المزوّد لا من حكمِ المُحلِّل.",
+      "gap": null,
+      "review": "fixed-s7: implemented, adversarially challenged (glm), seven findings fixed"
     },
     {
       "id": "F-165",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\dto.rs::ProjectDto (lines 231-243: 9 fields)",
-        "E:\\ModManager\\src\\app\\pages\\BrowsePage.tsx::Card grid",
-        "grep 'Virtualizer|useVirtualizer|virtual' in src → no matches"
+        "src/app/browse/ResultsTable.tsx",
+        "src/app/browse/columns.ts",
+        "src/app/browse/useVirtualRows.ts",
+        "core/src/providers/mod.rs::Project"
       ],
-      "test": null,
-      "note": "Confirmed the DTO cannot rebuild the old columns without extension.",
-      "gap": "No 13-column table: results are a responsive card grid from the 9-field ProjectDto (id, slug, title, description, author, projectType, downloads, iconUrl, providerId); no column sorting, no per-row select/favourite checkboxes, no virtualiser (grep for Virtualizer/useVirtualizer in src returns nothing), and the wire DTO lacks followers, categories, published date, environment and resolved version.",
-      "review": "verified:confirmed"
+      "test": "spec_f165_the_window_starts_under_the_sticky_header",
+      "note": "حاضر: الجدولُ ذو الأعمدةِ الـ13 بالترتيب القديم، قابلٌ للفرزِ محليًّا، بتحديدٍ وتفضيلٍ لكل صفٍّ ومُصطنعٍ افتراضيٍّ محليٍّ (topInset مُختبَر)، مع إثراءِ صفحةٍ بطلبِ /versions واحدٍ (لا N+1) وإḋاعةِ صفٍّ عند فشلِ الإثراء. عمودُ URL يفتح صفحةَ الكتالوج عبر أمرِ Rust مُصنَّف (https + مضيفا Modrinth/CurseForge فقط). انحرافات: صيغةُ Env C:?/S:? والفرزُ غيرُ حسّاسٍ لحالةِ الأحرف، والاختيارُ جلسةٌ فقط، والبحثُ مثبَّتٌ على project_type=mod.",
+      "gap": null,
+      "review": "fixed-s7: implemented, adversarially challenged (glm), seven findings fixed"
     },
     {
       "id": "F-166",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src\\app\\pages\\BrowsePage.tsx::loadMore (line 235)",
-        "grep 'loadMore|IntersectionObserver|scroll|setTimeout|debounce' in BrowsePage.tsx → 4 hits, none a timer or observer"
+        "src/app/browse/paging.ts",
+        "src/app/pages/BrowsePage.tsx",
+        "src/app/browse/selectionStore.ts"
       ],
-      "test": null,
-      "note": "Offset paging with dedupe is careful, but the scroll-driven trigger and timer are absent.",
-      "gap": "Paging is click-driven only: explicit Load more button (BrowsePage.tsx:400), no IntersectionObserver/scroll listener, no 120ms debounce/coalescing timer (grep for setTimeout/debounce in the page finds none), no TanStack Query cache, and no request cancellation — only busy flags stop a second click while a superseded first-page request runs on.",
-      "review": "verified:confirmed"
+      "test": "spec_f166_a_cache_hit_or_a_reset_invalidates_the_in_flight_response",
+      "note": "حاضر: تحميلٌ تلقائيٌّ قربَ نهاية القائمة بـdebounce 120ms، وحمايةُ الأجيال (invalidate على كلِّ reset/cache-hit فلا ردٌّ قديمٌ يُرسم فوق الجديد)، وكاشٌّ محليٌّ بمفتاحٍ يشمل projectType، وزرُ Refresh يُبطل كلَّ الطبقات، وزرُ Load more احتياطيٌّ. انحراف: الكاشُ في الذاكرة فقط (لا إصرار)، لأن TanStack Query رُفض بقرارٍ موثَّق بفحصِ context7.",
+      "gap": null,
+      "review": "fixed-s7: implemented, adversarially challenged (glm), seven findings fixed"
     },
     {
       "id": "F-168",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "grep 'Refresh|refresh|stale|watch' in InstanceDetails.tsx/InstancesPage.tsx → no matches",
-        "grep 'notify' in Cargo.lock → no matches"
+        "core/src/watcher.rs",
+        "src-tauri/src/commands/watch.rs",
+        "src/app/lib/staleness.ts",
+        "src/app/pages/InstanceDetails.tsx"
       ],
-      "test": null,
-      "note": "The old mark-dirty-and-tell behaviour has no counterpart, as reviewed.",
-      "gap": "No filesystem watcher and no staleness surface at all: the notify crate is not in Cargo.lock, InstanceDetails calls scanInstance only on mount and after mutations, there is no Refresh action on Installed Content or the instances list, and no 'content may be stale' hint.",
-      "review": "verified:confirmed"
+      "test": "spec_f168_an_event_outside_the_content_folders_does_not_signal",
+      "note": "حاضر: مراقبُ `notify 8.2.0` (فُحصَ بـcontext7: الإصدار 8.2.0، رخصة MIT/Apache-2.0، نشط) مع debounce 200ms وتصفيةِ الأحداث إلى mods/ وdisabled_mods/ حتى لو رُوقب الجذر، وكبتِ كتاباتِ التطبيق، وتفكيكٍ عند تغييرِ النسخة/الخروج، وتنبيهٍ «قد يكون المحتوى قديمًا» يُمسَحُ فقط بعد فحصٍ ناجح. انحرافٌ مسجَّل: فشلُ إنشاءِ المراقب صامتٌ (التنبيه إرشاديٌّ بالتصميم والشاشةُ لا تنكسر بغيابه).",
+      "gap": null,
+      "review": "fixed-s7: implemented, adversarially challenged (glm), seven findings fixed"
     },
     {
       "id": "F-169",

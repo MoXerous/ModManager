@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 import type { AppInfo } from '../bindings/AppInfo';
 import type { AppPathsDto } from '../bindings/AppPathsDto';
@@ -7,6 +8,7 @@ import type { BackupListDto } from '../bindings/BackupListDto';
 import type { BackupRequest } from '../bindings/BackupRequest';
 import type { BackupResultDto } from '../bindings/BackupResultDto';
 import type { CheckUpdatesRequest } from '../bindings/CheckUpdatesRequest';
+import type { ContentStaleDto } from '../bindings/ContentStaleDto';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
 import type { DownloadHistoryEntryDto } from '../bindings/DownloadHistoryEntryDto';
@@ -34,6 +36,7 @@ import type { PackEventDto } from '../bindings/PackEventDto';
 import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
 import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
 import type { PendingRestoreDto } from '../bindings/PendingRestoreDto';
+import type { ProjectVersionDto } from '../bindings/ProjectVersionDto';
 import type { RemovePlanDto } from '../bindings/RemovePlanDto';
 import type { RemoveRunDto } from '../bindings/RemoveRunDto';
 import type { RestoreEventDto } from '../bindings/RestoreEventDto';
@@ -93,6 +96,37 @@ export function searchProjects(query: SearchQuery): Promise<SearchPageDto> {
   });
 }
 
+/**
+ * F-165: opens the project's own page in the system browser — the old app's
+ * `QDesktopServices.openUrl` on its URL column. The URL is checked in Rust
+ * (https, catalogue hosts only); a refusal or an opener failure is a typed
+ * error, never a silent no-op.
+ */
+export function openProjectUrl(url: string): Promise<void> {
+  return invoke<void>('open_project_url', { url });
+}
+
+/**
+ * F-164. A project's versions, for the inspector's list.
+ *
+ * Read-only and provider-backed: this answers "what versions exist", never
+ * "what would a download do" (that is `buildInstallPlan`). The target narrows
+ * the list when the screen already knows it; an empty value sends no filter.
+ */
+export function listProjectVersions(
+  provider: string,
+  projectId: string,
+  gameVersion?: string,
+  loader?: string,
+): Promise<ProjectVersionDto[]> {
+  return invoke<ProjectVersionDto[]>('list_project_versions', {
+    provider,
+    projectId,
+    gameVersion: gameVersion?.trim() || null,
+    loader: loader?.trim() || null,
+  });
+}
+
 /** معاينة فقط: لا تكتب ولا تنزّل. `projects` أسماءٌ لـModrinth ومعرّفات رقمية لـCurseForge؛
  *  مزوّد واحد يجيب الطلب كله. */
 export function buildInstallPlan(
@@ -124,6 +158,37 @@ export function scanInstance(
   loader: string,
 ): Promise<InstanceSnapshotDto> {
   return invoke<InstanceSnapshotDto>('scan_instance', { instanceRoot, gameVersion, loader });
+}
+
+// --- Content staleness (F-168) -------------------------------------------
+//
+// The watcher is read-only and lives in Rust; the webview only asks it to
+// start and receives one typed event per coalesced burst. One watch at a
+// time: asking for a new instance replaces the old watcher, so nothing keeps
+// running for an instance the screen left.
+
+/**
+ * Arms the watcher for `instanceRoot`'s content folders. Advisory: a failed
+ * arm degrades to no hint, never to a broken screen, so callers may ignore
+ * the rejection.
+ */
+export function watchInstanceContent(instanceRoot: string): Promise<void> {
+  return invoke<void>('watch_instance_content', { instanceRoot });
+}
+
+/** Stops the current watcher (the instance changed or the screen closed). */
+export function stopInstanceContentWatch(): Promise<void> {
+  return invoke<void>('unwatch_instance_content');
+}
+
+/**
+ * Subscribes to the watcher's typed signal. Returns the unlisten function;
+ * it resolves once the subscription is live, so no early event is lost.
+ */
+export async function onContentStale(
+  handler: (event: ContentStaleDto) => void,
+): Promise<() => void> {
+  return listen<ContentStaleDto>('content://stale', (e) => handler(e.payload));
 }
 
 /**

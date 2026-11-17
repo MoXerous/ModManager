@@ -127,6 +127,7 @@ pub fn run() -> i32 {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::search_projects,
+            commands::list_project_versions,
             commands::build_install_plan,
             commands::scan_instance,
             commands::check_instance_updates,
@@ -142,6 +143,7 @@ pub fn run() -> i32 {
             commands::finish_create,
             commands::abandon_create,
             commands::open_instance_folder,
+            commands::open_project_url,
             commands::app_paths,
             commands::open_app_folder,
             commands::execute_install,
@@ -171,6 +173,8 @@ pub fn run() -> i32 {
             commands::backup::execute_instance_restore,
             commands::backup::preview_instance_worlds,
             commands::backup::pending_instance_restores,
+            commands::watch::watch_instance_content,
+            commands::watch::unwatch_instance_content,
         ])
         .build(tauri::generate_context!());
 

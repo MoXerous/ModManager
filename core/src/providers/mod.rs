@@ -37,7 +37,52 @@ pub struct Project {
     pub categories: Vec<String>,
     pub versions: Vec<String>,
     pub downloads: u64,
+    /// The catalogue's follower count (Modrinth `follows`, CurseForge
+    /// `favoriteCount`). `0` when the provider reports none — a count we do
+    /// not have, never an error.
+    pub followers: u64,
     pub icon_url: Option<String>,
+    /// Raw provider timestamp for the newest version (falling back to the
+    /// project's own creation date). Never parsed here (spec §2-7).
+    pub published: String,
+    /// Modrinth `client_side`/`server_side` (`required`, `optional`,
+    /// `unsupported`). Empty when the provider does not state them
+    /// (CurseForge has no such field), so the table can say "unknown" rather
+    /// than invent a side.
+    pub client_side: String,
+    pub server_side: String,
+    /// The newest version's label (`version_number`), for the results table's
+    /// Version column. `None` when the provider did not answer for it.
+    pub latest_version: Option<String>,
+    /// The project's own page, so a row can be opened in a browser. Derived
+    /// from documented URL shapes, never guessed from an unknown field.
+    pub web_url: Option<String>,
+}
+
+/// An empty record: only tests and the resolver's stub rows use it, so a new
+/// column does not turn every fixture into a compile error. Production code
+/// lists every field, which is what keeps the mapping honest.
+impl Default for Project {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            slug: None,
+            title: String::new(),
+            description: String::new(),
+            author: String::new(),
+            project_type: String::new(),
+            categories: Vec::new(),
+            versions: Vec::new(),
+            downloads: 0,
+            followers: 0,
+            icon_url: None,
+            published: String::new(),
+            client_side: String::new(),
+            server_side: String::new(),
+            latest_version: None,
+            web_url: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

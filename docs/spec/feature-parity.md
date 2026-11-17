@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 30 |
+| حاضر — مُراجَع | 34 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 11 |
-| مفقود — مُراجَع | 11 |
+| جزئي — مُراجَع | 8 |
+| مفقود — مُراجَع | 10 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**22** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**18** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -44,10 +44,6 @@
 | **F-145** | مركز العمليات (قراءة فقط) | operations | جزئي — مُراجَع | No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record. |
 | **F-157** | `export_manifest.json` | - | مفقود — مُراجَع | No in-archive policy record: write_export_zip emits only modrinth.index.json plus overrides (no export_manifest.json); ExcludedEntry/SkipReason decisions are shown in the preview UI and then discarded, so the artefact cannot be machine-audited after it leaves the app. |
 | **F-158** | **استيراد ميتا فقط بلا استخراج** | - | مفقود — مُراجَع | No archive import of the app's own export: the only import commands are the legacy old-home scan/plan/execute (F-181, reads app.sqlite3 + profile.json without extraction) and the .mrpack full install (F-068); there is no way to pick a profile-export zip, preview its manifest metadata-only, schema-check it, or create an instance from it. |
-| **F-164** | صفحة Discover | ui | جزئي — مُراجَع | No inspector: BrowsePage has search + facets + install plan dialog only; no project-details pane, no versions list or 'Show versions' action, no Selected/Favorites tabs, no context menu; clicking a card goes straight to the plan dialog. |
-| **F-165** | جدول نتائج (13 عموداً) | ui | جزئي — مُراجَع | No 13-column table: results are a responsive card grid from the 9-field ProjectDto (id, slug, title, description, author, projectType, downloads, iconUrl, providerId); no column sorting, no per-row select/favourite checkboxes, no virtualiser (grep for Virtualizer/useVirtualizer in src returns nothing), and the wire DTO lacks followers, categories, published date, environment and resolved version. |
-| **F-166** | ترقيم «Load more» | ui | جزئي — مُراجَع | Paging is click-driven only: explicit Load more button (BrowsePage.tsx:400), no IntersectionObserver/scroll listener, no 120ms debounce/coalescing timer (grep for setTimeout/debounce in the page finds none), no TanStack Query cache, and no request cancellation — only busy flags stop a second click while a superseded first-page request runs on. |
-| **F-168** | **مراقب نظام الملفات (تلميح)** | ui | مفقود — مُراجَع | No filesystem watcher and no staleness surface at all: the notify crate is not in Cargo.lock, InstanceDetails calls scanInstance only on mount and after mutations, there is no Refresh action on Installed Content or the instances list, and no 'content may be stale' hint. |
 
 ## التفاصيل
 
@@ -71,7 +67,7 @@
 | **F-014** | **مزوّد CurseForge** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/curseforge/mod.rs، core/src/providers/curseforge/secret.rs (+3) · كود: src-tauri/src/dto.rs، src-tauri/src/providers/tests.rs |
 | **F-015** | حالة `downloadUrl: null` عند CurseForge | Keep | M3 | جزئي — مُراجَع | E:\ModManager\core\src\providers\curseforge\mod.rs::map_file · E:\ModManager\src-tauri\src\commands.rs::open_app_folder (line 192: opener().open_path) · E:\ModManager\src-tauri\src\commands.rs::open_instance_folder (line 827: opener().open_path) |
 | **F-016** | بصمة CurseForge (`fileFingerprint`) | Defer | M3 | مؤجَّل (قرارُ المواصفة) | — |
-| **F-017** | رابط تنزيل فارغ | Keep | M1 | حاضر — بتتبّعِ اختبار | كود: core/src/providers/curseforge/mod.rs، core/src/providers/mod.rs (+1) · وثائق: docs/adr/0004-curseforge-provider.md |
+| **F-017** | رابط تنزيل فارغ | Keep | M1 | حاضر — بتتبّعِ اختبار | كود: core/src/providers/curseforge/mod.rs، core/src/providers/mod.rs (+3) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs · وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-018** | `User-Agent` وصفي **بمعلومات تواصل** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/lib.rs · كود: core/src/lib.rs |
 | **F-019** | **رفض تسريب جسم الاستجابة** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs، src-tauri/src/commands/tests.rs · كود: core/src/db/download_history.rs، core/src/resolver/resolve/mod.rs (+1) |
 ### downloads
@@ -275,11 +271,11 @@
 |---|---|---|---|---|---|
 | **F-162** | شريط تنقّل + صفحات مكدّسة | Keep | M2 | حاضر — مُراجَع | src/app/Shell.tsx::Shell (PAGE_IDS = instances|browse|modpack|downloads|settings, NAV) · src/App.tsx::App (page switch through document.startViewTransition) · src/app/pages/PlaceholderPage.tsx::PlaceholderPage · src/app/CommandPalette.tsx::CommandPalette · src/i18n/en.json::nav.instances|nav.browse|nav.modpack|nav.downloads|nav.settings |
 | **F-163** | لوحة **Home** | Drop | — | مُستبعد (قرارُ المواصفة) | — |
-| **F-164** | صفحة Discover | Keep | M2 | جزئي — مُراجَع | E:\ModManager\src\app\pages\BrowsePage.tsx::BrowsePage · E:\ModManager\src\lib\ipc.ts::searchProjects (the only browse call besides key status) |
-| **F-165** | جدول نتائج (13 عموداً) | Keep | M2 | جزئي — مُراجَع | E:\ModManager\src-tauri\src\dto.rs::ProjectDto (lines 231-243: 9 fields) · E:\ModManager\src\app\pages\BrowsePage.tsx::Card grid · grep 'Virtualizer|useVirtualizer|virtual' in src → no matches |
-| **F-166** | ترقيم «Load more» | Keep | M2 | جزئي — مُراجَع | E:\ModManager\src\app\pages\BrowsePage.tsx::loadMore (line 235) · grep 'loadMore|IntersectionObserver|scroll|setTimeout|debounce' in BrowsePage.tsx → 4 hits, none a timer or observer |
+| **F-164** | صفحة Discover | Keep | M2 | حاضر — مُراجَع | src/app/browse/Inspector.tsx · src-tauri/src/commands.rs::list_project_versions · src/lib/ipc.ts::listProjectVersions |
+| **F-165** | جدول نتائج (13 عموداً) | Keep | M2 | حاضر — مُراجَع | src/app/browse/ResultsTable.tsx · src/app/browse/columns.ts · src/app/browse/useVirtualRows.ts · core/src/providers/mod.rs::Project |
+| **F-166** | ترقيم «Load more» | Keep | M2 | حاضر — مُراجَع | src/app/browse/paging.ts · src/app/pages/BrowsePage.tsx · src/app/browse/selectionStore.ts |
 | **F-167** | **سجلّ تنقّل 32 مدخلاً** | Drop | — | مُستبعد (قرارُ المواصفة) | — |
-| **F-168** | **مراقب نظام الملفات (تلميح)** | Keep | M2 | مفقود — مُراجَع | grep 'Refresh|refresh|stale|watch' in InstanceDetails.tsx/InstancesPage.tsx → no matches · grep 'notify' in Cargo.lock → no matches |
+| **F-168** | **مراقب نظام الملفات (تلميح)** | Keep | M2 | حاضر — مُراجَع | core/src/watcher.rs · src-tauri/src/commands/watch.rs · src/app/lib/staleness.ts · src/app/pages/InstanceDetails.tsx |
 | **F-169** | لوحة تنقّل لوحة المفاتيح (cmdk) | Keep | M2 | حاضر — مُراجَع | src/app/CommandPalette.tsx::CommandPalette (cmdk Command/CommandInput/CommandList/CommandGroup/CommandItem) · src/components/ui/command.tsx (shadcn command primitives wrapping cmdk) · src/app/Shell.tsx::Shell (Ctrl+K / Cmd+K toggles the palette, header button opens it) · src/components/Kbd.tsx::Kbd · src/i18n/en.json::palette.title|palette.description|palette.placeholder|palette.empty|palette.group.goTo|palette.hint.navigate|palette.hint.run|palette.escape|palette.shortcut |
 | **F-170** | الثيم واللون | Keep | M2 | حاضر — مُراجَع | src/app/preferences.ts::THEMES (system|dark|light), applyToDocument, isDark, watchSystemTheme, usePreferences · src/main.tsx (applyToDocument before first paint, no flash of the wrong theme) · src/app/pages/SettingsPage.tsx::SettingsPage (settings.theme Segmented with theme.dark|theme.light|theme.system) · src/styles/theme.css (html.dark, color-scheme, tokens) · src/i18n/en.json::settings.theme|theme.system|theme.dark|theme.light |
 | **F-171** | **اختصارات لوحة المفاتيح** | Keep | M2 | حاضر — بتتبّعِ اختبار | كود: src/app/CommandPalette.tsx |

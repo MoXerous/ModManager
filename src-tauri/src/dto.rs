@@ -278,9 +278,24 @@ pub struct ProjectDto {
     pub description: String,
     pub author: String,
     pub project_type: String,
+    pub categories: Vec<String>,
     #[ts(type = "number")]
     pub downloads: u64,
+    /// F-165: the table's Followers column.
+    #[ts(type = "number")]
+    pub followers: u64,
     pub icon_url: Option<String>,
+    /// Raw provider timestamp (never parsed): the newest version's date, else
+    /// the project's own creation date.
+    pub published: String,
+    /// `required` | `optional` | `unsupported`, or empty when the provider does
+    /// not state a side (CurseForge).
+    pub client_side: String,
+    pub server_side: String,
+    /// The newest version's label, when the provider answered for it.
+    pub latest_version: Option<String>,
+    /// The project's own page, for a row's URL column.
+    pub web_url: Option<String>,
     /// Provider identity from day one (`Provider::provider_id()`).
     pub provider_id: String,
 }
@@ -294,9 +309,58 @@ impl ProjectDto {
             description: p.description.clone(),
             author: p.author.clone(),
             project_type: p.project_type.clone(),
+            categories: p.categories.clone(),
             downloads: p.downloads,
+            followers: p.followers,
             icon_url: p.icon_url.clone(),
+            published: p.published.clone(),
+            client_side: p.client_side.clone(),
+            server_side: p.server_side.clone(),
+            latest_version: p.latest_version.clone(),
+            web_url: p.web_url.clone(),
             provider_id: provider_id.to_string(),
+        }
+    }
+}
+
+/// F-164: one row of the inspector's versions list.
+///
+/// Deliberately smaller than the install plan's entries: this answers "what
+/// versions exist", not "what would a download do". Only the primary file's
+/// name is carried (F-017 keeps a URL-less file, so the name is the honest
+/// label even when there is nothing to download).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProjectVersionDto {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub version_number: String,
+    pub date_published: String,
+    pub version_type: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub filename: Option<String>,
+}
+
+impl ProjectVersionDto {
+    pub fn from_core(v: &mm_core::providers::Version) -> Self {
+        let primary = v
+            .files
+            .iter()
+            .find(|f| f.primary)
+            .or_else(|| v.files.first());
+        Self {
+            id: v.id.clone(),
+            project_id: v.project_id.clone(),
+            name: v.name.clone(),
+            version_number: v.version_number.clone(),
+            date_published: v.date_published.clone(),
+            version_type: v.version_type.clone(),
+            game_versions: v.game_versions.clone(),
+            loaders: v.loaders.clone(),
+            filename: primary.map(|f| f.filename.clone()),
         }
     }
 }
@@ -572,6 +636,16 @@ pub struct InstanceSnapshotDto {
     pub locked: Vec<LockEntryDto>,
     /// F-099/F-100: duplicates and changed files, folder-wide.
     pub content_warnings: Vec<ContentWarningDto>,
+}
+
+/// F-168: the watcher's typed signal. The event carries the root whose
+/// content moved, never a file path — the UI only needs to know *which*
+/// instance's scan went stale.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ContentStaleDto {
+    pub instance_root: String,
 }
 
 // --- updates (F-120) -----------------------------------------------------

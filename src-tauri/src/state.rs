@@ -208,6 +208,14 @@ pub struct AppState {
     /// drops it when it ends; the flag carries its identity (`Arc::ptr_eq`), so
     /// an operation finishing late can only clear the flag IT registered.
     transfer_cancel: Arc<Mutex<HashMap<PathBuf, Arc<AtomicBool>>>>,
+    /// F-168: the content watcher of the instance the UI is currently looking
+    /// at. One slot: the webview asks per instance and a new watch replaces
+    /// the old one, so a stale watcher must never survive its instance.
+    content_watch: Arc<Mutex<Option<ContentWatchSlot>>>,
+    /// F-168: where the app itself recently wrote, for the watcher's
+    /// suppression rule. Write commands note their root; the watcher drops
+    /// events under a noted root inside its window.
+    own_writes: mm_core::watcher::OwnWrites,
     /// Test seam: the private journal store this state owns.
     ///
     /// `None` in production, where the journal is the app's own directory.
@@ -261,6 +269,8 @@ impl AppState {
             paths,
             install_cancel: Arc::new(Mutex::new(None)),
             transfer_cancel: Arc::new(Mutex::new(HashMap::new())),
+            content_watch: Arc::new(Mutex::new(None)),
+            own_writes: mm_core::watcher::new_own_writes(),
             // Production owns no private store: the journal is the app's own
             // directory, and it outlives the state.
             #[cfg(test)]
@@ -296,6 +306,8 @@ impl AppState {
             paths,
             install_cancel: Arc::new(Mutex::new(None)),
             transfer_cancel: Arc::new(Mutex::new(HashMap::new())),
+            content_watch: Arc::new(Mutex::new(None)),
+            own_writes: mm_core::watcher::new_own_writes(),
             owned_journal_root: Some(Arc::new(root)),
             owned_config_root: Some(Arc::new(config_root)),
         }
@@ -483,6 +495,40 @@ impl AppState {
         }
     }
 
+    /// F-168: where the watcher reads the app's own recent writes.
+    ///
+    /// Write commands call [`Self::note_own_write`] with the root their batch
+    /// touches; the watcher drops events under a noted root inside its
+    /// suppression window, so an install never tells the user the content is
+    /// stale.
+    pub fn own_writes(&self) -> &mm_core::watcher::OwnWrites {
+        &self.own_writes
+    }
+
+    pub fn note_own_write(&self, root: &Path) {
+        mm_core::watcher::note_own_write(&self.own_writes, root);
+    }
+
+    /// F-168: the watcher slot the watch commands own. One slot, replaced on
+    /// every new watch, so the previous instance's watcher never survives.
+    pub fn replace_content_watch(&self, slot: Option<ContentWatchSlot>) {
+        let mut guard = self
+            .content_watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Teardown before replacement: the old watcher stops, whatever the
+        // new one does next.
+        if let Some(previous) = guard.take() {
+            previous.handle.stop();
+        }
+        *guard = slot;
+    }
+
+    /// F-168: tears the current watcher down (instance change, app exit).
+    pub fn stop_content_watch(&self) {
+        self.replace_content_watch(None);
+    }
+
     /// Runs `f` against the database on a blocking thread.
     ///
     /// The error channel is `IpcError`, not `String`: it is what carries the
@@ -572,6 +618,15 @@ impl Drop for TransferGuard<'_> {
     fn drop(&mut self) {
         self.state.end_transfer(&self.root, &self.flag);
     }
+}
+
+/// F-168: one live content watcher.
+///
+/// The handle itself is the identity: a replacement stops exactly the
+/// watcher it replaces and never a newer one registered behind it.
+#[derive(Debug)]
+pub struct ContentWatchSlot {
+    pub handle: Arc<mm_core::watcher::WatcherHandle>,
 }
 
 #[cfg(test)]
