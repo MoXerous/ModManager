@@ -19,20 +19,20 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 103 | 103 |
+| مُختبَر بمعرّف المواصفة | 107 | 107 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
 | إشارة في الوثائق فقط | 2 | 2 |
-| بلا أثر | 38 | 38 |
+| بلا أثر | 34 | 34 |
 
-**103 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **40** بلا أثرٍ قابلٍ للتتبّع.
+**107 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **36** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
 | M1 | 72 | 63 | 3 | 6 |
-| M2 | 38 | 15 | 2 | 21 |
+| M2 | 38 | 19 | 2 | 17 |
 | M3 | 41 | 24 | 4 | 13 |
 | later | 1 | 1 | 0 | 0 |
 
@@ -74,10 +74,6 @@
 | **F-157** | `export_manifest.json` | - | M2 |
 | **F-158** | **استيراد ميتا فقط بلا استخراج** | - | M2 |
 | **F-162** | شريط تنقّل + صفحات مكدّسة | ui | M2 |
-| **F-164** | صفحة Discover | ui | M2 |
-| **F-165** | جدول نتائج (13 عموداً) | ui | M2 |
-| **F-166** | ترقيم «Load more» | ui | M2 |
-| **F-168** | **مراقب نظام الملفات (تلميح)** | ui | M2 |
 | **F-169** | لوحة تنقّل لوحة المفاتيح (cmdk) | ui | M2 |
 | **F-170** | الثيم واللون | ui | M2 |
 | **F-173** | RTL + i18n | ui | M2 |
@@ -105,7 +101,7 @@
 | **F-014** | **مزوّد CurseForge** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/curseforge/mod.rs، core/src/providers/curseforge/secret.rs (+3) · كود: src-tauri/src/dto.rs، src-tauri/src/providers/tests.rs |
 | **F-015** | حالة `downloadUrl: null` عند CurseForge | Keep | M3 | إشارة في الوثائق فقط | وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-016** | بصمة CurseForge (`fileFingerprint`) | Defer | M3 | مؤجَّل | وثائق: docs/adr/0004-curseforge-provider.md |
-| **F-017** | رابط تنزيل فارغ | Keep | M1 | مُنفَّذ ومُشار إليه في الكود | كود: core/src/providers/curseforge/mod.rs، core/src/providers/mod.rs (+1) · وثائق: docs/adr/0004-curseforge-provider.md |
+| **F-017** | رابط تنزيل فارغ | Keep | M1 | مُنفَّذ ومُشار إليه في الكود | كود: core/src/providers/curseforge/mod.rs، core/src/providers/mod.rs (+3) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs · وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-018** | `User-Agent` وصفي **بمعلومات تواصل** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/lib.rs · كود: core/src/lib.rs |
 | **F-019** | **رفض تسريب جسم الاستجابة** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs، src-tauri/src/commands/tests.rs · كود: core/src/db/download_history.rs، core/src/resolver/resolve/mod.rs (+1) |
 ### downloads
@@ -309,11 +305,11 @@
 |---|---|---|---|---|---|
 | **F-162** | شريط تنقّل + صفحات مكدّسة | Keep | M2 | بلا أثر | — |
 | **F-163** | لوحة **Home** | Drop | — | متروك | — |
-| **F-164** | صفحة Discover | Keep | M2 | بلا أثر | — |
-| **F-165** | جدول نتائج (13 عموداً) | Keep | M2 | بلا أثر | — |
-| **F-166** | ترقيم «Load more» | Keep | M2 | بلا أثر | — |
+| **F-164** | صفحة Discover | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs، src-tauri/src/commands/tests/browse_tests.rs (+1) · كود: core/src/providers/modrinth.rs، src-tauri/src/commands.rs (+5) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs، src/app/browse/selectionStore.test.ts |
+| **F-165** | جدول نتائج (13 عموداً) | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/curseforge/mod.rs، core/src/providers/modrinth.rs (+4) · كود: core/src/providers/curseforge/mod.rs، core/src/providers/modrinth.rs (+8) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs، src/app/browse/columns.test.ts (+2) |
+| **F-166** | ترقيم «Load more» | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: src/app/browse/paging.test.ts · كود: src/app/browse/ResultsTable.tsx، src/app/browse/paging.ts (+1) · اختبار (ذكر): src/app/browse/paging.test.ts |
 | **F-167** | **سجلّ تنقّل 32 مدخلاً** | Drop | — | متروك | — |
-| **F-168** | **مراقب نظام الملفات (تلميح)** | Keep | M2 | بلا أثر | — |
+| **F-168** | **مراقب نظام الملفات (تلميح)** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/watcher.rs، src-tauri/src/commands/watch/tests.rs (+1) · كود: core/src/watcher.rs، src-tauri/src/commands.rs (+11) · اختبار (ذكر): src/app/instances/staleness.test.ts |
 | **F-169** | لوحة تنقّل لوحة المفاتيح (cmdk) | Keep | M2 | بلا أثر | — |
 | **F-170** | الثيم واللون | Keep | M2 | بلا أثر | — |
 | **F-171** | **اختصارات لوحة المفاتيح** | Keep | M2 | مُنفَّذ ومُشار إليه في الكود | كود: src/app/CommandPalette.tsx |
