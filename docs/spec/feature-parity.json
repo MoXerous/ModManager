@@ -4,15 +4,16 @@
   "specs": [
     {
       "id": "F-003",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\resolver\\graph\\mod.rs::select_best_version (lines 159-171: find() first compatible, alpha skip only)",
-        "D:\\latest_project\\app\\api\\modrinth_client.py::get_best_version (lines 422-446: allowed_types ladder + sorted(date_published))"
+        "core/src/resolver/graph/mod.rs::select_best_version",
+        "core/src/resolver/cache.rs::BestKey",
+        "core/src/resolver/cache.rs::ResolveKey"
       ],
-      "test": "spec_f050_select_best_skips_alpha_unless_allowed (core/src/resolver/graph/tests.rs)",
-      "note": "Old code verified at D:\\latest_project\\app\\api\\modrinth_client.py:435-446; the channel-ladder gap is real.",
-      "gap": "No release-channel ladder: the new select_best_version takes the first compatible version in provider order and only skips alpha unless allow_alpha; the old get_best_version iterated release > beta (allow_beta default true) > alpha and picked the newest of that channel by date_published, with a newest-of-all fallback. So a newer beta now beats an older stable, there is no allow_beta switch, and no sort by date_published.",
-      "review": "verified:confirmed"
+      "test": "spec_f003_a_newer_beta_does_not_beat_an_older_stable",
+      "note": "حاضر: سلّمُ القنوات release > beta > alpha مع allow_beta/allow_alpha (الافتراضُ القديم AllowBeta=true) واختيارُ الأحدث بـdate_published داخل القناة، ومفتاحُ الكاش يحمل المفتاحين فلا تُقدَّم نتيجةُ قناةٍ مسموحةٍ لطالبٍ يمنعها. انحرافاتٌ مسجَّلة: السقوطُ الجديد يرفض القنوات المُقيَّمة المغلقة (القديمُ كان قد يُعيد alpha مع allow_alpha=false)، وملفاتُ CurseForge موسومة unknown:<n> فلا تدخل السلّم (المفاتيحُ خاصة بـModrinth اليوم)، والمفتاحان بلا سطح IPC/واجهة بعد.",
+      "gap": null,
+      "review": "fixed-s9: implemented, adversarially challenged (glm), two findings fixed"
     },
     {
       "id": "F-006",
@@ -30,29 +31,29 @@
     },
     {
       "id": "F-009",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\providers\\modrinth.rs::server_delay_secs (line 210: httpdate::parse_http_date, duration_since unwrap_or(0.0))",
-        "D:\\latest_project\\app\\api\\modrinth_client.py::_server_retry_delay (lines 68-78: rolling 50-year window on '-' dates)",
-        "C:\\Users\\LOQ\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\httpdate-1.0.3\\src\\lib.rs (lines 50-52: 'Two digit years are mapped to dates between 1970 and 2069')"
+        "core/src/providers/modrinth.rs::http_date_wait_secs_from",
+        "core/src/providers/modrinth.rs::server_delay_secs_from"
       ],
-      "test": null,
-      "note": "Verified the crate source itself: fixed 1970-2069 pivot, no rolling window, so the documented old edge case is not reproduced.",
-      "gap": "The rotating +/-50-year rule for RFC-850 dates is not implemented: httpdate 1.0.3 maps two-digit years into a fixed 1970-2069 window (crate docs line 51-52, date.rs), so 'Fri, 11-Sep-76' parses as 1976 (past => 0 s wait) where the old code's rolling window computes 2076 (future => the >10s fail-fast rule fires). Header order and strict numeric parsing match the old code; no test anywhere feeds an HTTP-date Retry-After.",
-      "review": "verified:confirmed"
+      "test": "spec_f009_an_unrepresentable_feb_29_falls_through_to_the_reset_header",
+      "note": "حاضر: قاعدةُ السنة الدوّارة ±٥٠ من السنة الحالية (UTC)، مع محورٍ قابلٍ للحقن للاختبار، وFeb-29 غيرُ القابل للتمثيل يُسقط التاريخَ وينتقل إلى X-Ratelimit-Reset (كالقديم)، وتاريخُ المستقبل يُفشل سريعًا (>10s). اختباران من النوع regression guard لا RED سلوكي — موثَّقٌ ذلك.",
+      "gap": null,
+      "review": "fixed-s9: implemented, adversarially challenged (glm), two findings fixed"
     },
     {
       "id": "F-015",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\providers\\curseforge\\mod.rs::map_file",
-        "E:\\ModManager\\src-tauri\\src\\commands.rs::open_app_folder (line 192: opener().open_path)",
-        "E:\\ModManager\\src-tauri\\src\\commands.rs::open_instance_folder (line 827: opener().open_path)"
+        "src-tauri/src/commands.rs::curseforge_file_page_url",
+        "src-tauri/src/commands.rs::open_file_page",
+        "src/app/pages/InstallPlanDialog.tsx::EntryRow",
+        "src/lib/ipc.ts::openFilePage"
       ],
-      "test": "spec_f014_null_download_url_is_empty_but_stays_listed (core/src/providers/curseforge/mod.rs)",
-      "note": "Workspace-wide grep for curseforge.com/open_url found only the API base constant; no page-URL builder or http(s) opener exists.",
-      "gap": "The data level is handled (null downloadUrl maps to \"\", files stay listed, plan entry blocked with the exact reason), but the spec's visible behaviour — opening the file's page in the browser — has no counterpart: nothing builds a CurseForge file/project page URL, and the only opener usages (commands.rs::open_app_folder, commands.rs::open_instance_folder) call opener().open_path on local folders, never a web URL.",
-      "review": "verified:confirmed"
+      "test": "spec_f015_builds_the_curseforge_file_page_from_slug_and_file_id",
+      "note": "حاضر: زرُ «فتح صفحة الملف» للصفِّ المحجوب من CurseForge، والرابطُ **يُبنى في رست** لا يُؤخذ من المزوّد: https://www.curseforge.com/minecraft/mc-mods/{slug}/files/{file_id} مع slug=[a-z0-9_-]{1,100} وfile_id أرقامٌ فقط، وأيُّ شيءٍ آخر InvalidInput. انحرافاتٌ مسجَّلة: الزرُ يظهر لصفِّ المشروع المختار فقط (لا لصفوف التبعيات المحجوبة)، وقسمُ mc-mods ثابتٌ (غيرُ صحيح لحزم الموارد/الـshaders).",
+      "gap": null,
+      "review": "fixed-s9: implemented, adversarially challenged (glm), two findings fixed"
     },
     {
       "id": "F-020",

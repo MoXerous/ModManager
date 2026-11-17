@@ -19,21 +19,21 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 109 | 109 |
+| مُختبَر بمعرّف المواصفة | 112 | 112 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
-| إشارة في الوثائق فقط | 2 | 2 |
-| بلا أثر | 32 | 32 |
+| إشارة في الوثائق فقط | 1 | 1 |
+| بلا أثر | 30 | 30 |
 
-**109 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **34** بلا أثرٍ قابلٍ للتتبّع.
+**112 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **31** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
-| M1 | 72 | 63 | 3 | 6 |
+| M1 | 72 | 65 | 3 | 4 |
 | M2 | 38 | 21 | 2 | 15 |
-| M3 | 41 | 24 | 4 | 13 |
+| M3 | 41 | 25 | 4 | 12 |
 | later | 1 | 1 | 0 | 0 |
 
 ## بنود `Keep` بلا أثر قابلٍ للتتبّع — قائمة hygiene
@@ -42,10 +42,7 @@
 
 | المعرّف | البند | المجال | المرحلة |
 |---|---|---|---|
-| **F-003** | `get_best_version` | providers | M1 |
 | **F-006** | تحميل بالهاش | providers | M1 |
-| **F-009** | **قاعدة السنة الدوّارة** | providers | M1 |
-| **F-015** | حالة `downloadUrl: null` عند CurseForge | providers | M3 |
 | **F-022** | التحقق SHA-1 + SHA-512 | downloads | M1 |
 | **F-025** | الاستئناف عبر `Range` | downloads | M1 |
 | **F-029** | التحقق من كل وجهة إعادة توجيه | downloads | M1 |
@@ -85,19 +82,19 @@
 |---|---|---|---|---|---|
 | **F-001** | بحث Modrinth مع فلاتر | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-002** | جلب مشروع/إصدار | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs |
-| **F-003** | `get_best_version` | Keep | M1 | بلا أثر | — |
+| **F-003** | `get_best_version` | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/resolver/graph/tests.rs · كود: core/src/resolver/graph/mod.rs، core/src/resolver/graph/tests.rs (+1) |
 | **F-004** | بحث بالهاش (SHA-1) | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-005** | بحث التحديثات دفعة واحدة | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs، src-tauri/src/progress.rs · كود: core/src/providers/mod.rs |
 | **F-006** | تحميل بالهاش | Keep | M1 | بلا أثر | — |
 | **F-007** | معالجة حد المعدل 429 | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-008** | **قاعدة الانتظار** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs |
-| **F-009** | **قاعدة السنة الدوّارة** | Keep | M1 | بلا أثر | — |
+| **F-009** | **قاعدة السنة الدوّارة** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs · كود: core/src/providers/modrinth.rs |
 | **F-010** | إعادة المحاولة (2 محاولات) | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-011** | تدهور التوافق عند 400 | Defer | M1 | مؤجَّل | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-012** | تحديد معدل من جهة العميل | Defer | M1 | مؤجَّل | اختبار (ذكر): AGENTS.md · وثائق: AGENTS.md |
 | **F-013** | تخزين مؤقت لنتائج البحث | Defer | M1 | مؤجَّل | — |
 | **F-014** | **مزوّد CurseForge** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/curseforge/mod.rs، core/src/providers/curseforge/secret.rs (+3) · كود: src-tauri/src/dto.rs، src-tauri/src/providers/tests.rs |
-| **F-015** | حالة `downloadUrl: null` عند CurseForge | Keep | M3 | إشارة في الوثائق فقط | وثائق: docs/adr/0004-curseforge-provider.md |
+| **F-015** | حالة `downloadUrl: null` عند CurseForge | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: src-tauri/src/commands/tests/browse_tests.rs · كود: src-tauri/src/commands.rs، src/app/pages/InstallPlanDialog.tsx (+1) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs · وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-016** | بصمة CurseForge (`fileFingerprint`) | Defer | M3 | مؤجَّل | وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-017** | رابط تنزيل فارغ | Keep | M1 | مُنفَّذ ومُشار إليه في الكود | كود: core/src/providers/curseforge/mod.rs، core/src/providers/mod.rs (+3) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs · وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-018** | `User-Agent` وصفي **بمعلومات تواصل** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/lib.rs · كود: core/src/lib.rs |
