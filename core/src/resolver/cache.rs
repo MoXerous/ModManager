@@ -14,6 +14,7 @@ pub struct BestKey {
     pub project_id: String,
     pub game_version: String,
     pub loader: String,
+    pub allow_beta: bool,
     pub allow_alpha: bool,
 }
 
@@ -27,6 +28,7 @@ pub struct ResolveKey {
     pub project_type: String,
     pub game_version: String,
     pub loader: String,
+    pub allow_beta: bool,
     pub allow_alpha: bool,
     pub preferred_version_id: String,
     pub preferred_version_number: String,
@@ -206,6 +208,7 @@ mod tests {
                 project_id: "a".to_string(),
                 game_version: "1.21".to_string(),
                 loader: "fabric".to_string(),
+                allow_beta: true,
                 allow_alpha: false,
             },
             None,

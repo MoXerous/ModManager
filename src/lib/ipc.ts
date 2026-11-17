@@ -110,6 +110,17 @@ export function openProjectUrl(url: string): Promise<void> {
 }
 
 /**
+ * F-015: opens a CurseForge file's own page in the system browser, for a
+ * plan entry blocked by `downloadUrl: null`. The webview sends the parts
+ * only (slug + file id); Rust builds and allowlists the URL itself, so a
+ * provider-supplied URL is never opened verbatim. Refusals and opener
+ * failures are typed errors.
+ */
+export function openFilePage(provider: string, slug: string, fileId: string): Promise<void> {
+  return invoke<void>('open_file_page', { provider, slug, fileId });
+}
+
+/**
  * F-164. A project's versions, for the inspector's list.
  *
  * Read-only and provider-backed: this answers "what versions exist", never

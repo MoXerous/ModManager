@@ -11,7 +11,7 @@ use mm_core::providers::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use super::super::project_page_url;
+use super::super::{curseforge_file_page_url, project_page_url};
 
 fn project() -> Project {
     Project {
@@ -77,6 +77,45 @@ fn spec_f165_open_project_url_opens_only_catalogue_pages() {
     ] {
         let error = project_page_url(url).expect_err("a non-catalogue URL is refused");
         assert_eq!(error.code, ErrorCode::InvalidInput, "refusal for {url}");
+    }
+}
+
+/// F-015: when CurseForge's `downloadUrl` is `null`, the user reaches the
+/// file through its own page. The webview never names a URL: it sends the
+/// slug and the file id and Rust builds `https://www.curseforge.com/
+/// minecraft/mc-mods/{slug}/files/{file_id}` — the same shape the provider
+/// already builds for `web_url`. Anything that does not fit that shape is a
+/// typed refusal, never an opened URL.
+#[test]
+fn spec_f015_builds_the_curseforge_file_page_from_slug_and_file_id() {
+    let url = curseforge_file_page_url("curseforge", "jei", "9277601").expect("url");
+    assert_eq!(
+        url,
+        "https://www.curseforge.com/minecraft/mc-mods/jei/files/9277601"
+    );
+}
+
+/// F-015: the allowlist. A foreign provider, a slug with path characters or
+/// traversal, an empty part or a non-numeric file id is refused with the
+/// typed invalid-input error — nothing reaches the operating system.
+#[test]
+fn spec_f015_refuses_anything_outside_the_file_page_shape() {
+    for (provider, slug, file_id) in [
+        ("modrinth", "jei", "9277601"),
+        ("curseforge", "../etc", "9277601"),
+        ("curseforge", "jei/files", "9277601"),
+        ("curseforge", "", "9277601"),
+        ("curseforge", "jei", ""),
+        ("curseforge", "jei", "9277601/extra"),
+        ("curseforge", "jei", "latest"),
+    ] {
+        let error = curseforge_file_page_url(provider, slug, file_id)
+            .expect_err("outside the shape must be refused");
+        assert_eq!(
+            error.code,
+            ErrorCode::InvalidInput,
+            "refusal for {provider} {slug} {file_id}"
+        );
     }
 }
 

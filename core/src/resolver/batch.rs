@@ -55,6 +55,7 @@ pub async fn resolve_and_plan(
                     project_type: ptype,
                     game_version: game.to_string(),
                     loader: loader.to_string(),
+                    allow_beta: true,
                     allow_alpha: false,
                     pin: PreferredPin::default(),
                 },
