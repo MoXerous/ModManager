@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { ProjectDto } from '../../bindings/ProjectDto';
@@ -16,6 +16,7 @@ import {
   type SortDirection,
 } from './columns';
 import { useBrowseSelection, toggleFavourite, toggleSelected } from './selectionStore';
+import { nearEnd } from './paging';
 import { useVirtualRows } from './useVirtualRows';
 
 /** The old table's column widths, unlabelled px: the grid that both the
@@ -47,6 +48,13 @@ interface Props {
   rows: ProjectDto[];
   /** A row the user clicked to inspect. */
   onOpen: (project: ProjectDto) => void;
+  /**
+   * F-166: asked when the visible window nears the end of the loaded rows.
+   * The caller decides what to do (load the next page); the table only says
+   * where the user is. Omitted — nothing left to load — and the call never
+   * fires.
+   */
+  onNearEnd?: () => void;
 }
 
 /**
@@ -54,10 +62,18 @@ interface Props {
  * without reloading, with a per-row Select and a per-project favourite, and
  * only the visible rows mounted (the old table was a `QTableView`).
  */
-export function ResultsTable({ rows, onOpen }: Props) {
+export function ResultsTable({ rows, onOpen, onNearEnd }: Props) {
   const { t } = useTranslation();
   const [sort, setSort] = useState<{ column: SortColumn; direction: SortDirection } | null>(null);
   const virtual = useVirtualRows(rows.length, ROW_HEIGHT, 8, HEADER_HEIGHT);
+
+  // F-166: the virtualiser already knows where the user is; near the end of
+  // the loaded rows is where the old app preloaded. The caller debounces.
+  useEffect(() => {
+    if (onNearEnd && nearEnd(virtual.end, rows.length)) {
+      onNearEnd();
+    }
+  }, [onNearEnd, rows.length, virtual.end]);
 
   const sorted = useMemo(
     () => (sort ? sortRows(rows, sort.column, sort.direction) : rows),

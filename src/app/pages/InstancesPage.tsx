@@ -11,6 +11,7 @@ import { RecoveryBanner } from './RecoveryBanner';
 import { InstanceDetails } from './InstanceDetails';
 import { listInstances, openInstanceFolder, toIpcError } from '../../lib/ipc';
 import { formatRelativeTime } from '../../lib/format';
+import { RefreshCw } from 'lucide-react';
 
 import { NewInstanceDialog } from './NewInstanceDialog';
 
@@ -188,8 +189,19 @@ export function InstancesPage() {
           {t('page.instances.count', { count: rows.length })}
         </span>
       )}
+      {/* F-168: the manual refresh on the board — the registry is the truth,
+          and re-reading it is cheap. It re-lists; the per-card scan refresh
+          lives on the Installed Content pane, next to its staleness hint. */}
       <Button
+        variant="outline"
+        onClick={load}
+        aria-label={t('page.instances.action.refresh')}
         className="ms-auto"
+      >
+        <RefreshCw aria-hidden />
+        {t('page.instances.action.refresh')}
+      </Button>
+      <Button
         onClick={() => setDialogOpen(true)}
         aria-label={t('instance.dialog.title')}
       >

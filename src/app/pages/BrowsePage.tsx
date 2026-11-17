@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { InstanceSummaryDto } from '../../bindings/InstanceSummaryDto';
@@ -10,6 +10,13 @@ import { Segmented } from '@/components/ui/Segmented';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
 import { Inspector } from '../browse/Inspector';
+import {
+  PAGING_DEBOUNCE_MS,
+  RequestGate,
+  SearchCache,
+  debounce,
+  queryKeyOf,
+} from '../browse/paging';
 import { ResultsTable } from '../browse/ResultsTable';
 import { InstallPlanDialog } from './InstallPlanDialog';
 import {
@@ -41,6 +48,14 @@ interface Props {
 
 /** One screenful. `offset` is a row count, so this is the page's stride. */
 const PAGE_SIZE = 20;
+
+/**
+ * F-166: the page cache outlives this screen. The component state dies on
+ * remount, but "returning to the same query key must not refetch from
+ * scratch" only holds if the answers stay somewhere; the selection store
+ * already set the precedent of a module singleton.
+ */
+const searchCache = SearchCache.shared;
 
 /**
  * Append a page without repeating a project.
@@ -83,6 +98,9 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
   // hint. The real refusal happens in the command and renders through
   // ErrorState.
   const [keyStatus, setKeyStatus] = useState<CurseForgeKeyDto | null>(null);
+  // F-166: a response whose request was superseded must never render. Tauri
+  // `invoke()` has no AbortSignal, so the guard is a generation counter.
+  const gateRef = useRef(new RequestGate());
 
   useEffect(() => {
     void curseforgeKeyStatus()
@@ -182,12 +200,42 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
    * larger offset appends, and a failed append leaves the rows the user is
    * reading in place — losing page one because page two timed out is worse
    * than a short page one.
+   *
+   * F-166: the page is served from the cache when the same question was
+   * already answered (a manual refresh bypasses it), and the response is
+   * dropped unless its request is still the newest one.
    */
   const runSearch = useCallback(
-    (offset: number) => {
+    (offset: number, options?: { refresh?: boolean }) => {
       const text = query.trim();
       if (text.length === 0) {
         return;
+      }
+      const key = queryKeyOf({
+        query: text,
+        provider,
+        gameVersion: gameVersion.trim() || undefined,
+        loader: loader.trim().toLowerCase() || undefined,
+      });
+      if (!options?.refresh) {
+        const cached = searchCache.get(key, offset);
+        if (cached) {
+          // A cache hit is synchronous: no spinner, no round trip. The same
+          // shape a fetch would have produced is applied at once.
+          if (offset === 0) {
+            setHits(cached.hits);
+            setInspected(null);
+          } else {
+            setHits((prev) => appendUnique(prev, cached.hits));
+          }
+          setTotal(cached.total);
+          setLoaded(cached.loaded);
+          setError(null);
+          setMoreError(null);
+          setSearching(false);
+          setLoadingMore(false);
+          return;
+        }
       }
       if (offset === 0) {
         setSearching(true);
@@ -200,6 +248,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
       }
       setError(null);
       setMoreError(null);
+      const generation = gateRef.current.next();
       searchProjects({
         query: text,
         provider,
@@ -211,12 +260,25 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         offset,
       })
         .then((page) => {
+          // F-166: a superseded request must never render. Replacing this
+          // check with a set would put a late answer to the old question on
+          // top of the new one.
+          if (!gateRef.current.isCurrent(generation)) {
+            return;
+          }
           // A catalogue that says "more" and returns nothing would leave a
           // button whose only possible result is another empty page. The
           // requested offset is then the honest end of the list.
           const exhausted = page.hits.length === 0;
-          setTotal(exhausted ? offset : page.total);
-          setLoaded(offset + page.hits.length);
+          const answeredTotal = exhausted ? offset : page.total;
+          const answeredLoaded = offset + page.hits.length;
+          searchCache.put(key, offset, {
+            hits: page.hits,
+            total: answeredTotal,
+            loaded: answeredLoaded,
+          });
+          setTotal(answeredTotal);
+          setLoaded(answeredLoaded);
           setHits((prev) => (offset === 0 ? page.hits : appendUnique(prev, page.hits)));
         })
         .catch((e) => {
@@ -241,11 +303,34 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
 
   const search = useCallback(() => runSearch(0), [runSearch]);
 
+  /**
+   * F-166: the manual refresh. It bypasses the cache and throws the old
+   * answers away, so the next search of the same question is a real fetch.
+   */
+  const refreshSearch = useCallback(() => {
+    searchCache.clear();
+    runSearch(0, { refresh: true });
+  }, [runSearch]);
+
   const loadMore = useCallback(() => {
     if (!searching && !loadingMore) {
       runSearch(loaded);
     }
   }, [loaded, loadingMore, runSearch, searching]);
+
+  // F-166: the scroll trigger is debounced once, outside the render: the
+  // table calls it on every scroll frame, and only after 120 ms of quiet
+  // does a request actually start. A ref keeps the wrapper calling the
+  // current `loadMore` without rebuilding the debounce mid-scroll.
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => {
+    loadMoreRef.current = loadMore;
+  }, [loadMore]);
+  const onNearEnd = useMemo(
+    () => debounce(() => loadMoreRef.current(), PAGING_DEBOUNCE_MS),
+    [],
+  );
+  useEffect(() => () => onNearEnd.cancel(), [onNearEnd]);
 
   /**
    * Opening the review is the only thing a click does: `execute_install` is
@@ -277,6 +362,17 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
         />
         <Button type="button" onClick={search} disabled={searching}>
           {t('browse.actionSearch')}
+        </Button>
+        {/* F-166: the manual refresh — it invalidates the cache, so a repeat
+            of the same question is a real fetch again. */}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={refreshSearch}
+          disabled={searching}
+          aria-label={t('browse.actionRefresh')}
+        >
+          {t('browse.actionRefresh')}
         </Button>
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted-foreground">
@@ -389,7 +485,7 @@ export function BrowsePage({ onInstalled, onOpenSettings }: Props) {
               body={t('browse.noResultsBody')}
             />
           ) : (
-            <ResultsTable rows={hits} onOpen={setInspected} />
+            <ResultsTable rows={hits} onOpen={setInspected} onNearEnd={onNearEnd} />
           )}
         </div>
         <Inspector

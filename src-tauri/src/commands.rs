@@ -29,6 +29,9 @@ pub mod backup;
 
 /// F-181: the read-only preview of the old application's data.
 pub mod legacy;
+
+/// F-168: the content watcher bridge.
+pub mod watch;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
 use tauri_plugin_opener::OpenerExt;
 
@@ -483,8 +486,13 @@ pub async fn preview_toggle(req: PreviewToggleDto) -> Result<TogglePlanDto, IpcE
 /// Rename-only mutation. The plan is **recomputed server-side** from the
 /// same inputs — a plan body from the webview is never trusted.
 #[tauri::command]
-pub async fn execute_toggle(req: PreviewToggleDto) -> Result<Vec<ToggleResultDto>, IpcError> {
+pub async fn execute_toggle(
+    state: tauri::State<'_, AppState>,
+    req: PreviewToggleDto,
+) -> Result<Vec<ToggleResultDto>, IpcError> {
     let mods_dir = mods_dir_of(&resolve_dir(&req.instance_root)?);
+    // F-168: a rename is the app's own write — the watcher must stay quiet.
+    state.note_own_write(&mods_dir);
     let files = relative_paths(&mods_dir, &req.files);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::toggle::{execute_toggle, preview_toggle};
@@ -544,10 +552,13 @@ pub async fn preview_remove_content(
 /// trusted; external/unknown entries refuse the whole run without the word.
 #[tauri::command]
 pub async fn execute_remove_content(
+    state: tauri::State<'_, AppState>,
     req: RemoveExecuteRequestDto,
 ) -> Result<RemoveRunDto, IpcError> {
     let root = resolve_dir(&req.instance_root)?;
     let mods_dir = mods_dir_of(&root);
+    // F-168: the removal moves files — the app's own write, not staleness.
+    state.note_own_write(&mods_dir);
     tauri::async_runtime::spawn_blocking(move || {
         use mm_core::instances::remove::{build_remove_preview, execute_remove, RemoveError};
         let candidates = remove_candidates(&root, &mods_dir, &req.files);
@@ -579,7 +590,7 @@ pub async fn execute_remove_content(
 /// Canonicalize a webview-supplied directory: missing or non-dir → typed
 /// error. Symlinks resolve through canonicalize, so the caller gets the
 /// real target.
-fn resolve_dir(raw: &str) -> Result<PathBuf, IpcError> {
+pub(crate) fn resolve_dir(raw: &str) -> Result<PathBuf, IpcError> {
     let p = PathBuf::from(raw.trim());
     if p.as_os_str().is_empty() {
         return Err(IpcError::invalid_input("empty path"));
@@ -971,6 +982,10 @@ pub async fn execute_install_with(
             "the instance root must be an absolute path",
         ));
     }
+    // F-168: from here on the batch writes into the instance. The watcher's
+    // suppression window starts now; it is refreshed when the batch settles,
+    // so the trailing writes are quiet too.
+    state.note_own_write(&root);
 
     // An install must be recordable. Checking the registry before the network
     // turns a folder that could never be recorded into one clear refusal;
@@ -1198,6 +1213,9 @@ pub async fn execute_install_with(
             game_versions: item.game_versions.clone(),
         })
         .collect();
+    // F-168: the batch has settled — refresh the suppression so the writes
+    // still landing do not mark the content stale, then read the record back.
+    state.note_own_write(&root);
     state
         .with_db(move |db| {
             mm_core::instances::record_install(db, &record_root, &records).map_err(|e| {

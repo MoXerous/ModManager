@@ -12,6 +12,11 @@ directories = "6.0.0"
 # Kept over hand-rolled FFI: 93M downloads, exact on Windows junctions.
 fs2 = "0.4.3"
 httpdate = "1.0.3"
+# F-168: the filesystem watcher. No watcher exists in std, and polling is a
+# weaker experience; notify 8.2.0 is MIT/Apache-2.0 and actively maintained
+# (decision recorded in the slice's dependency note). The debounce is a plain
+# timer here, not notify-debouncer-mini.
+notify = "8.2.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "stream"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }

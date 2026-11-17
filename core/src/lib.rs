@@ -16,6 +16,7 @@ pub mod providers;
 pub mod resolver;
 pub mod safety;
 pub mod updates;
+pub mod watcher;
 
 /// اسم التطبيق كما يظهر للمستخدم.
 pub const APP_NAME: &str = "ModManager";

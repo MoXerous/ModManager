@@ -395,6 +395,8 @@ pub async fn execute_instance_restore_with(
     let lock = apply_lock_for(&root);
     let _guard = lock.lock().await;
 
+    // F-168: the restore writes into the instance — the watcher stays quiet.
+    state.note_own_write(&root);
     // Registered before the plan, like the backup's: the safety folder is not
     // created until execution, and a cancel between the click and the copy is
     // still a cancel.

@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 import type { AppInfo } from '../bindings/AppInfo';
 import type { AppPathsDto } from '../bindings/AppPathsDto';
@@ -7,6 +8,7 @@ import type { BackupListDto } from '../bindings/BackupListDto';
 import type { BackupRequest } from '../bindings/BackupRequest';
 import type { BackupResultDto } from '../bindings/BackupResultDto';
 import type { CheckUpdatesRequest } from '../bindings/CheckUpdatesRequest';
+import type { ContentStaleDto } from '../bindings/ContentStaleDto';
 import type { CreateInstancePlanDto } from '../bindings/CreateInstancePlanDto';
 import type { CreateRecoveryDto } from '../bindings/CreateRecoveryDto';
 import type { DownloadHistoryEntryDto } from '../bindings/DownloadHistoryEntryDto';
@@ -146,6 +148,37 @@ export function scanInstance(
   loader: string,
 ): Promise<InstanceSnapshotDto> {
   return invoke<InstanceSnapshotDto>('scan_instance', { instanceRoot, gameVersion, loader });
+}
+
+// --- Content staleness (F-168) -------------------------------------------
+//
+// The watcher is read-only and lives in Rust; the webview only asks it to
+// start and receives one typed event per coalesced burst. One watch at a
+// time: asking for a new instance replaces the old watcher, so nothing keeps
+// running for an instance the screen left.
+
+/**
+ * Arms the watcher for `instanceRoot`'s content folders. Advisory: a failed
+ * arm degrades to no hint, never to a broken screen, so callers may ignore
+ * the rejection.
+ */
+export function watchInstanceContent(instanceRoot: string): Promise<void> {
+  return invoke<void>('watch_instance_content', { instanceRoot });
+}
+
+/** Stops the current watcher (the instance changed or the screen closed). */
+export function stopInstanceContentWatch(): Promise<void> {
+  return invoke<void>('unwatch_instance_content');
+}
+
+/**
+ * Subscribes to the watcher's typed signal. Returns the unlisten function;
+ * it resolves once the subscription is live, so no early event is lost.
+ */
+export async function onContentStale(
+  handler: (event: ContentStaleDto) => void,
+): Promise<() => void> {
+  return listen<ContentStaleDto>('content://stale', (e) => handler(e.payload));
 }
 
 /**

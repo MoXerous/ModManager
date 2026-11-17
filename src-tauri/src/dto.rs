@@ -638,6 +638,16 @@ pub struct InstanceSnapshotDto {
     pub content_warnings: Vec<ContentWarningDto>,
 }
 
+/// F-168: the watcher's typed signal. The event carries the root whose
+/// content moved, never a file path — the UI only needs to know *which*
+/// instance's scan went stale.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ContentStaleDto {
+    pub instance_root: String,
+}
+
 // --- updates (F-120) -----------------------------------------------------
 
 #[derive(Debug, Clone, serde::Deserialize, TS)]

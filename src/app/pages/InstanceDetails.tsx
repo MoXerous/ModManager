@@ -16,12 +16,16 @@ import { ErrorState, LoadingState } from '../../components/state';
 import {
   checkInstanceUpdates,
   executeToggle,
+  onContentStale,
   previewToggle,
   scanInstance,
+  stopInstanceContentWatch,
   toIpcError,
+  watchInstanceContent,
 } from '../../lib/ipc';
 import { formatBytes } from '../../lib/format';
 import { type ProviderId, PROVIDERS, getGameTarget } from '../gameTarget';
+import { isForInstance, markStale, refreshed, type StalenessState } from '../instances/staleness';
 import { InstanceBackup } from './InstanceBackup';
 import { InstanceExport } from './InstanceExport';
 import { RemoveDialog } from './RemoveDialog';
@@ -183,6 +187,9 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
    */
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [removeOpen, setRemoveOpen] = useState(false);
+  // F-168: the watcher's hint. Advisory only — a missed event is a missed
+  // hint, never a broken screen, so arming and subscribing ignore failures.
+  const [staleness, setStaleness] = useState<StalenessState>(() => ({ stale: false }));
 
   // `any` and `unknown` are sentinels, not loaders: a provider can only filter
   // by a real one. The button stays disabled and the hint says why, rather
@@ -207,6 +214,27 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   }, [root, targetVersion, targetLoader]);
 
   useEffect(load, [load]);
+
+  // F-168: arm the watcher while this screen is open, and tear it down when
+  // the instance changes or the screen closes — the one watch at a time is
+  // Rust's decision, this only asks for it.
+  useEffect(() => {
+    void watchInstanceContent(root).catch(() => undefined);
+    let unlisten: (() => void) | null = null;
+    void onContentStale((event) => {
+      if (isForInstance(event.instanceRoot, root)) {
+        setStaleness(markStale);
+      }
+    })
+      .then((stop) => {
+        unlisten = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      unlisten?.();
+      void stopInstanceContentWatch().catch(() => undefined);
+    };
+  }, [root]);
 
   const selectedFiles = useMemo(() => {
     if (!snap) {
@@ -330,6 +358,24 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         <h2 className="text-body font-semibold">{t('details.installedContent')}</h2>
         <span className="text-small text-muted-foreground">{t('details.count', { count: total })}</span>
         <div className="ms-auto flex flex-wrap items-center gap-2">
+          {staleness.stale && (
+            <span role="status" className="text-caption text-status-warning">
+              {t('details.staleHint')}
+            </span>
+          )}
+          {/* F-168: the manual refresh — re-runs the scan and clears the
+              hint, because a scan that just ran cannot be stale. */}
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setStaleness(refreshed);
+              load();
+            }}
+          >
+            {t('details.actionRefresh')}
+          </Button>
           {total > 0 && (
             <span className="me-1 flex items-center gap-1.5 text-caption text-muted-foreground">
               <Checkbox
