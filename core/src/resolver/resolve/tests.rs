@@ -200,6 +200,7 @@ fn params(project: Project, ptype: &str) -> ResolveParams {
         project_type: ptype.to_string(),
         game_version: "1.21".to_string(),
         loader: "fabric".to_string(),
+        allow_beta: true,
         allow_alpha: false,
         pin: PreferredPin::default(),
     }

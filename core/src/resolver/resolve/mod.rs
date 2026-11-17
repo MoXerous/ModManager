@@ -71,6 +71,8 @@ pub struct ResolveParams {
     pub project_type: String,
     pub game_version: String,
     pub loader: String,
+    /// F-003: the old app's channel switches (`allow_beta` defaults true).
+    pub allow_beta: bool,
     pub allow_alpha: bool,
     pub pin: PreferredPin,
 }
@@ -97,6 +99,7 @@ fn resolve_key(params: &ResolveParams, provider: &str) -> ResolveKey {
         project_type: or_any(&params.project_type, "mod"),
         game_version: or_any(&params.game_version, "any"),
         loader: or_any(&params.loader, "any"),
+        allow_beta: params.allow_beta,
         allow_alpha: params.allow_alpha,
         preferred_version_id: params.pin.version_id.clone().unwrap_or_default(),
         preferred_version_number: params.pin.version_number.clone().unwrap_or_default(),
@@ -386,6 +389,7 @@ pub async fn resolve_project(
             project_id: project.id.clone(),
             game_version: game.clone(),
             loader: cand.clone(),
+            allow_beta: params.allow_beta,
             allow_alpha: params.allow_alpha,
         };
         if let Some(hit) = cache.best(&bkey) {
@@ -412,8 +416,14 @@ pub async fn resolve_project(
         let vs = versions_cached(provider, cache, &project.id, g, l)
             .await
             .map_err(|source| ResolveError::provider("get_versions", project.id.clone(), source))?;
-        let pick = select_best_version(&vs, &game, std::slice::from_ref(cand), params.allow_alpha)
-            .cloned();
+        let pick = select_best_version(
+            &vs,
+            &game,
+            std::slice::from_ref(cand),
+            params.allow_beta,
+            params.allow_alpha,
+        )
+        .cloned();
         cache.put_best(bkey, pick.clone());
         if let Some(v) = pick {
             return Ok(finish(
@@ -433,7 +443,13 @@ pub async fn resolve_project(
         let vs = versions_cached(provider, cache, &project.id, g, None)
             .await
             .map_err(|source| ResolveError::provider("get_versions", project.id.clone(), source))?;
-        if let Some(v) = select_best_version(&vs, &game, &["any".to_string()], params.allow_alpha) {
+        if let Some(v) = select_best_version(
+            &vs,
+            &game,
+            &["any".to_string()],
+            params.allow_beta,
+            params.allow_alpha,
+        ) {
             return Ok(finish(
                 cache,
                 compatible(&project, &ptype, v, provider.provider_id()),
@@ -637,6 +653,7 @@ pub async fn resolve_dependency(
                 project_type: ptype,
                 game_version: game,
                 loader: eff.to_string(),
+                allow_beta: true,
                 allow_alpha: false,
                 pin: PreferredPin::default(),
             },

@@ -144,6 +144,7 @@ pub fn run() -> i32 {
             commands::abandon_create,
             commands::open_instance_folder,
             commands::open_project_url,
+            commands::open_file_page,
             commands::app_paths,
             commands::open_app_folder,
             commands::execute_install,

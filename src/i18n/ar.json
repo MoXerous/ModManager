@@ -322,6 +322,7 @@
   "plan.status.downloadable": "جاهز",
   "plan.status.blocked": "محجوب",
   "plan.nothingDownloadable": "لا يوجد في هذه الخطة ما يمكن تنزيله؛ راجع سبب الحجب في كل صف أعلاه.",
+  "plan.openFilePage": "فتح صفحة الملف في المتصفح",
   "plan.notes_zero": "ملاحظات ({{count}})",
   "plan.notes_one": "ملاحظة واحدة",
   "plan.notes_two": "ملاحظتان",

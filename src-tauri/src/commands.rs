@@ -944,6 +944,68 @@ pub(crate) fn project_page_url(raw: &str) -> Result<String, IpcError> {
     Ok(parsed.into())
 }
 
+/// F-015: when CurseForge answers `downloadUrl: null` (the mod forbids
+/// distribution), the blocked plan entry still has a file page. The webview
+/// never names a URL — it sends the parts, and this builds
+/// `https://www.curseforge.com/minecraft/mc-mods/{slug}/files/{file_id}`,
+/// the same shape [`crate::providers`] already builds for `web_url`.
+///
+/// The allowlist is the shape, not a parsed string: the provider must be
+/// CurseForge, the slug only `a-z0-9_-` (no `/`, `\`, `..`, no uppercase),
+/// the file id only digits. Pure, so the rule is testable without opening a
+/// browser.
+pub(crate) fn curseforge_file_page_url(
+    provider: &str,
+    slug: &str,
+    file_id: &str,
+) -> Result<String, IpcError> {
+    if provider != mm_core::providers::curseforge::PROVIDER_ID {
+        return Err(IpcError::invalid_input(
+            "a file page exists only on CurseForge",
+        ));
+    }
+    let slug = slug.trim();
+    let is_slug = !slug.is_empty()
+        && slug.len() <= 100
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+    if !is_slug {
+        return Err(IpcError::invalid_input(
+            "the file page's slug must be lowercase letters, digits, '-' or '_'",
+        ));
+    }
+    let file_id = file_id.trim();
+    let is_file_id =
+        !file_id.is_empty() && file_id.len() <= 20 && file_id.bytes().all(|b| b.is_ascii_digit());
+    if !is_file_id {
+        return Err(IpcError::invalid_input(
+            "the file page's file id must be its numeric CurseForge file id",
+        ));
+    }
+    Ok(format!(
+        "https://www.curseforge.com/minecraft/mc-mods/{slug}/files/{file_id}"
+    ))
+}
+
+/// F-015: opens a CurseForge file's own page in the system browser, so a
+/// blocked entry (`downloadUrl: null`) still reaches its download. Same
+/// contract as [`open_project_url`]: a refusal is our refusal, an opener
+/// failure is the typed `io` error.
+#[tauri::command]
+pub async fn open_file_page(
+    app: tauri::AppHandle,
+    provider: String,
+    slug: String,
+    file_id: String,
+) -> Result<(), IpcError> {
+    let checked = curseforge_file_page_url(&provider, &slug, &file_id)?;
+    tauri::async_runtime::spawn_blocking(move || app.opener().open_url(checked, None::<&str>))
+        .await
+        .map_err(|e| IpcError::internal(e.to_string()))?
+        .map_err(IpcError::io)
+}
+
 /// F-063: runs a resolved install plan, streaming progress on a channel.
 ///
 /// The channel is the point. `download()` fires for every chunk; this is the

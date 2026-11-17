@@ -236,9 +236,98 @@ fn parse_retry_seconds(text: &str) -> Option<f64> {
     text.parse::<f64>().ok()
 }
 
+/// Days since 1970-01-01 → (year, month, day). Howard Hinnant's
+/// `civil_from_days`: no date dependency, ~15 lines.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// (year, month, day) → days since 1970-01-01 (Hinnant's `days_from_civil`).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// F-009: the wait an HTTP-date `Retry-After` asks for, in seconds (never
+/// negative). RFC 850 dates carry a two-digit year, which `httpdate` maps
+/// into its fixed 1970–2069 window; HTTP's own rule (the old app's
+/// `_server_retry_delay`) is a rolling ±50-year window around `now`, so from
+/// 2026 on `11-Sep-76` means 2076 — a future reset the >10 s fail-fast rule
+/// fires on — not 1976.
+///
+/// Production wrapper: `now` is this instant; tests inject their own.
+fn http_date_wait_secs_from(
+    date: std::time::SystemTime,
+    two_digit_year: bool,
+    now: std::time::SystemTime,
+) -> Option<f64> {
+    if !two_digit_year {
+        return Some(
+            date.duration_since(now)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+        );
+    }
+    let date_secs = date
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64);
+    let now_secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64);
+    let (Some(date_secs), Some(now_secs)) = (date_secs, now_secs) else {
+        return Some(0.0);
+    };
+    let (parsed_year, month, day) = civil_from_days(date_secs.div_euclid(86_400));
+    let date_sod = date_secs.rem_euclid(86_400);
+    let (now_year, now_month, now_day) = civil_from_days(now_secs.div_euclid(86_400));
+    let now_sod = now_secs.rem_euclid(86_400);
+    // The two-digit year inside the window [now.year - 50, now.year + 50].
+    let mut year = now_year + (parsed_year % 100 - now_year).rem_euclid(100);
+    // Past (now + 50 years) at now's own month/day/time, the window looked
+    // a century ahead: step back into the past.
+    let candidate = days_from_civil(year, month, day) * 86_400 + date_sod;
+    let cutoff = days_from_civil(now_year + 50, now_month, now_day) * 86_400 + now_sod;
+    if candidate > cutoff {
+        year -= 100;
+    }
+    // A Feb-29 the target year does not have is unrepresentable; that is
+    // the old app's ValueError branch: no answer at all, so the caller
+    // falls through to the next header.
+    let final_days = days_from_civil(year, month, day);
+    if civil_from_days(final_days) != (year, month, day) {
+        return None;
+    }
+    Some(((final_days * 86_400 + date_sod - now_secs).max(0)) as f64)
+}
+
 /// First valid wins: numeric `Retry-After`, then HTTP-date `Retry-After`,
 /// then `X-Ratelimit-Reset` (epoch seconds). Malformed values are skipped.
+///
+/// Production calls the thin wrapper; tests inject `now`.
 fn server_delay_secs(headers: &reqwest::header::HeaderMap) -> Option<f64> {
+    server_delay_secs_from(headers, std::time::SystemTime::now())
+}
+
+fn server_delay_secs_from(
+    headers: &reqwest::header::HeaderMap,
+    now: std::time::SystemTime,
+) -> Option<f64> {
     use reqwest::header::RETRY_AFTER;
     if let Some(v) = headers.get(RETRY_AFTER).and_then(|v| v.to_str().ok()) {
         let v = v.trim();
@@ -246,11 +335,15 @@ fn server_delay_secs(headers: &reqwest::header::HeaderMap) -> Option<f64> {
             return Some(secs);
         }
         if let Ok(date) = httpdate::parse_http_date(v) {
-            let wait = date
-                .duration_since(std::time::SystemTime::now())
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0);
-            return Some(wait);
+            // F-009: RFC 850 dates carry a two-digit year (the `-` in the
+            // text) and get HTTP's rolling ±50-year rule; other shapes keep
+            // their absolute year. An unrepresentable two-digit date (a
+            // Feb-29 the window's year lacks — the old app's ValueError)
+            // yields `None`, so the ladder falls through to the next header
+            // instead of answering 0 s.
+            if let Some(wait) = http_date_wait_secs_from(date, v.contains('-'), now) {
+                return Some(wait);
+            }
         }
     }
     if let Some(v) = headers
@@ -258,11 +351,11 @@ fn server_delay_secs(headers: &reqwest::header::HeaderMap) -> Option<f64> {
         .and_then(|v| v.to_str().ok())
     {
         if let Ok(epoch) = v.trim().parse::<u64>() {
-            let now = std::time::SystemTime::now()
+            let now_secs = now
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            return Some(epoch.saturating_sub(now) as f64);
+            return Some(epoch.saturating_sub(now_secs) as f64);
         }
     }
     None
@@ -1039,5 +1132,186 @@ mod tests {
             .await
             .expect("update");
         assert_eq!(map.len(), 1);
+    }
+
+    fn delay_from(value: &'static str) -> Option<f64> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_static(value),
+        );
+        server_delay_secs(&headers)
+    }
+
+    /// A fixed UTC instant, so the ±50-year pivot is deterministic.
+    fn at(y: i64, m: u32, d: u32, h: u32, mi: u32, s: u32) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(
+                (days_from_civil(y, m, d) * 86_400 + i64::from(h * 3600 + mi * 60 + s)) as u64,
+            )
+    }
+
+    /// F-009: RFC 850 dates carry a two-digit year, which `httpdate` maps
+    /// into its fixed 1970–2069 window. HTTP's own rule (the old app's
+    /// `_server_retry_delay`) is a rolling ±50-year window around now, so
+    /// `11-Sep-76` means 2076 from 2026 on — a future reset the >10 s
+    /// fail-fast rule fires on, not 1976's 0 s wait.
+    #[test]
+    fn spec_f009_two_digit_year_rolls_forward_into_the_future() {
+        let wait = delay_from("Saturday, 11-Sep-76 09:14:33 GMT").expect("http date");
+        assert!(
+            wait > 10.0,
+            "a mapped-future reset must fail fast, got {wait}"
+        );
+        // Inside the ±50-year window: not further than 51 years out.
+        assert!(
+            wait < 51.0 * 365.25 * 86_400.0,
+            "outside the window: {wait}"
+        );
+    }
+
+    /// F-009 REGRESSION GUARD (S9 review): this test was written after the
+    /// change and passed on its first run without ever seeing a RED — a
+    /// recent-past two-digit date maps into the past under both the old
+    /// fixed 1970–2069 window and the rolling rule, so it cannot
+    /// discriminate the fix. It pins that the rolling rule left the
+    /// recent-past answer (0 s) untouched.
+    #[test]
+    fn spec_f009_recent_two_digit_year_stays_in_the_past() {
+        let wait = delay_from("Wednesday, 11-Sep-24 09:14:33 GMT").expect("http date");
+        assert_eq!(wait, 0.0, "a past reset waits nothing, got {wait}");
+    }
+
+    /// F-009 REGRESSION GUARD (S9 review): this test was written after the
+    /// change and passed on its first run without ever seeing a RED. It
+    /// pins the cutoff branch — a mapped year past (now + 50 years) at
+    /// now's month/day/time steps back a century, so `Dec-76`
+    /// (2076-12-11 is past the 2076-11-17 cutoff) stays 1976 — the same 0 s
+    /// answer the reverted code reached through `httpdate`'s fixed window.
+    /// The deterministic exact-pivot boundary lives in the injected-`now`
+    /// tests below.
+    #[test]
+    fn spec_f009_the_pivot_month_and_day_decide_the_direction() {
+        let wait = delay_from("Saturday, 11-Dec-76 09:14:33 GMT").expect("http date");
+        assert_eq!(wait, 0.0, "past the cutoff the year steps back, got {wait}");
+    }
+
+    /// F-009: a two-digit Feb-29 the rolling window's year does not have is
+    /// the old app's ValueError branch: the HTTP-date source yields nothing
+    /// and `X-Ratelimit-Reset` is consulted, instead of a 0 s answer
+    /// short-circuiting the ladder. Only reachable with an injected `now`
+    /// past 2050: with `now` = 2051-06-01, `29-Feb-00` rolls onto 2100,
+    /// which has no Feb 29, and the candidate sits inside the window, so no
+    /// century step-back rescues it. (With today's `now` the step-back
+    /// always lands on a leap year, so old and new code both answer 0 s.)
+    #[test]
+    fn spec_f009_an_unrepresentable_feb_29_falls_through_to_the_reset_header() {
+        let now = at(2051, 6, 1, 12, 0, 0);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_static("Tuesday, 29-Feb-00 09:14:33 GMT"),
+        );
+        headers.insert(
+            "X-Ratelimit-Reset",
+            reqwest::header::HeaderValue::from_static("9999999999"),
+        );
+        let wait = server_delay_secs_from(&headers, now).expect("the reset header is consulted");
+        let expected = (9_999_999_999u64
+            - now
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("now")
+                .as_secs()) as f64;
+        assert_eq!(
+            wait, expected,
+            "an unrepresentable Feb-29 must fall through to X-Ratelimit-Reset"
+        );
+    }
+
+    /// F-009 (injected `now`): the exact pivot — a mapped year landing
+    /// precisely on (now + 50 years) at now's month/day/time — stays in the
+    /// future (the century step-back fires only when strictly past the
+    /// cutoff), so the wait is exactly 50 years.
+    #[test]
+    fn spec_f009_the_exact_pivot_date_stays_in_the_future() {
+        let now = at(2026, 11, 17, 9, 14, 33);
+        let date = httpdate::parse_http_date("Wednesday, 17-Nov-76 09:14:33 GMT")
+            .expect("httpdate maps 76 onto 1976");
+        let expected =
+            ((days_from_civil(2076, 11, 17) - days_from_civil(2026, 11, 17)) * 86_400) as f64;
+        assert_eq!(
+            http_date_wait_secs_from(date, true, now),
+            Some(expected),
+            "candidate == cutoff must keep the rolled-forward year"
+        );
+    }
+
+    /// F-009 (injected `now`): one second past the pivot the year steps back
+    /// a century, into the past — a 0 s wait.
+    #[test]
+    fn spec_f009_one_second_past_the_pivot_steps_back_a_century() {
+        let now = at(2026, 11, 17, 9, 14, 33);
+        let date = httpdate::parse_http_date("Wednesday, 17-Nov-76 09:14:34 GMT")
+            .expect("httpdate maps 76 onto 1976");
+        assert_eq!(
+            http_date_wait_secs_from(date, true, now),
+            Some(0.0),
+            "candidate == cutoff + 1s must step back into the past"
+        );
+    }
+
+    /// F-009 (injected `now`): a date inside the next calendar year maps to
+    /// that year and is compared exactly, not through tolerant bounds.
+    #[test]
+    fn spec_f009_a_date_in_the_next_year_is_kept_exactly() {
+        let now = at(2026, 11, 17, 9, 14, 33);
+        let date = httpdate::parse_http_date("Friday, 17-Dec-27 09:14:33 GMT")
+            .expect("httpdate maps 27 onto 2027");
+        let expected =
+            ((days_from_civil(2027, 12, 17) - days_from_civil(2026, 11, 17)) * 86_400) as f64;
+        assert_eq!(
+            http_date_wait_secs_from(date, true, now),
+            Some(expected),
+            "a next-year date must not be remapped a century away"
+        );
+    }
+
+    /// F-009 (injected `now`): an HTTP-date with a 4-digit year is absolute —
+    /// the rolling two-digit rule must never touch it (applied to `2176` it
+    /// would fold the year onto 2076 and change the wait).
+    #[test]
+    fn spec_f009_a_four_digit_year_stays_absolute() {
+        let now = at(2026, 11, 17, 9, 14, 33);
+        let date = httpdate::parse_http_date("Wed, 11 Sep 2176 09:14:33 GMT")
+            .expect("4-digit IMF-fixdate");
+        let expected =
+            ((days_from_civil(2176, 9, 11) - days_from_civil(2026, 11, 17)) * 86_400) as f64;
+        assert_eq!(
+            http_date_wait_secs_from(date, false, now),
+            Some(expected),
+            "a 4-digit year must not be remapped"
+        );
+    }
+
+    /// F-009 integration: a future HTTP-date `Retry-After` must trip the
+    /// >10 s fail-fast — no retry sleep, one attempt, and the surfaced
+    /// reset window is the (huge) wait, not 0.
+    #[tokio::test]
+    async fn spec_f009_a_future_http_date_fails_fast() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "Saturday, 11-Sep-76 09:14:33 GMT"),
+            )
+            .mount(&server)
+            .await;
+        let r = test_client(&server).search(&query()).await;
+        assert!(matches!(
+            r,
+            Err(ProviderError::RateLimited { reset_seconds }) if reset_seconds > 10
+        ));
+        assert_eq!(search_calls(&server).await, 1, "a >10 s wait never retries");
     }
 }

@@ -13,22 +13,19 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 36 |
+| حاضر — مُراجَع | 39 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 8 |
+| جزئي — مُراجَع | 5 |
 | مفقود — مُراجَع | 8 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**16** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**13** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
 | المعرّف | السلوك | المجال | الحالة | ما ينقص بالضبط |
 |---|---|---|---|---|
-| **F-003** | `get_best_version` | providers | جزئي — مُراجَع | No release-channel ladder: the new select_best_version takes the first compatible version in provider order and only skips alpha unless allow_alpha; the old get_best_version iterated release > beta (allow_beta default true) > alpha and picked the newest of that channel by date_published, with a newest-of-all fallback. So a newer beta now beats an older stable, there is no allow_beta switch, and no sort by date_published. |
-| **F-009** | **قاعدة السنة الدوّارة** | providers | جزئي — مُراجَع | The rotating +/-50-year rule for RFC-850 dates is not implemented: httpdate 1.0.3 maps two-digit years into a fixed 1970-2069 window (crate docs line 51-52, date.rs), so 'Fri, 11-Sep-76' parses as 1976 (past => 0 s wait) where the old code's rolling window computes 2076 (future => the >10s fail-fast rule fires). Header order and strict numeric parsing match the old code; no test anywhere feeds an HTTP-date Retry-After. |
-| **F-015** | حالة `downloadUrl: null` عند CurseForge | providers | جزئي — مُراجَع | The data level is handled (null downloadUrl maps to "", files stay listed, plan entry blocked with the exact reason), but the spec's visible behaviour — opening the file's page in the browser — has no counterpart: nothing builds a CurseForge file/project page URL, and the only opener usages (commands.rs::open_app_folder, commands.rs::open_instance_folder) call opener().open_path on local folders, never a web URL. |
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | مفقود — مُراجَع | No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision. |
 | **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | instances | جزئي — مُراجَع | تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها. |
 | **F-121** | **إعادة تحقق قبل التنفيذ** | updates | جزئي — مُراجَع | The stale-plan gate exists only in the flows that exist: pack apply re-hashes the archive (PackChanged) and export compares expectedLockSha512 (InstanceChanged), both with tests. The CLI update is the only update-install path and it reads the lock once, prints rows, confirms and swaps without re-reading the lock, the instance target or the folder — no ticket, no context comparison. The GUI has no update-install command at all (only checkInstanceUpdates). docs/todo.md records F-121..F-124 as deliberately deferred to a later milestone, but features.md keeps them, so they stay gaps. |
@@ -51,19 +48,19 @@
 |---|---|---|---|---|---|
 | **F-001** | بحث Modrinth مع فلاتر | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-002** | جلب مشروع/إصدار | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs |
-| **F-003** | `get_best_version` | Keep | M1 | جزئي — مُراجَع | E:\ModManager\core\src\resolver\graph\mod.rs::select_best_version (lines 159-171: find() first compatible, alpha skip only) · D:\latest_project\app\api\modrinth_client.py::get_best_version (lines 422-446: allowed_types ladder + sorted(date_published)) |
+| **F-003** | `get_best_version` | Keep | M1 | حاضر — مُراجَع | core/src/resolver/graph/mod.rs::select_best_version · core/src/resolver/cache.rs::BestKey · core/src/resolver/cache.rs::ResolveKey |
 | **F-004** | بحث بالهاش (SHA-1) | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-005** | بحث التحديثات دفعة واحدة | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs، src-tauri/src/progress.rs · كود: core/src/providers/mod.rs |
 | **F-006** | تحميل بالهاش | Keep | M1 | حاضر — مُراجَع | core/src/providers/mod.rs::Provider::get_versions_by_hashes · core/src/providers/modrinth.rs::get_versions_by_hashes · core/src/resolver/resolve/mod.rs::hash_lookup · core/src/modpack/exec.rs::PlanExecutor::resolved_urls |
 | **F-007** | معالجة حد المعدل 429 | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-008** | **قاعدة الانتظار** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs |
-| **F-009** | **قاعدة السنة الدوّارة** | Keep | M1 | جزئي — مُراجَع | E:\ModManager\core\src\providers\modrinth.rs::server_delay_secs (line 210: httpdate::parse_http_date, duration_since unwrap_or(0.0)) · D:\latest_project\app\api\modrinth_client.py::_server_retry_delay (lines 68-78: rolling 50-year window on '-' dates) · C:\Users\LOQ\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httpdate-1.0.3\src\lib.rs (lines 50-52: 'Two digit years are mapped to dates between 1970 and 2069') |
+| **F-009** | **قاعدة السنة الدوّارة** | Keep | M1 | حاضر — مُراجَع | core/src/providers/modrinth.rs::http_date_wait_secs_from · core/src/providers/modrinth.rs::server_delay_secs_from |
 | **F-010** | إعادة المحاولة (2 محاولات) | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/modrinth.rs |
 | **F-011** | تدهور التوافق عند 400 | Defer | M1 | مؤجَّل (قرارُ المواصفة) | — |
 | **F-012** | تحديد معدل من جهة العميل | Defer | M1 | مؤجَّل (قرارُ المواصفة) | — |
 | **F-013** | تخزين مؤقت لنتائج البحث | Defer | M1 | مؤجَّل (قرارُ المواصفة) | — |
 | **F-014** | **مزوّد CurseForge** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/providers/curseforge/mod.rs، core/src/providers/curseforge/secret.rs (+3) · كود: src-tauri/src/dto.rs، src-tauri/src/providers/tests.rs |
-| **F-015** | حالة `downloadUrl: null` عند CurseForge | Keep | M3 | جزئي — مُراجَع | E:\ModManager\core\src\providers\curseforge\mod.rs::map_file · E:\ModManager\src-tauri\src\commands.rs::open_app_folder (line 192: opener().open_path) · E:\ModManager\src-tauri\src\commands.rs::open_instance_folder (line 827: opener().open_path) |
+| **F-015** | حالة `downloadUrl: null` عند CurseForge | Keep | M3 | حاضر — مُراجَع | src-tauri/src/commands.rs::curseforge_file_page_url · src-tauri/src/commands.rs::open_file_page · src/app/pages/InstallPlanDialog.tsx::EntryRow · src/lib/ipc.ts::openFilePage |
 | **F-016** | بصمة CurseForge (`fileFingerprint`) | Defer | M3 | مؤجَّل (قرارُ المواصفة) | — |
 | **F-017** | رابط تنزيل فارغ | Keep | M1 | حاضر — بتتبّعِ اختبار | كود: core/src/providers/curseforge/mod.rs، core/src/providers/mod.rs (+3) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs · وثائق: docs/adr/0004-curseforge-provider.md |
 | **F-018** | `User-Agent` وصفي **بمعلومات تواصل** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/lib.rs · كود: core/src/lib.rs |

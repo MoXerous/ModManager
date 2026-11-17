@@ -191,18 +191,101 @@ fn spec_f050_select_best_skips_alpha_unless_allowed() {
     alpha.name = "a".to_string();
     alpha.version_type = "alpha".to_string();
     let vs = vec![alpha, beta];
-    // First compatible wins in input (newest-first) order.
-    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), false).expect("best");
+    // F-003: the ladder wins first — with beta allowed, beta is the pick even
+    // though alpha is allowed too.
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), true, false).expect("best");
     assert_eq!(best.version_type, "beta");
-    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), true).expect("best");
+    // The alpha gate stays: with beta not allowed and alpha allowed, the
+    // ladder reaches alpha.
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), false, true).expect("best");
     assert_eq!(best.version_type, "alpha");
     // Nothing compatible -> None.
     let mut v = version("v1", "a");
     v.game_versions = vec!["1.20".to_string()];
     assert_eq!(
-        select_best_version(&[v], "1.21", &cands(&["fabric"]), true),
+        select_best_version(&[v], "1.21", &cands(&["fabric"]), true, true),
         None
     );
+}
+
+/// F-003: the old app's ladder is release > beta (`allow_beta` defaults
+/// true) > alpha, newest by `date_published` inside a channel. A newer beta
+/// must NOT beat an older stable.
+#[test]
+fn spec_f003_a_newer_beta_does_not_beat_an_older_stable() {
+    let mut release = version("r", "a");
+    release.date_published = "2024-01-01T00:00:00Z".to_string();
+    let mut beta = version("b", "a");
+    beta.version_type = "beta".to_string();
+    beta.date_published = "2024-06-01T00:00:00Z".to_string();
+    // Newest-first input order, as the providers answer: the beta is first.
+    let vs = vec![beta, release];
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), true, false).expect("best");
+    assert_eq!(
+        best.id, "r",
+        "the older stable must win over the newer beta"
+    );
+}
+
+/// F-003: within one channel the pick is the newest by `date_published`,
+/// never the first compatible row in input order.
+#[test]
+fn spec_f003_the_newest_of_the_channel_wins_not_the_first_in_input() {
+    let mut old = version("old", "a");
+    old.date_published = "2024-01-01T00:00:00Z".to_string();
+    let mut new = version("new", "a");
+    new.date_published = "2024-06-01T00:00:00Z".to_string();
+    // An older release listed first must not win.
+    let vs = vec![old, new];
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), true, false).expect("best");
+    assert_eq!(best.id, "new", "the newest release wins by date_published");
+}
+
+/// F-003: the switches gate their channels, and when no allowed channel has
+/// a candidate the fallback is the newest compatible version of all — the
+/// old app's final `sorted(versions)[0]` (CurseForge's `unknown:<n>` labels
+/// land there).
+#[test]
+fn spec_f003_the_switches_gate_their_channels_and_the_fallback_is_newest_of_all() {
+    let mut beta = version("b", "a");
+    beta.version_type = "beta".to_string();
+    beta.date_published = "2024-06-01T00:00:00Z".to_string();
+    let mut alpha = version("a", "a");
+    alpha.id = "a2".to_string();
+    alpha.version_number = "a2".to_string();
+    alpha.name = "a2".to_string();
+    alpha.version_type = "alpha".to_string();
+    alpha.date_published = "2024-03-01T00:00:00Z".to_string();
+    let vs = vec![alpha.clone(), beta.clone()];
+    // No release exists: the ladder falls through to beta.
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), true, false).expect("beta");
+    assert_eq!(best.id, "b");
+    // `allow_beta = false` closes the beta channel: only alpha is left.
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), false, true).expect("alpha");
+    assert_eq!(best.id, "a2");
+    // Both rated channels closed: a closed channel stays closed — only an
+    // unrated channel label (CurseForge's `unknown:<n>`) reaches the
+    // newest-of-all fallback.
+    assert_eq!(
+        select_best_version(&vs, "1.21", &cands(&["fabric"]), false, false),
+        None
+    );
+}
+
+/// F-003: CurseForge files carry `unknown:<n>` instead of a channel name.
+/// The ladder never matches them, so they answer through the fallback: the
+/// newest compatible unlabelled version, never the first in input order.
+#[test]
+fn spec_f003_an_unlabelled_channel_still_answers_via_the_fallback() {
+    let mut old = version("old", "a");
+    old.version_type = "unknown:1".to_string();
+    old.date_published = "2024-01-01T00:00:00Z".to_string();
+    let mut new = version("new", "a");
+    new.version_type = "unknown:1".to_string();
+    new.date_published = "2024-06-01T00:00:00Z".to_string();
+    let vs = vec![old, new];
+    let best = select_best_version(&vs, "1.21", &cands(&["fabric"]), true, false).expect("fb");
+    assert_eq!(best.id, "new", "the newest unrated version wins");
 }
 
 #[test]

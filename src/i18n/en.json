@@ -286,6 +286,7 @@
   "plan.status.downloadable": "Ready",
   "plan.status.blocked": "Blocked",
   "plan.nothingDownloadable": "Nothing in this plan can be downloaded. Check each row's blocked reason above.",
+  "plan.openFilePage": "Open file page in browser",
   "plan.notes": "Notes ({{count}})",
   "plan.notes_one": "Notes ({{count}})",
   "plan.notes_other": "Notes ({{count}})",

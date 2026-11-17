@@ -20,7 +20,7 @@ import {
 import { cn } from 'cn';
 import { ErrorState, LoadingState } from '../../components/state';
 import { formatBytes } from '../../lib/format';
-import { buildInstallPlan, cancelActiveInstall, executeInstall, toIpcError } from '../../lib/ipc';
+import { buildInstallPlan, cancelActiveInstall, executeInstall, openFilePage, toIpcError } from '../../lib/ipc';
 
 /** `install.phase.*` keys that are a file's final answer. */
 const SETTLED = new Set([
@@ -242,6 +242,7 @@ export function InstallPlanDialog({
                     key={`${entry.provider}:${entry.projectId}`}
                     entry={entry}
                     phase={entry.versionId ? phases[entry.versionId] : undefined}
+                    project={project}
                   />
                 ))}
               </ul>
@@ -321,10 +322,41 @@ function Chip({ children, tone }: { children: ReactNode; tone?: 'issue' }) {
  * One planned download. Its second line is the provider's identity for the
  * file (version and filename), kept `dir="ltr"` because both are Latin data
  * inside an Arabic frame.
+ *
+ * F-015: a blocked CurseForge entry whose file has no download URL
+ * (`downloadUrl: null`) still has a file page — the row offers opening it.
+ * Only the selected project's own row qualifies: a dependency row's numeric
+ * id has no slug here, and the URL is built in Rust from the parts anyway.
  */
-function EntryRow({ entry, phase }: { entry: PlanEntryDto; phase?: InstallEventDto }) {
+function EntryRow({
+  entry,
+  phase,
+  project,
+}: {
+  entry: PlanEntryDto;
+  phase?: InstallEventDto;
+  project: ProjectDto | null;
+}) {
   const { t, i18n } = useTranslation();
+  const [pageError, setPageError] = useState<string | null>(null);
   const isBlocked = entry.status === 'blocked';
+  const canOpenFilePage =
+    isBlocked &&
+    !phase &&
+    entry.provider === 'curseforge' &&
+    entry.projectId === project?.id &&
+    entry.versionId !== null &&
+    project?.slug != null &&
+    project.slug !== '';
+  const openPage = () => {
+    if (!project?.slug || entry.versionId === null) {
+      return;
+    }
+    setPageError(null);
+    openFilePage(entry.provider, project.slug, entry.versionId).catch((e) => {
+      setPageError(toIpcError(e).message);
+    });
+  };
   const dataAlign = i18n.dir() === 'rtl' ? 'text-right' : 'text-left';
   const done = phase?.done != null ? Number(phase.done) : null;
   const total = phase?.total != null ? Number(phase.total) : null;
@@ -399,8 +431,25 @@ function EntryRow({ entry, phase }: { entry: PlanEntryDto; phase?: InstallEventD
       )}
 
       {isBlocked && !phase && entry.reason && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p dir="auto" className={cn('min-w-0 flex-1 text-caption text-status-issue', dataAlign)}>
+            {entry.reason}
+          </p>
+          {canOpenFilePage && (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-auto px-2 py-0.5 text-caption"
+              onClick={openPage}
+            >
+              {t('plan.openFilePage')}
+            </Button>
+          )}
+        </div>
+      )}
+      {pageError && (
         <p dir="auto" className={cn('text-caption text-status-issue', dataAlign)}>
-          {entry.reason}
+          {pageError}
         </p>
       )}
       {phase?.message && (

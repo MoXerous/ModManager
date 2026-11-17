@@ -154,20 +154,57 @@ pub fn compatibility_issue(
     None
 }
 
-/// First compatible version in input (newest-first) order, honouring the
-/// release channel (`allow_alpha = false` skips `alpha` builds).
+/// F-003: the old app's channel ladder — `release`, then `beta` (when
+/// `allow_beta`), then `alpha` (when `allow_alpha`) — and inside a channel
+/// the newest by `date_published`. A rated channel the switches closed
+/// stays closed; versions with no rating at all (CurseForge's
+/// `unknown:<n>`) answer through a newest-of-the-unrated fallback, the old
+/// `get_best_version` ladder never matching them. Compatibility, status and
+/// loader checks are unchanged.
 pub fn select_best_version<'a>(
     versions: &'a [Version],
     game_version: &str,
     loader_candidates: &[String],
+    allow_beta: bool,
     allow_alpha: bool,
 ) -> Option<&'a Version> {
-    versions.iter().find(|v| {
-        if !allow_alpha && v.version_type.to_lowercase() == "alpha" {
-            return false;
+    let fits =
+        |v: &Version| compatibility_issue(Some(v), game_version, loader_candidates).is_none();
+    let compatible: Vec<&Version> = versions.iter().filter(|v| fits(v)).collect();
+    let newest = |mut channel: Vec<&'a Version>| -> Option<&'a Version> {
+        channel.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+        channel.first().copied()
+    };
+    for (channel, allowed) in [
+        ("release", true),
+        ("beta", allow_beta),
+        ("alpha", allow_alpha),
+    ] {
+        if !allowed {
+            continue;
         }
-        compatibility_issue(Some(v), game_version, loader_candidates).is_none()
-    })
+        let candidates: Vec<&Version> = compatible
+            .iter()
+            .copied()
+            .filter(|v| v.version_type.to_lowercase() == channel)
+            .collect();
+        if let Some(best) = newest(candidates) {
+            return Some(best);
+        }
+    }
+    // Fallback: the newest compatible version whose channel carries no
+    // rating at all (CurseForge's `unknown:<n>` labels land here — the old
+    // app's ladder only ever matched the three rated names). A rated
+    // channel the switches closed stays closed.
+    let unrated: Vec<&Version> = compatible
+        .iter()
+        .copied()
+        .filter(|v| {
+            let channel = v.version_type.to_lowercase();
+            channel != "release" && channel != "beta" && channel != "alpha"
+        })
+        .collect();
+    newest(unrated)
 }
 
 fn channel_ok(v: &Version, allow_alpha: bool) -> bool {
@@ -221,7 +258,7 @@ pub fn select_preferred<'a>(
             return Some(v);
         }
     }
-    select_best_version(versions, game_version, loader_candidates, allow_alpha)
+    select_best_version(versions, game_version, loader_candidates, true, allow_alpha)
 }
 
 fn stub_for(id: &str, provider: &str) -> ResolvedContent {
