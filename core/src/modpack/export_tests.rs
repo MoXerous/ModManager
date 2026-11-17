@@ -896,3 +896,123 @@ fn spec_f081_write_export_zip_refuses_an_empty_plan() {
     assert!(matches!(error, ExportError::Empty));
     assert!(!dir.path().join("empty.mrpack").exists());
 }
+
+// --- F-157: the export manifest --------------------------------------------
+
+/// F-157: reads one member out of a written export, or `None` when the archive
+/// does not carry it.
+fn member_bytes(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let read = match archive.by_name(name) {
+        Ok(mut member) => {
+            let mut out = Vec::new();
+            std::io::Read::read_to_end(&mut member, &mut out).expect("read member");
+            Some(out)
+        }
+        Err(zip::result::ZipError::FileNotFound) => None,
+        Err(e) => panic!("reading {name} out of the archive: {e}"),
+    };
+    read
+}
+
+/// F-157: the written pack must be auditable after it leaves the app, so the
+/// archive carries `export_manifest.json` with the pack's identity, the lock
+/// digest the pack was built from, and the manifest's schema version.
+#[test]
+fn spec_f157_write_export_zip_carries_the_manifest_with_schema_and_identity() {
+    let dir = crate::test_tempdir();
+    let plan = ExportPlan {
+        name: "My Pack".to_string(),
+        version_id: "1.0.0".to_string(),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![export_mod("sodium.jar")],
+        lock_sha512: hex128('a'),
+        ..ExportPlan::default()
+    };
+    let output = dir.path().join("My Pack.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+
+    let bytes = std::fs::read(&output).expect("read");
+    let manifest = member_bytes(&bytes, "export_manifest.json")
+        .expect("the archive must carry export_manifest.json");
+    let v: serde_json::Value = serde_json::from_slice(&manifest).expect("manifest is JSON");
+    assert_eq!(v["schemaVersion"], 1, "the schema version the build reads");
+    assert_eq!(v["name"], "My Pack");
+    assert_eq!(v["versionId"], "1.0.0");
+    assert_eq!(v["gameVersion"], "1.21.1");
+    assert_eq!(v["loader"], "fabric");
+    // The digest: which lock the pack was built from, so the artefact can be
+    // compared against an instance later.
+    assert_eq!(v["lockSha512"], hex128('a'));
+}
+
+/// F-157: the decisions the preview shows must survive into the artefact. A
+/// shipped file, an excluded file with its reason, and a skipped lock entry
+/// with its reason are all recorded in the manifest the archive carries.
+#[tokio::test]
+async fn spec_f157_manifest_records_included_excluded_and_skipped_decisions() {
+    let dir = crate::test_tempdir();
+    let instance = dir.path();
+    write_file(instance, "config/client.toml", b"key = true");
+    write_file(instance, "config/debug.log", b"secret noise");
+    write_lock(
+        &instance.join("instance.lock.json"),
+        &LockFile {
+            entries: vec![
+                entry("modrinth", "p1", "v1"),
+                entry("curseforge", "c1", "cv1"),
+            ],
+        },
+    )
+    .expect("lock");
+
+    let provider = fake_provider(
+        vec![project("p1", "Sodium", "mod")],
+        vec![version(
+            "v1",
+            "p1",
+            vec![file("sodium.jar", "https://cdn.modrinth.com/s.jar", 10)],
+        )],
+    );
+    let plan = plan_export(&provider, instance, &settings(&["config"]))
+        .await
+        .expect("plan");
+    let output = dir.path().join("My Pack.mrpack");
+    write_export_zip(&plan, &output).expect("write");
+
+    let bytes = std::fs::read(&output).expect("read");
+    let manifest = member_bytes(&bytes, "export_manifest.json").expect("manifest member");
+    let v: serde_json::Value = serde_json::from_slice(&manifest).expect("manifest is JSON");
+
+    let files = v["included"]["files"].as_array().expect("included files");
+    assert!(
+        files
+            .iter()
+            .any(|f| f["path"] == "mods/sodium.jar" && f["size"] == 10),
+        "the index file is recorded: {files:?}"
+    );
+    let overrides = v["included"]["overrides"]
+        .as_array()
+        .expect("included overrides");
+    assert!(
+        overrides
+            .iter()
+            .any(|o| o["path"] == "overrides/config/client.toml"),
+        "the shipped override is recorded: {overrides:?}"
+    );
+    let excluded = v["excluded"].as_array().expect("excluded list");
+    assert!(
+        excluded
+            .iter()
+            .any(|e| e["path"] == "config/debug.log" && e["reason"] == "secret"),
+        "the exclusion and its reason are recorded: {excluded:?}"
+    );
+    let skipped = v["skipped"].as_array().expect("skipped list");
+    assert!(
+        skipped.iter().any(|s| s["projectId"] == "c1"
+            && s["versionId"] == "cv1"
+            && s["reason"] == "unsupported_provider"),
+        "the skipped entry and its reason are recorded: {skipped:?}"
+    );
+}

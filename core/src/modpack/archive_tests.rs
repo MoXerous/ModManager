@@ -322,3 +322,142 @@ fn spec_f069_a_custom_layer_name_in_the_index_does_not_create_a_layer() {
         source_layer: "client-overrides".to_string(),
     }));
 }
+
+// --- F-158: importing this app's own export archive -------------------------
+
+use super::archive::{preview_export_archive, ExportArchivePreview, ExportImportError};
+use crate::modpack::export::{
+    manifest_json, Exclusion, ExportMod, ExportPlan, ExportSkip, OverrideFile, SkipReason,
+};
+
+/// A manifest shaped exactly like the exporter writes it, and naming the same
+/// pack the shared `default_index()` names, with one file, one override, one
+/// skip and one exclusion.
+fn export_manifest_json() -> String {
+    let plan = ExportPlan {
+        name: "Pack".to_string(),
+        version_id: "v1".to_string(),
+        summary: Some("Summary".to_string()),
+        game_version: "1.21.1".to_string(),
+        loader: "fabric".to_string(),
+        files: vec![ExportMod {
+            project_id: "p1".to_string(),
+            version_id: "v1".to_string(),
+            title: "Sodium".to_string(),
+            project_type: "mod".to_string(),
+            folder: "mods",
+            file_name: "sodium.jar".to_string(),
+            url: "https://cdn.modrinth.com/s.jar".to_string(),
+            size: 10,
+            sha1: "a".repeat(40),
+            sha512: sha128('a'),
+        }],
+        overrides: vec![OverrideFile {
+            archive_path: "overrides/config/x.toml".to_string(),
+            source: std::path::PathBuf::new(),
+            size: 5,
+        }],
+        skipped: vec![ExportSkip {
+            project_id: "c1".to_string(),
+            version_id: "cv1".to_string(),
+            reason: SkipReason::UnsupportedProvider,
+        }],
+        excluded: vec![crate::modpack::export::ExcludedEntry {
+            path: "config/debug.log".to_string(),
+            reason: Exclusion::Secret,
+        }],
+        lock_sha512: sha128('a'),
+    };
+    serde_json::to_string(&manifest_json(&plan)).expect("manifest json")
+}
+
+/// An export archive: the index the format wants, the manifest this app adds,
+/// and one override the executor would copy.
+fn export_bytes(manifest: Option<&str>) -> Vec<u8> {
+    let mut entries: Vec<(&str, String)> = vec![("modrinth.index.json", default_index())];
+    if let Some(m) = manifest {
+        entries.push(("export_manifest.json", m.to_string()));
+    }
+    entries.push(("overrides/config/x.toml", "a = 1".to_string()));
+    let refs: Vec<(&str, &str)> = entries.iter().map(|(n, b)| (*n, b.as_str())).collect();
+    zip_of(&refs)
+}
+
+fn preview(bytes: &[u8]) -> Result<ExportArchivePreview, ExportImportError> {
+    let mut z = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip");
+    preview_export_archive(&mut z, &ArchiveLimits::default())
+}
+
+#[test]
+fn spec_f158_preview_reads_the_export_manifest_without_extracting() {
+    let bytes = export_bytes(Some(&export_manifest_json()));
+    let p = preview(&bytes).expect("our own export is previewable");
+    assert_eq!(p.name, "Pack");
+    assert_eq!(p.version_id, "v1");
+    assert_eq!(p.game_version, "1.21.1");
+    assert_eq!(p.loader, "fabric");
+    assert_eq!(p.lock_sha512, sha128('a'));
+    assert_eq!(p.file_count, 1);
+    assert_eq!(p.override_count, 1);
+    assert_eq!(p.skipped_count, 1);
+    assert_eq!(
+        p.excluded,
+        vec![("config/debug.log".to_string(), "secret".to_string())]
+    );
+}
+
+#[test]
+fn spec_f158_preview_refuses_a_foreign_archive_without_the_manifest() {
+    // A plain .mrpack is not this app's export: no manifest, no import.
+    let bytes = zip_of(&[("modrinth.index.json", &default_index())]);
+    assert!(matches!(
+        preview(&bytes),
+        Err(ExportImportError::NotOurExport(_))
+    ));
+}
+
+#[test]
+fn spec_f158_preview_refuses_an_unsupported_manifest_schema() {
+    let foreign = r#"{"schemaVersion":99,"name":"x","versionId":"v","gameVersion":"1","loader":"fabric","lockSha512":"","included":{"files":[],"overrides":[]},"skipped":[],"excluded":[]}"#;
+    let bytes = export_bytes(Some(foreign));
+    match preview(&bytes) {
+        Err(ExportImportError::SchemaVersion { found: 99, .. }) => {}
+        other => panic!("expected a schema refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn spec_f158_preview_refuses_a_malformed_manifest() {
+    let bytes = export_bytes(Some("{not json"));
+    assert!(matches!(
+        preview(&bytes),
+        Err(ExportImportError::ManifestJson(_))
+    ));
+}
+
+#[test]
+fn spec_f158_import_refuses_a_symlink_member_instead_of_skipping_it() {
+    // The manifest never gets read: the shared inspector refuses the archive
+    // outright, which is also what a `..` member meets (F-072 pins that one).
+    let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+    w.add_directory("overrides", SimpleFileOptions::default())
+        .expect("dir");
+    w.start_file(
+        "overrides/link.toml",
+        SimpleFileOptions::default().external_attributes(0o120777 << 16),
+    )
+    .expect("link member");
+    w.write_all(b"../escape").expect("write");
+    w.start_file("modrinth.index.json", SimpleFileOptions::default())
+        .expect("index");
+    w.write_all(default_index().as_bytes()).expect("write");
+    w.start_file("export_manifest.json", SimpleFileOptions::default())
+        .expect("manifest");
+    w.write_all(export_manifest_json().as_bytes())
+        .expect("write");
+    let bytes = w.finish().expect("finish").into_inner();
+    assert!(matches!(
+        preview(&bytes),
+        Err(ExportImportError::Pack(PackError::Inspect(_)))
+    ));
+}

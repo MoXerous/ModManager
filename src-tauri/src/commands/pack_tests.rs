@@ -26,8 +26,9 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::pack::{
-    apply_lock_for, dismiss_pack_apply_with, execute_modpack_install_with,
-    pending_pack_recoveries_with, plan_modpack_install_with, recover_pack_apply_with, run_apply,
+    apply_lock_for, dismiss_pack_apply_with, execute_modpack_archive_import_with,
+    execute_modpack_install_with, pending_pack_recoveries_with, plan_modpack_install_with,
+    preview_modpack_export_archive_with, recover_pack_apply_with, run_apply,
 };
 use crate::dto::{ErrorCode, ModpackInstallRequest, PackEventDto};
 use crate::state::AppState;
@@ -1668,6 +1669,207 @@ fn spec_f076_dismiss_waits_for_a_running_recovery() {
             guard.read(&operation_id).expect("read").state,
             mm_core::journal::OperationState::Completed,
             "the record did not end where the recovery put it"
+        );
+    });
+}
+
+// --- F-158: importing this app's own export archive -------------------------
+
+/// An export archive as this app writes it: the index, the manifest naming the
+/// same pack identity, and one override.
+fn export_archive_bytes(file_url: &str, jar: &[u8]) -> Vec<u8> {
+    let index = serde_json::json!({
+        "formatVersion": 1,
+        "game": "minecraft",
+        "versionId": "v1.2.3",
+        "name": "Wiremock Pack",
+        "summary": "a pack built only for tests",
+        "files": [{
+            "path": "mods/packfile.jar",
+            "hashes": { "sha1": sha1_hex(jar), "sha512": sha512_hex(jar) },
+            "downloads": [file_url],
+            "fileSize": jar.len(),
+        }],
+        "overrides": "overrides",
+    })
+    .to_string();
+    let manifest = serde_json::json!({
+        "schemaVersion": 1,
+        "name": "Wiremock Pack",
+        "versionId": "v1.2.3",
+        "gameVersion": "1.21.1",
+        "loader": "fabric",
+        "lockSha512": sha512_hex(b"the-lock"),
+        "included": {
+            "files": [{ "path": "mods/packfile.jar", "size": jar.len() }],
+            "overrides": [{ "path": "overrides/config/pack.toml", "size": 21 }],
+        },
+        "skipped": [],
+        "excluded": [],
+    })
+    .to_string();
+
+    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    w.start_file(
+        "modrinth.index.json",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .expect("index member");
+    w.write_all(index.as_bytes()).expect("index bytes");
+    w.start_file(
+        "export_manifest.json",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .expect("manifest member");
+    w.write_all(manifest.as_bytes()).expect("manifest bytes");
+    w.start_file(
+        "overrides/config/pack.toml",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .expect("override member");
+    w.write_all(b"built = by-the-test\n")
+        .expect("override bytes");
+    w.finish().expect("finish").into_inner()
+}
+
+#[test]
+fn spec_f158_execute_import_creates_the_instance_then_applies_the_pack() {
+    tauri::async_runtime::block_on(async {
+        let server = MockServer::start().await;
+        let jar = jar_bytes();
+        Mock::given(method("GET"))
+            .and(path("/data/packfile.jar"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jar.clone())
+                    .insert_header("content-type", "application/java-archive"),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pack_path = dir.path().join("the-export.mrpack");
+        std::fs::write(
+            &pack_path,
+            export_archive_bytes(&format!("{}/data/packfile.jar", server.uri()), &jar),
+        )
+        .expect("write pack");
+        // The target folder does not exist: the import is what creates it.
+        let target = dir.path().join("Imported");
+        let state = AppState::from_db(mm_core::db::open(&dir.path().join("t.db")).expect("db"));
+
+        // The preview is metadata only: the pack reads, the disk does not move.
+        let preview =
+            preview_modpack_export_archive_with(crate::dto::ExportArchivePreviewRequest {
+                pack_path: pack_path.to_string_lossy().into_owned(),
+            })
+            .await
+            .expect("preview");
+        assert_eq!(preview.name, "Wiremock Pack");
+        assert_eq!(preview.version_id, "v1.2.3");
+        assert_eq!(preview.game_version, "1.21.1");
+        assert_eq!(preview.loader, "fabric");
+        assert_eq!(preview.file_count, 1);
+        assert_eq!(preview.override_count, 1);
+        assert_eq!(preview.manifest_schema_version, 1);
+        assert!(!target.exists(), "the preview created the target folder");
+
+        let sink: Sink = Arc::new(Mutex::new(vec![]));
+        let provider =
+            mm_core::providers::ModrinthClient::with_base(&server.uri()).expect("provider");
+        let result = execute_modpack_archive_import_with(
+            &state,
+            &provider,
+            crate::dto::ExportArchiveImportRequest {
+                pack_path: pack_path.to_string_lossy().into_owned(),
+                instance_root: target.to_string_lossy().into_owned(),
+                instance_name: "Imported".to_string(),
+                pack_sha512: preview.pack_sha512,
+            },
+            recording_channel(&sink),
+            true,
+        )
+        .await
+        .expect("import failed");
+
+        // One override and one verified download landed, exactly like a pack
+        // install, and the staging tree is gone.
+        assert_eq!(result.written, 2, "{result:?}");
+        assert_eq!(
+            std::fs::read(target.join("mods/packfile.jar")).expect("read jar"),
+            jar,
+            "the jar bytes lie"
+        );
+        assert_eq!(
+            std::fs::read(target.join("config/pack.toml")).expect("read override"),
+            b"built = by-the-test\n",
+            "the override bytes lie"
+        );
+        assert!(
+            !target.join(".mm-staging").exists(),
+            "the import left its staging directory behind"
+        );
+
+        // The instance is created, registered, and carries the pack's identity.
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("reopen db");
+        let rows = mm_core::db::instances::list(&db).expect("list");
+        assert_eq!(rows.len(), 1, "the import registered one instance");
+        assert_eq!(rows[0].name, "Imported");
+        assert_eq!(
+            rows[0].path,
+            std::fs::canonicalize(&target).expect("canonical target"),
+            "the row points at the folder the import created"
+        );
+        assert_eq!(rows[0].minecraft_version.as_deref(), Some("1.21.1"));
+        assert_eq!(rows[0].loader.as_deref(), Some("fabric"));
+
+        // The channel ended on the terminal event, like every apply.
+        let events = sink.lock().expect("events").clone();
+        assert_eq!(
+            phase(events.last().expect("last")),
+            "pack.phase.done",
+            "the last event was not terminal: {events:?}"
+        );
+    });
+}
+
+#[test]
+fn spec_f158_execute_import_refuses_a_foreign_archive_and_creates_nothing() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A plain .mrpack: no export_manifest.json, so it is not ours.
+        let pack_path = dir.path().join("foreign.mrpack");
+        std::fs::write(
+            &pack_path,
+            pack_bytes("http://127.0.0.1:1/x.jar", &jar_bytes()),
+        )
+        .expect("write pack");
+        let target = dir.path().join("Imported");
+        let state = AppState::from_db(mm_core::db::open(&dir.path().join("t.db")).expect("db"));
+
+        let err = execute_modpack_archive_import_with(
+            &state,
+            &mm_core::providers::ModrinthClient::with_base("http://127.0.0.1:1").expect("provider"),
+            crate::dto::ExportArchiveImportRequest {
+                pack_path: pack_path.to_string_lossy().into_owned(),
+                instance_root: target.to_string_lossy().into_owned(),
+                instance_name: "Imported".to_string(),
+                // Whatever the webview claims; the gate runs before any create.
+                pack_sha512: sha512_hex(&std::fs::read(&pack_path).expect("read")),
+            },
+            recording_channel(&(Arc::new(Mutex::new(vec![])))),
+            true,
+        )
+        .await
+        .expect_err("a foreign archive must be refused");
+
+        assert_eq!(err.code, ErrorCode::NotOurExport, "{err:?}");
+        assert!(!target.exists(), "the refusal created the target folder");
+        let db = mm_core::db::open(&dir.path().join("t.db")).expect("reopen db");
+        assert_eq!(
+            mm_core::db::instances::list(&db).expect("list").len(),
+            0,
+            "the refusal registered an instance"
         );
     });
 }
