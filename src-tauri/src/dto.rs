@@ -1591,6 +1591,33 @@ pub struct OperationAssessmentDto {
     pub reason: String,
 }
 
+/// One record the scan could not read: a corrupt file, a foreign record, a
+/// symlink the scan refused to follow.
+///
+/// The old centre reported these instead of dropping them silently. Nothing is
+/// settled or repaired here — the file is named so the user can look at it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationIssueDto {
+    /// Basename only; full paths stay out of the UI.
+    pub filename: String,
+    /// Why it could not be read, as the journal store phrased it: diagnostic
+    /// text, not a translated sentence.
+    pub message: String,
+}
+
+/// One scan: the table's rows and the files that could not become rows.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationsListingDto {
+    /// Every record the journal holds, newest first — terminal ones included.
+    pub rows: Vec<OperationSummaryDto>,
+    /// Records the scan could not read, named and left untouched.
+    pub issues: Vec<OperationIssueDto>,
+}
+
 // --- Legacy import (F-181) -----------------------------------------------
 //
 // A scan is a report, not a plan and not a promise. Every path here is for

@@ -321,6 +321,11 @@ pub enum JournalError {
     CounterMismatch(&'static str),
     #[error("operation id must be a canonical lowercase uuid")]
     NotCanonicalId,
+    /// The record is not in the journal: it was deleted after the table was
+    /// read, or the id never named one. Not an io failure — the answer is
+    /// "not found", and the user's fix is Refresh.
+    #[error("operation record not found")]
+    NotFound,
     /// The record's schema is not one this build reads. It was written by a
     /// newer build, and guessing its shape would be reading a file whose
     /// meaning this build does not know.

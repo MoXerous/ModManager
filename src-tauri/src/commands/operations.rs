@@ -15,9 +15,14 @@
 //!   surface. This module never resumes, dismisses or settles anything.
 
 use mm_core::journal::OperationKind;
-use mm_core::operations::{self, AssessError, OperationAssessment, OperationSummary};
+use mm_core::operations::{
+    self, AssessError, OperationAssessment, OperationIssue, OperationSummary,
+};
 
-use crate::dto::{ErrorCode, IpcError, OperationAssessmentDto, OperationSummaryDto};
+use crate::dto::{
+    ErrorCode, IpcError, OperationAssessmentDto, OperationIssueDto, OperationSummaryDto,
+    OperationsListingDto,
+};
 use crate::state::AppState;
 
 use super::pack::operation_state_word;
@@ -25,20 +30,32 @@ use super::pack::operation_state_word;
 /// Every record the journal holds, newest first (F-145).
 ///
 /// A scan, not a query: terminal records are listed too, because the state
-/// column is what separates live work from history on this screen.
+/// column is what separates live work from history on this screen. The scan
+/// also answers for the files it could not read ([`OperationsListingDto::issues`]):
+/// the old centre reported those instead of hiding them.
 #[tauri::command]
 pub async fn list_operations(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<OperationSummaryDto>, IpcError> {
+) -> Result<OperationsListingDto, IpcError> {
     list_operations_with(state.inner()).await
 }
 
 /// The body of [`list_operations`], with the state as a parameter.
-pub async fn list_operations_with(state: &AppState) -> Result<Vec<OperationSummaryDto>, IpcError> {
-    let rows = state
-        .with_db_and_journal(|db, journal| Ok(operations::list_operations(db, journal)))
-        .await?;
-    Ok(rows.into_iter().map(summary_dto).collect())
+///
+/// The scan runs over a short-lived alias of the journal root and takes no
+/// database lock and no journal mutex: Refresh is the one screen a user hits
+/// repeatedly, and holding both locks for a directory scan (let alone a pack
+/// archive hash) stalls every other command. `journal_store_of` is the same
+/// alias the long-running pack recovery uses, for the same reason.
+pub async fn list_operations_with(state: &AppState) -> Result<OperationsListingDto, IpcError> {
+    let store = super::pack::journal_store_of(state)?;
+    let listing = tauri::async_runtime::spawn_blocking(move || operations::list_operations(&store))
+        .await
+        .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))?;
+    Ok(OperationsListingDto {
+        rows: listing.rows.into_iter().map(summary_dto).collect(),
+        issues: listing.issues.into_iter().map(issue_dto).collect(),
+    })
 }
 
 /// Assesses one arbitrary operation id, read-only.
@@ -108,6 +125,13 @@ fn summary_dto(row: OperationSummary) -> OperationSummaryDto {
         skipped_count: row.skipped_count,
         pack_name: row.pack_name,
         reason: row.reason,
+    }
+}
+
+fn issue_dto(issue: OperationIssue) -> OperationIssueDto {
+    OperationIssueDto {
+        filename: issue.filename,
+        message: issue.message,
     }
 }
 

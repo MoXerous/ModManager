@@ -78,7 +78,12 @@ async fn spec_f145_lists_operations_across_kinds_over_ipc() {
         .expect("start pack")
         .operation_id;
 
-    let rows = list_operations_with(&state).await.expect("list");
+    let listing = list_operations_with(&state).await.expect("list");
+    assert!(
+        listing.issues.is_empty(),
+        "a healthy journal reports no issues: {listing:?}"
+    );
+    let rows = listing.rows;
 
     assert_eq!(
         rows.len(),
@@ -114,8 +119,8 @@ async fn spec_f145_lists_operations_across_kinds_over_ipc() {
         .find(|r| r.operation_id == create)
         .expect("the create is in the list");
     assert_eq!(
-        create_row.reason, "recovery.instance.nothingWritten",
-        "the create's reason is the create assessment's, not a second opinion"
+        create_row.reason, "operations.reason.interrupted",
+        "the list states only that the record never finished, not the create's exact reason"
     );
 
     let pack_row = rows
@@ -123,7 +128,10 @@ async fn spec_f145_lists_operations_across_kinds_over_ipc() {
         .find(|r| r.operation_id == pack)
         .expect("the pack apply is in the list");
     assert_eq!(pack_row.pack_name, "The Pack");
-    assert_eq!(pack_row.reason, "recovery.pack.instanceMissing");
+    assert_eq!(
+        pack_row.reason, "operations.reason.interrupted",
+        "the list did not hash the pack archive to say it"
+    );
 }
 
 /// F-145: the assessor takes an arbitrary operation id and answers with the
@@ -238,4 +246,64 @@ async fn spec_f145_assess_refuses_a_stale_row_and_a_path_shaped_id_by_code() {
             .expect_err("not an operation id");
         assert_eq!(err.code, ErrorCode::InvalidInput, "{id:?} gave {err:?}");
     }
+}
+
+/// F-145: a journal that genuinely cannot be read is `io`, not `notFound` and
+/// not a generic internal error. A directory where the record's `.json` should
+/// be is the case the user can do nothing about by refreshing, so the bridge
+/// must say so with its own typed code.
+#[tokio::test]
+async fn spec_f145_a_journal_failure_keeps_its_own_code_over_ipc() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = state_over(dir.path());
+    let journal = journal_of(&state);
+    let id = "22222222-2222-4222-8222-222222222222";
+    std::fs::create_dir_all(journal.root().join(format!("{id}.json"))).expect("mkdir record path");
+
+    let err = assess_operation_with(&state, id.to_string())
+        .await
+        .expect_err("a directory is not a record");
+
+    assert_eq!(err.code, ErrorCode::Io, "{err:?}");
+}
+
+/// F-145: a record the scan cannot read is reported as an issue, not dropped:
+/// the old centre surfaced unreadable records, and the DTO carries them so the
+/// screen can too. Nothing about the file is changed.
+#[tokio::test]
+async fn spec_f145_a_corrupt_record_is_reported_as_an_issue_over_ipc() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = state_over(dir.path());
+    let journal = journal_of(&state);
+    journal
+        .start(
+            OperationKind::DownloadBatch,
+            "prof-1",
+            &dir.path().to_string_lossy(),
+            vec![],
+        )
+        .expect("start batch");
+    let corrupt_id = "11111111-1111-4111-8111-111111111111".to_string();
+    let corrupt = journal.root().join(format!("{corrupt_id}.json"));
+    std::fs::write(&corrupt, b"{ not a record").expect("write corrupt");
+    let before = std::fs::read(&corrupt).expect("read corrupt");
+
+    let listing = list_operations_with(&state).await.expect("list");
+
+    assert_eq!(listing.rows.len(), 1, "{listing:?}");
+    assert_eq!(listing.issues.len(), 1, "{listing:?}");
+    assert_eq!(
+        listing.issues[0].filename,
+        format!("{corrupt_id}.json"),
+        "the issue names the file, basename only: {listing:?}"
+    );
+    assert!(
+        !listing.issues[0].message.is_empty(),
+        "the issue says why: {listing:?}"
+    );
+    assert_eq!(
+        std::fs::read(&corrupt).expect("read corrupt"),
+        before,
+        "the listing rewrote the unreadable record"
+    );
 }

@@ -100,24 +100,56 @@ pub enum AssessError {
     Journal(#[from] crate::journal::JournalError),
 }
 
-/// Every record the journal holds, newest first.
+/// One record the scan could not read: a corrupt file, a foreign record, a
+/// symlink the scan refused to follow.
+///
+/// The old centre reported these instead of silently dropping them, and it
+/// never repaired them: a record we cannot read is evidence the user may need,
+/// not a row to tidy away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationIssue {
+    /// Basename only; full paths stay out of the UI (privacy, spec §4-7).
+    pub filename: String,
+    /// Why it could not be read, as the journal store phrased it. Diagnostic
+    /// text, never a translated UI sentence.
+    pub message: String,
+}
+
+/// Everything one scan found: the rows the table shows, and the records that
+/// could not become rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationsListing {
+    pub rows: Vec<OperationSummary>,
+    pub issues: Vec<OperationIssue>,
+}
+
+/// Every record the journal holds, newest first, plus every file it could not
+/// read.
 ///
 /// Terminal records are listed too: the view is the table of everything the
 /// journal recorded, and the state column is what separates live work from
-/// history. A record that is unfinished carries its reason key, assessed the
-/// way its own recovery surface would assess it.
-pub fn list_operations(db: &crate::db::Db, journal: &Journal) -> Vec<OperationSummary> {
-    let mut rows: Vec<OperationSummary> = journal
-        .discover()
-        .records()
-        .map(|r| summarize(db, r))
-        .collect();
+/// history. The list is a scan and nothing more: it never touches the disk
+/// beyond the journal directory, so it holds no database lock and no journal
+/// lock, and a Refresh stays cheap however many pack rows are on screen. The
+/// per-kind reason (which may hash a pack archive, or read the instance
+/// registry) is [`assess_operation`]'s job, on demand, for the one row the
+/// user asked about.
+pub fn list_operations(journal: &Journal) -> OperationsListing {
+    let discovery = journal.discover();
+    let mut rows: Vec<OperationSummary> = discovery.records().map(summarize).collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
-    rows
+    let issues = discovery
+        .issues()
+        .map(|issue| OperationIssue {
+            filename: issue.filename.clone(),
+            message: issue.message.clone(),
+        })
+        .collect();
+    OperationsListing { rows, issues }
 }
 
 /// One record, as the table shows it.
-fn summarize(db: &crate::db::Db, r: &OperationRecord) -> OperationSummary {
+fn summarize(r: &OperationRecord) -> OperationSummary {
     OperationSummary {
         operation_id: r.operation_id.clone(),
         kind: r.kind,
@@ -136,29 +168,22 @@ fn summarize(db: &crate::db::Db, r: &OperationRecord) -> OperationSummary {
             .as_ref()
             .map(|p| p.pack_name.clone())
             .unwrap_or_default(),
-        reason: reason_of(db, r),
+        reason: reason_of(r),
     }
 }
 
-/// The reason key for one record: nothing to say about a terminal one, the
-/// per-kind assessment's answer where a recovery surface exists, and the
-/// generic one where none does.
-fn reason_of(db: &crate::db::Db, r: &OperationRecord) -> String {
-    if !unfinished(r.state) {
-        return String::new();
-    }
-    match r.kind {
-        OperationKind::InstanceCreate => crate::instances::recovery::assess_create(db, r)
-            .reason
-            .key()
-            .to_string(),
-        OperationKind::MrpackInstall => crate::modpack::recovery::assess_record(r)
-            .reason
-            .key()
-            .to_string(),
-        OperationKind::DownloadBatch
-        | OperationKind::UpdateDownload
-        | OperationKind::UpdateInstall => REASON_INTERRUPTED.to_string(),
+/// The list's reason key for one record: nothing to say about a terminal one,
+/// and the generic interrupted key for every kind while unfinished.
+///
+/// Deliberately generic: naming the exact per-kind reason here would run the
+/// owning surface's assessment for every row on every Refresh — a SHA-512 of
+/// the whole `.mrpack` per stack of pack applies. [`assess_operation`] answers
+/// the exact question for one record.
+fn reason_of(r: &OperationRecord) -> String {
+    if unfinished(r.state) {
+        REASON_INTERRUPTED.to_string()
+    } else {
+        String::new()
     }
 }
 
@@ -174,35 +199,63 @@ pub fn assess_operation(
     operation_id: &str,
 ) -> Result<OperationAssessment, AssessError> {
     // The id is webview input. A non-canonical one is refused before it could
-    // become a path, and a canonical one the journal does not hold is
-    // `Unknown` — a stale table, not a failing disk.
+    // become a path; a canonical one the journal does not hold is `Unknown` —
+    // a stale table, not a failing disk. The read itself is the check: the row
+    // can be deleted between the table's scan and this click, and that race
+    // must answer "not found", never "io".
     if !crate::journal::is_canonical_id(operation_id) {
         return Err(AssessError::MalformedId(operation_id.to_string()));
     }
-    if !journal.knows(operation_id) {
-        return Err(AssessError::Unknown(operation_id.to_string()));
-    }
-    let record = journal.read(operation_id)?;
+    let record = match journal.read(operation_id) {
+        Ok(record) => record,
+        Err(crate::journal::JournalError::NotFound) => {
+            return Err(AssessError::Unknown(operation_id.to_string()));
+        }
+        Err(e) => return Err(AssessError::Journal(e)),
+    };
     Ok(evidence_of(db, &record))
 }
 
 /// The disk walk, shared by every kind: what the paths the record names
 /// actually hold right now.
+///
+/// A kind check, not `exists()`: a directory where a `.jar` would land is not
+/// a downloaded file, and a symlink is not a verified file at all — the
+/// recovery surfaces follow the same rule (`is_file`/`is_dir` before trusting
+/// a path), and evidence the user reads must match what they would find.
 fn disk_evidence(r: &OperationRecord) -> (bool, bool, usize, usize) {
-    let staging_present =
-        !r.staging_path.is_empty() && std::path::Path::new(&r.staging_path).exists();
-    let backup_present = !r.backup_path.is_empty() && std::path::Path::new(&r.backup_path).exists();
+    let staging_present = is_real_dir(&r.staging_path);
+    let backup_present = is_real_dir(&r.backup_path);
     let mut final_present = 0usize;
     let mut part_present = 0usize;
     for item in &r.items {
-        if !item.final_path.is_empty() && std::path::Path::new(&item.final_path).exists() {
+        if is_real_file(&item.final_path) {
             final_present += 1;
         }
-        if !item.partial_path.is_empty() && std::path::Path::new(&item.partial_path).exists() {
+        if is_real_file(&item.partial_path) {
             part_present += 1;
         }
     }
     (staging_present, backup_present, final_present, part_present)
+}
+
+/// A path that is a file on disk, and not a symlink standing in for one.
+///
+/// `symlink_metadata` is deliberate: `Path::is_file` follows links, so a link
+/// to some other file would be counted as this operation's landed output.
+fn is_real_file(path: &str) -> bool {
+    !path.is_empty()
+        && std::fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_file())
+            .unwrap_or(false)
+}
+
+/// A path that is a directory on disk, and not a symlink standing in for one.
+fn is_real_dir(path: &str) -> bool {
+    !path.is_empty()
+        && std::fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_dir())
+            .unwrap_or(false)
 }
 
 /// Reuses the per-kind assessment where one exists; stats the disk where none
@@ -228,7 +281,15 @@ fn evidence_of(db: &crate::db::Db, r: &OperationRecord) -> OperationAssessment {
     match r.kind {
         OperationKind::InstanceCreate => {
             let assessed = crate::instances::recovery::assess_create(db, r);
-            out.action = assessed.action.key().to_string();
+            // `leave` is not an action: it means "do nothing", and
+            // `pending_creates` settles exactly those records (registered, or
+            // never written) without the user. Linking to the Instances page
+            // for them would send the user to a banner that is not there.
+            out.action = if assessed.action == crate::instances::recovery::RecoveryAction::Leave {
+                String::new()
+            } else {
+                assessed.action.key().to_string()
+            };
             out.reason = assessed.reason.key().to_string();
         }
         OperationKind::MrpackInstall => {

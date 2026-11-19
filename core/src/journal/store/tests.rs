@@ -101,6 +101,42 @@ fn spec_f142_revision_conflict_is_reported() {
         .expect("fresh");
 }
 
+/// F-145: a record deleted while a table is on screen must read as "not
+/// found", not as a broken disk — the assessor turns this into the typed
+/// `notFound` the UI answers with Refresh.
+#[test]
+fn spec_f145_journal_read_reports_a_missing_record_as_not_found() {
+    let d = crate::test_tempdir();
+    let j = journal_in(d.path());
+    let id = uuid::Uuid::new_v4().to_string();
+
+    let err = j.read(&id).expect_err("no such record");
+
+    assert_eq!(err, JournalError::NotFound);
+}
+
+/// F-145: the store-level guard has to hold through the caller that takes an
+/// id straight from the webview, not only through `is_canonical_id` in
+/// isolation: `Journal::read` must refuse a path-shaped id before it is
+/// joined into a record path.
+#[test]
+fn spec_f145_journal_read_refuses_a_non_canonical_id() {
+    let d = crate::test_tempdir();
+    let j = journal_in(d.path());
+    // A record-shaped JSON just outside the journal, which a traversal id
+    // would read if the id were joined unchecked.
+    std::fs::write(d.path().join("outside.json"), b"{}").expect("write");
+
+    for id in [r"..\outside", "../outside", "not-an-operation", ""] {
+        assert_eq!(
+            j.read(id).expect_err("not an operation id"),
+            JournalError::NotCanonicalId,
+            "{id:?}"
+        );
+        assert!(!j.knows(id), "{id:?} was known");
+    }
+}
+
 #[test]
 fn spec_f143_discover_never_creates_the_root() {
     let d = crate::test_tempdir();

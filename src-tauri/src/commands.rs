@@ -107,6 +107,9 @@ fn journal_error(e: &mm_core::journal::JournalError) -> IpcError {
     match e {
         // The operation id was not one of ours, so the request was malformed.
         J::NotCanonicalId | J::ItemMissing(_) | J::DuplicateItem(_) => IpcError::invalid_input(e),
+        // A record that is no longer there is a stale row, not a broken disk:
+        // the user's fix is Refresh.
+        J::NotFound => IpcError::new(ErrorCode::NotFound, e),
         // A state or counter that does not add up is our bookkeeping, not the
         // user's request — retrying the same action will hit it again. The
         // schema and the pack block are the same kind of thing: the record on

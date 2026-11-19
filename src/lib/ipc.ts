@@ -36,7 +36,7 @@ import type { ModpackExportWriteRequest } from '../bindings/ModpackExportWriteRe
 import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
 import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
 import type { OperationAssessmentDto } from '../bindings/OperationAssessmentDto';
-import type { OperationSummaryDto } from '../bindings/OperationSummaryDto';
+import type { OperationsListingDto } from '../bindings/OperationsListingDto';
 import type { PackEventDto } from '../bindings/PackEventDto';
 import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
 import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
@@ -382,9 +382,10 @@ export function clearDownloadHistory(): Promise<number> {
 // assessor takes one operation id and never a path, because the target, the
 // instance and the disk evidence all come from the record.
 
-/** Every record the journal holds, newest first — terminal ones included. */
-export function listOperations(): Promise<OperationSummaryDto[]> {
-  return invoke<OperationSummaryDto[]>('list_operations');
+/** Every record the journal holds, newest first - terminal ones included -
+ * plus the files the scan could not read. */
+export function listOperations(): Promise<OperationsListingDto> {
+  return invoke<OperationsListingDto>('list_operations');
 }
 
 /**

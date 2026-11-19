@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react';
 
 import type { IpcError } from '../../bindings/IpcError';
 import type { OperationAssessmentDto } from '../../bindings/OperationAssessmentDto';
+import type { OperationIssueDto } from '../../bindings/OperationIssueDto';
 import type { OperationSummaryDto } from '../../bindings/OperationSummaryDto';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/state';
@@ -28,11 +29,14 @@ import type { PageId } from '../Shell';
  */
 
 /**
- * The groups, unfinished first. Explicit and total: a state a future core adds
- * is not silently dropped into "completed" — it simply has no group until this
- * list learns about it, and the count line above still counts it.
+ * The groups, unfinished first. Explicit for the states this build knows; a
+ * state a future core adds lands in the explicit "other" group below, never
+ * silently outside the table the header counts.
  */
 const GROUPS = ['planned', 'running', 'failed', 'cancelled', 'completed'] as const;
+
+/** The bucket for a state this build has no group for — visible, not dropped. */
+const OTHER_GROUP = 'other';
 
 /**
  * Where a kind's recovery already lives, or `null` when none exists.
@@ -65,6 +69,9 @@ export function OperationsPage({ onNavigate }: OperationsPageProps) {
   const { t, i18n } = useTranslation();
   // `null` means "not read yet", which is different from an empty journal.
   const [rows, setRows] = useState<OperationSummaryDto[] | null>(null);
+  // Records the scan could not read. Reported, never repaired: they are the
+  // old centre's "unreadable record" notice.
+  const [issues, setIssues] = useState<OperationIssueDto[]>([]);
   const [error, setError] = useState<IpcError | null>(null);
   const [loading, setLoading] = useState(false);
   // One assessment at a time: the panel is evidence about one record, and
@@ -79,11 +86,15 @@ export function OperationsPage({ onNavigate }: OperationsPageProps) {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
+    setIssues([]);
     // Evidence belongs to the row it was read from; a reload is a new table.
     setAssessed(null);
     setAssessError(null);
     listOperations()
-      .then(setRows)
+      .then((listing) => {
+        setRows(listing.rows);
+        setIssues(listing.issues);
+      })
       .catch((e) => setError(toIpcError(e)))
       .finally(() => setLoading(false));
   }, []);
@@ -125,9 +136,18 @@ export function OperationsPage({ onNavigate }: OperationsPageProps) {
         byState.set(row.state, [row]);
       }
     }
-    return GROUPS.map((state) => ({ state, rows: byState.get(state) ?? [] })).filter(
-      (group) => group.rows.length > 0,
-    );
+    const groups: { state: string; rows: OperationSummaryDto[] }[] = GROUPS.map((state) => ({
+      state,
+      rows: byState.get(state) ?? [],
+    }));
+    // A state this build does not know is shown, not dropped: the header
+    // counts every row, and a count with missing rows is a lie.
+    const known = new Set<string>(GROUPS);
+    const other = (rows ?? []).filter((row) => !known.has(row.state));
+    if (other.length > 0) {
+      groups.push({ state: OTHER_GROUP, rows: other });
+    }
+    return groups.filter((group) => group.rows.length > 0);
   }, [rows]);
 
   return (
@@ -155,6 +175,29 @@ export function OperationsPage({ onNavigate }: OperationsPageProps) {
       <p className="max-w-3xl px-5 pt-2 text-small text-muted-foreground">
         {t('operations.readOnly')}
       </p>
+
+      {issues.length > 0 && (
+        <section
+          aria-label={t('operations.issues.title')}
+          className="mx-5 mt-4 rounded-md border border-border bg-surface-sunken px-3 py-2"
+        >
+          <h2 className="text-small font-semibold text-foreground">
+            {t('operations.issues.title')}
+          </h2>
+          <p className="mb-1 text-caption text-muted-foreground">{t('operations.issues.body')}</p>
+          <ul className="flex flex-col gap-1">
+            {issues.map((issue) => (
+              <li key={issue.filename} className="text-caption text-muted-foreground">
+                <span dir="ltr" className="font-mono">
+                  {issue.filename}
+                </span>
+                <span className="mx-1">—</span>
+                <span>{issue.message}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {error ? (
         <div className="px-5 pt-4">

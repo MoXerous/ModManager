@@ -31,7 +31,12 @@ fn item(final_path: &Path, part_path: &Path, state: ItemState) -> OperationItem 
 }
 
 fn db_at(dir: &Path) -> db::Db {
-    db::open(&dir.join("registry.db")).expect("open db")
+    let db = db::open(&dir.join("registry.db")).expect("open db");
+    // Warm SQLite's per-connection side files (WAL/SHM) before any test takes
+    // its "before" snapshot: their creation is the database's doing, not the
+    // read-only code under test writing.
+    let _ = crate::db::instances::get(&db, "warm-up");
+    db
 }
 
 /// A batch record with the item states the record carries, real on disk.
@@ -56,26 +61,98 @@ fn pack_meta(archive: &Path) -> PackApplyMeta {
     }
 }
 
-/// Every file below `dir`, relative, sorted — the write-nothing proof.
-fn snapshot(dir: &Path) -> Vec<String> {
-    fn walk(dir: &Path, out: &mut Vec<String>) {
+/// The SHA-512 a pack record pins, computed the way the apply computes it.
+fn sha512_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha512::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// F-145: Refresh is a journal scan, not a disk audit. A pack record whose
+/// archive is present and whose digest matches must still carry the generic
+/// interrupted key in the LIST: hashing an archive is the assessor's job, on
+/// demand, for the one row the user asked about. A list that hashes once per
+/// pack row holds the database and journal locks for the whole read.
+#[test]
+fn spec_f145_the_list_does_not_hash_a_pack_archive() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let instance = dir.path().join("instance");
+    std::fs::create_dir_all(&instance).expect("mkdir");
+    let archive = dir.path().join("the-pack.mrpack");
+    std::fs::write(&archive, b"the pack bytes").expect("write archive");
+    let mut meta = pack_meta(&archive);
+    meta.archive_sha512 = sha512_hex(b"the pack bytes");
+    journal
+        .start_pack("i1", &instance.to_string_lossy(), vec![], meta)
+        .expect("start pack");
+
+    let rows = list_operations(&journal).rows;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].reason, REASON_INTERRUPTED,
+        "the list ran the pack assessment (and hashed the archive): {rows:?}"
+    );
+}
+
+/// Every file below `dir`, relative, sorted, with its size, modification time
+/// and CONTENT — the write-nothing proof.
+///
+/// Names alone cannot see a rewrite: an assessment that touched a record's
+/// clock, replaced a file with identical bytes, or edited one in place keeps
+/// every path it started with. Content and mtime are what "nothing changed"
+/// actually means.
+fn snapshot(dir: &Path) -> Vec<(String, u64, u128, Vec<u8>)> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, u64, u128, Vec<u8>)>) {
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
-                let rel = e
-                    .path()
-                    .strip_prefix(dir)
+                let path = e.path();
+                // SQLite's own files are the engine's, not the code's: a read
+                // refreshes the WAL index and may checkpoint, and that is not
+                // the assessment writing. The journal and the disk paths it
+                // names are what this proof is about.
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with("registry.db") {
+                    continue;
+                }
+                let Ok(meta) = e.metadata() else { continue };
+                let rel = path
+                    .strip_prefix(base)
                     .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| e.path().to_string_lossy().into_owned());
-                out.push(rel);
-                if e.path().is_dir() {
-                    walk(&e.path(), out);
+                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+                let is_file = meta.is_file();
+                // Only a file's clock is evidence: directory timestamps are
+                // updated lazily by the OS and say nothing about who wrote.
+                let modified = if is_file {
+                    meta.modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let content = if is_file {
+                    std::fs::read(&path).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                out.push((rel, meta.len(), modified, content));
+                if meta.is_dir() {
+                    walk(&path, base, out);
                 }
             }
         }
         out.sort();
     }
     let mut out = Vec::new();
-    walk(dir, &mut out);
+    walk(dir, dir, &mut out);
     out
 }
 
@@ -88,7 +165,6 @@ fn snapshot(dir: &Path) -> Vec<String> {
 fn spec_f145_lists_operations_across_kinds() {
     let dir = crate::test_tempdir();
     let journal = Journal::new(dir.path().join("operations"));
-    let db = db_at(dir.path());
 
     // A finished batch: one item completed, then the operation completed.
     let downloads = dir.path().join("downloads");
@@ -170,7 +246,7 @@ fn spec_f145_lists_operations_across_kinds() {
         .expect("start pack")
         .operation_id;
 
-    let rows = list_operations(&db, &journal);
+    let rows = list_operations(&journal).rows;
 
     assert_eq!(rows.len(), 4, "every record the journal holds is listed");
     let kinds: Vec<OperationKind> = rows.iter().map(|r| r.kind).collect();
@@ -202,13 +278,16 @@ fn spec_f145_lists_operations_across_kinds() {
         running.reason, "operations.reason.interrupted",
         "a batch with no recovery surface gets the generic reason: {running:?}"
     );
+    // The list does not run a per-kind assessment: every unfinished row,
+    // whatever its kind, carries the generic interrupted key. The exact
+    // reason is what the assessor answers on demand.
     let create = rows
         .iter()
         .find(|r| r.operation_id == create_id)
         .expect("create row");
     assert_eq!(
-        create.reason, "recovery.instance.nothingWritten",
-        "the create's reason comes from the create assessment itself: {create:?}"
+        create.reason, "operations.reason.interrupted",
+        "the list states only that the record never finished: {create:?}"
     );
     let pack = rows
         .iter()
@@ -216,8 +295,8 @@ fn spec_f145_lists_operations_across_kinds() {
         .expect("pack row");
     assert_eq!(pack.pack_name, "The Pack", "{pack:?}");
     assert_eq!(
-        pack.reason, "recovery.pack.instanceMissing",
-        "the pack's reason comes from the pack assessment itself: {pack:?}"
+        pack.reason, "operations.reason.interrupted",
+        "the list hashed nothing to say this: {pack:?}"
     );
 
     // Newest first: the hand-written record from epoch 1 sinks to the end.
@@ -395,6 +474,240 @@ fn spec_f145_every_emitted_i18n_key_is_translated_in_both_locales() {
             .collect();
         assert!(missing.is_empty(), "{locale} is missing {missing:?}");
     }
+}
+
+/// F-145/F-102: a create whose folder was never made needs no user decision —
+/// `pending_creates` settles it as failed. The assessor must not offer the
+/// `leave` action with a link to a banner the Instances page no longer shows
+/// for this record: that link would go nowhere.
+#[test]
+fn spec_f145_a_create_that_settles_itself_offers_no_action() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let db = db_at(dir.path());
+    let root = dir.path().join("never-created");
+
+    let id = journal
+        .start(
+            OperationKind::InstanceCreate,
+            "i9",
+            &root.to_string_lossy(),
+            vec![],
+        )
+        .expect("start create")
+        .operation_id;
+
+    let assessed = assess_operation(&db, &journal, &id).expect("assess");
+
+    assert_eq!(
+        assessed.reason, "recovery.instance.nothingWritten",
+        "the case is still named: {assessed:?}"
+    );
+    assert_eq!(
+        assessed.action, "",
+        "a record that settles itself offers no action to open: {assessed:?}"
+    );
+}
+
+/// F-145: the disk evidence counts FILES, not names that exist. A directory
+/// where a `.jar` would land is not a downloaded file, and a file where a
+/// staging tree would be is not a staging folder: reporting either as present
+/// would tell the user bytes are there when they are not.
+#[test]
+fn spec_f145_disk_evidence_counts_files_and_folders_by_kind() {
+    let dir = crate::test_tempdir();
+    let target = dir.path().join("downloads");
+    std::fs::create_dir_all(target.join("not-a-file.jar")).expect("mkdir final-shaped");
+    std::fs::create_dir_all(target.join("not-a-part.jar.part")).expect("mkdir part-shaped");
+    let staging_is_a_file = dir.path().join("staging-is-a-file");
+    std::fs::write(&staging_is_a_file, b"not a folder").expect("write staging");
+
+    let mut record = OperationRecord::new(
+        OperationKind::DownloadBatch,
+        "prof-1",
+        &target.to_string_lossy(),
+        vec![item(
+            &target.join("not-a-file.jar"),
+            &target.join("not-a-part.jar.part"),
+            ItemState::Queued,
+        )],
+    );
+    record.staging_path = staging_is_a_file.to_string_lossy().into_owned();
+
+    let (staging_present, backup_present, final_present, part_present) = disk_evidence(&record);
+
+    assert!(
+        !staging_present,
+        "a file is not a staging folder: {record:?}"
+    );
+    assert!(!backup_present);
+    assert_eq!(
+        final_present, 0,
+        "a directory is not a landed file: {record:?}"
+    );
+    assert_eq!(
+        part_present, 0,
+        "a directory is not a partial file: {record:?}"
+    );
+}
+
+/// F-145: a record deleted after the table was read is a `notFound` answer,
+/// not an `io` failure — the user's fix is Refresh, not a disk doctor.
+#[test]
+fn spec_f145_a_record_deleted_after_the_list_is_not_found() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let db = db_at(dir.path());
+    let id = started_batch(&journal, &dir.path().join("downloads"), vec![]);
+    std::fs::remove_file(journal.root().join(format!("{id}.json"))).expect("delete record");
+
+    let err = assess_operation(&db, &journal, &id).expect_err("the record is gone");
+
+    assert!(
+        matches!(&err, AssessError::Unknown(found) if found == &id),
+        "a vanished row is `Unknown`, not a journal failure: {err:?}"
+    );
+}
+
+/// F-145: FAILED and CANCELLED are the states the view exists for, and they
+/// are terminal: the list includes them and says nothing is pending, instead
+/// of stamping "interrupted" on a record that ended on purpose. A list that
+/// only carried live work would hide the failures the user came to see.
+#[test]
+fn spec_f145_lists_failed_and_cancelled_records_as_terminal() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let target = dir.path().join("downloads");
+
+    let failed = started_batch(&journal, &target, vec![]);
+    journal
+        .transition_operation(&failed, OperationState::Running, None)
+        .expect("run");
+    journal
+        .transition_operation(&failed, OperationState::Failed, None)
+        .expect("fail");
+    let cancelled = started_batch(&journal, &target, vec![]);
+    journal
+        .transition_operation(&cancelled, OperationState::Cancelled, None)
+        .expect("cancel");
+
+    let rows = list_operations(&journal).rows;
+
+    assert_eq!(rows.len(), 2, "both terminal records are listed: {rows:?}");
+    for id in [&failed, &cancelled] {
+        let row = rows
+            .iter()
+            .find(|r| &r.operation_id == id)
+            .expect("row is listed");
+        assert!(row.state.is_terminal(), "the record ended: {row:?}");
+        assert_eq!(
+            row.reason, "",
+            "a record that ended needs no reason: {row:?}"
+        );
+    }
+}
+
+/// F-145: the two update kinds are in the table too. An interrupted update
+/// download or install is exactly the stale work the old centre listed, and a
+/// list of "every kind" that omits them is a lie by omission.
+#[test]
+fn spec_f145_lists_update_kinds() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let target = dir.path().join("updates");
+
+    for kind in [OperationKind::UpdateDownload, OperationKind::UpdateInstall] {
+        journal
+            .start(kind, "prof-1", &target.to_string_lossy(), vec![])
+            .expect("start update");
+    }
+
+    let rows = list_operations(&journal).rows;
+
+    assert_eq!(rows.len(), 2, "both update records are listed: {rows:?}");
+    let kinds: Vec<OperationKind> = rows.iter().map(|r| r.kind).collect();
+    assert!(
+        kinds.contains(&OperationKind::UpdateDownload)
+            && kinds.contains(&OperationKind::UpdateInstall),
+        "the update kinds are not filtered out: {kinds:?}"
+    );
+    assert!(
+        rows.iter().all(|r| r.reason == REASON_INTERRUPTED),
+        "an unfinished update says it was interrupted: {rows:?}"
+    );
+}
+
+/// F-145: a pack record whose `.mrpack` is still there is assessed against the
+/// archive it pins — the bytes are read and the digest matched, so the answer
+/// is about the plan, never `packMissing`. And a changed archive is
+/// `packChanged`: the check is the digest, not the filename.
+#[test]
+fn spec_f145_assesses_a_pack_archive_that_is_still_there() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let db = db_at(dir.path());
+    let root = dir.path().join("instance");
+    std::fs::create_dir_all(&root).expect("mkdir instance");
+    let archive = dir.path().join("the-pack.mrpack");
+    let bytes = b"a pack archive";
+    std::fs::write(&archive, bytes).expect("write archive");
+    let mut meta = pack_meta(&archive);
+    meta.archive_sha512 = sha512_hex(bytes);
+
+    let id = journal
+        .start_pack("i1", &root.to_string_lossy(), vec![], meta)
+        .expect("start pack")
+        .operation_id;
+
+    let assessed = assess_operation(&db, &journal, &id).expect("assess");
+    assert_eq!(
+        assessed.reason, "recovery.pack.nothingWritten",
+        "the archive is there and matches its digest: {assessed:?}"
+    );
+    assert_eq!(
+        assessed.action, "recovery.pack.action.resume",
+        "{assessed:?}"
+    );
+
+    // Same record, same path, different bytes: the digest is what answers.
+    std::fs::write(&archive, b"someone replaced the pack").expect("rewrite archive");
+    let reassessed = assess_operation(&db, &journal, &id).expect("reassess");
+    assert_eq!(
+        reassessed.reason, "recovery.pack.packChanged",
+        "a replaced archive is not the one the plan was built from: {reassessed:?}"
+    );
+}
+
+/// F-145: the old centre reported the records it could not read instead of
+/// pretending they do not exist. A corrupt record is an ISSUE on the listing —
+/// named by basename, with a reason — and it is left exactly as it was: the
+/// view reports, it never repairs.
+#[test]
+fn spec_f145_reports_unreadable_records_as_issues_without_touching_them() {
+    let dir = crate::test_tempdir();
+    let journal = Journal::new(dir.path().join("operations"));
+    let readable = started_batch(&journal, &dir.path().join("downloads"), vec![]);
+    let corrupt_id = uuid::Uuid::new_v4().to_string();
+    let corrupt = journal.root().join(format!("{corrupt_id}.json"));
+    std::fs::write(&corrupt, b"{ not a record").expect("write corrupt");
+
+    let before = snapshot(dir.path());
+    let listing = list_operations(&journal);
+    let after = snapshot(dir.path());
+
+    assert_eq!(listing.rows.len(), 1, "{listing:?}");
+    assert_eq!(listing.rows[0].operation_id, readable);
+    assert_eq!(listing.issues.len(), 1, "{listing:?}");
+    assert_eq!(
+        listing.issues[0].filename,
+        format!("{corrupt_id}.json"),
+        "the issue names the file, basename only: {listing:?}"
+    );
+    assert!(
+        !listing.issues[0].message.is_empty(),
+        "an issue says why it could not be read: {listing:?}"
+    );
+    assert_eq!(before, after, "the listing touched the corrupt record");
 }
 
 /// F-145: an id the journal does not hold is an answer about the REQUEST, not

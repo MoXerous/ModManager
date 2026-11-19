@@ -841,7 +841,7 @@ fn recovery_result_dto(report: pack_recovery::PackRecoveryReport) -> PackRecover
 /// only through the handle, one lock per write, which is why the recovery's
 /// `write` callback below is exactly the apply's, and reads stay per-call
 /// consistent the way they are for every other command.
-fn journal_store_of(state: &AppState) -> Result<Journal, IpcError> {
+pub(crate) fn journal_store_of(state: &AppState) -> Result<Journal, IpcError> {
     let handle = state.journal_handle();
     let root = handle
         .lock()
