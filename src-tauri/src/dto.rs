@@ -1510,6 +1510,87 @@ pub struct PackRecoveryResultDto {
     pub state: String,
 }
 
+// --- The unified operations view (F-145) ----------------------------------
+//
+// Read-only, across every kind the journal records. Each row is the record's
+// own fields plus a reason key when it is unfinished; the assessment is what
+// the disk holds plus the action key of the surface that already owns the
+// kind. The webview sends an operation id and nothing else.
+
+/// One row of the operations table.
+///
+/// `kind` and `state` are the lowercase words the record itself serializes to
+/// (`download_batch`, `mrpack_install`, `running`, …): the UI branches and
+/// groups on them, and translates `operations.kind.*` / `operations.state.*`
+/// (AGENTS.md §5.9 — no display sentence crosses IPC).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationSummaryDto {
+    /// The journal operation the UI sends back to the assessor.
+    pub operation_id: String,
+    /// `download_batch | update_download | update_install | mrpack_install |
+    /// instance_create`.
+    pub kind: String,
+    /// `planned | running | completed | failed | cancelled`.
+    pub state: String,
+    /// Epoch seconds, as the record stores them.
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+    /// The instance the operation belongs to; empty for a batch that has none.
+    pub profile_id: String,
+    /// Where the operation acts: an instance root, or the download target.
+    pub target_path: String,
+    #[ts(type = "number")]
+    pub planned_count: usize,
+    #[ts(type = "number")]
+    pub completed_count: usize,
+    #[ts(type = "number")]
+    pub failed_count: usize,
+    #[ts(type = "number")]
+    pub cancelled_count: usize,
+    #[ts(type = "number")]
+    pub skipped_count: usize,
+    /// The pack's display name for a pack apply, empty for every other kind.
+    pub pack_name: String,
+    /// An i18n reason key when the record is unfinished, empty when terminal.
+    pub reason: String,
+}
+
+/// What one record's disk holds, and who may act on it.
+///
+/// The counters are evidence from the disk (`final_present`, `part_present`),
+/// not the record's own tallies: the record is one write late by definition.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationAssessmentDto {
+    pub operation_id: String,
+    pub kind: String,
+    pub state: String,
+    pub target_path: String,
+    /// Whether the record's staging directory exists.
+    pub staging_present: bool,
+    /// Whether the record's backup directory exists.
+    pub backup_present: bool,
+    /// How many items the record carries.
+    #[ts(type = "number")]
+    pub item_count: usize,
+    /// How many items' final destinations exist on disk.
+    #[ts(type = "number")]
+    pub final_present: usize,
+    /// How many items' `.part` files exist on disk.
+    #[ts(type = "number")]
+    pub part_present: usize,
+    /// The i18n action key of the recovery surface that already owns this
+    /// kind; empty when none exists — the view then stays strictly read-only.
+    pub action: String,
+    /// An i18n reason key, empty when the record is terminal.
+    pub reason: String,
+}
+
 // --- Legacy import (F-181) -----------------------------------------------
 //
 // A scan is a report, not a plan and not a promise. Every path here is for

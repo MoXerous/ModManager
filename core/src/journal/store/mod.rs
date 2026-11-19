@@ -251,7 +251,23 @@ impl Journal {
     }
 
     pub fn read(&self, id: &str) -> Result<OperationRecord, JournalError> {
+        // The id can come from the webview (F-145's assessor takes one
+        // straight from a table row), so only the canonical spelling may
+        // become a path below the journal root.
+        if !super::is_canonical_id(id) {
+            return Err(JournalError::NotCanonicalId);
+        }
         self.read_record(id)
+    }
+
+    /// Whether a record with this id is in the journal, without reading it.
+    ///
+    /// Read-only, and canonical-only: a traversal-shaped id is `false` rather
+    /// than a stat outside the root. The answer can go stale in the instant
+    /// after it, which is why callers treat `false` as "not found" and still
+    /// map a later read failure normally.
+    pub fn knows(&self, id: &str) -> bool {
+        super::is_canonical_id(id) && record_path(&self.root, id).is_file()
     }
 
     pub fn transition_operation(

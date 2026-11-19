@@ -30,6 +30,9 @@ pub mod backup;
 /// F-181: the read-only preview of the old application's data.
 pub mod legacy;
 
+/// F-145: the unified, read-only operations view across kinds.
+pub mod operations;
+
 /// F-168: the content watcher bridge.
 pub mod watch;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
@@ -1554,6 +1557,8 @@ pub(crate) mod history_tests;
 pub(crate) mod install_tests;
 #[cfg(test)]
 pub(crate) mod legacy_tests;
+#[cfg(test)]
+pub(crate) mod operations_tests;
 #[cfg(test)]
 pub(crate) mod pack_tests;
 #[cfg(test)]

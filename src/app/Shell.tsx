@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Activity,
   Download,
   Layers,
   Package,
@@ -20,7 +21,14 @@ import { Kbd } from '@/components/Kbd';
 import { CommandPalette } from './CommandPalette';
 import { isRtl, setPreferences, usePreferences, watchSystemTheme } from './preferences';
 
-export const PAGE_IDS = ['instances', 'browse', 'modpack', 'downloads', 'settings'] as const;
+export const PAGE_IDS = [
+  'instances',
+  'browse',
+  'modpack',
+  'downloads',
+  'operations',
+  'settings',
+] as const;
 export type PageId = (typeof PAGE_IDS)[number];
 
 interface NavItem {
@@ -34,6 +42,8 @@ export const NAV: readonly NavItem[] = [
   { id: 'browse', icon: Search, labelKey: 'nav.browse' },
   { id: 'modpack', icon: Package, labelKey: 'nav.modpack' },
   { id: 'downloads', icon: Download, labelKey: 'nav.downloads' },
+  // F-145: the read-only operation centre.
+  { id: 'operations', icon: Activity, labelKey: 'nav.operations' },
   { id: 'settings', icon: SlidersHorizontal, labelKey: 'nav.settings' },
 ];
 

@@ -35,6 +35,8 @@ import type { ModpackExportSummaryDto } from '../bindings/ModpackExportSummaryDt
 import type { ModpackExportWriteRequest } from '../bindings/ModpackExportWriteRequest';
 import type { ModpackInstallRequest } from '../bindings/ModpackInstallRequest';
 import type { ModpackPlanDto } from '../bindings/ModpackPlanDto';
+import type { OperationAssessmentDto } from '../bindings/OperationAssessmentDto';
+import type { OperationSummaryDto } from '../bindings/OperationSummaryDto';
 import type { PackEventDto } from '../bindings/PackEventDto';
 import type { PackRecoveryDto } from '../bindings/PackRecoveryDto';
 import type { PackRecoveryResultDto } from '../bindings/PackRecoveryResultDto';
@@ -372,6 +374,26 @@ export function listDownloadHistory(
 /** Deletes the whole log; the answer is how many rows went. */
 export function clearDownloadHistory(): Promise<number> {
   return invoke<number>('clear_download_history');
+}
+
+// --- the unified operations view (F-145) --------------------------------
+//
+// Read-only, across kinds. Reading is a scan of the journal's own records; the
+// assessor takes one operation id and never a path, because the target, the
+// instance and the disk evidence all come from the record.
+
+/** Every record the journal holds, newest first — terminal ones included. */
+export function listOperations(): Promise<OperationSummaryDto[]> {
+  return invoke<OperationSummaryDto[]>('list_operations');
+}
+
+/**
+ * F-145: what one record's disk holds, plus the action of the surface that
+ * already owns its kind (empty when none exists). A stale row is the typed
+ * `notFound`, so the screen can answer with Refresh.
+ */
+export function assessOperation(operationId: string): Promise<OperationAssessmentDto> {
+  return invoke<OperationAssessmentDto>('assess_operation', { operationId });
 }
 
 // --- CurseForge API key (ADR 0004 2-1) -----------------------------------

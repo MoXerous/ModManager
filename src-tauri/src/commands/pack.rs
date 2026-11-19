@@ -793,7 +793,9 @@ fn recovery_error(e: &pack_recovery::RecoveryError) -> IpcError {
 /// One record's state, spelled.
 ///
 /// A lowercase word, not a sentence: the UI branches on it like on `phase`.
-fn operation_state_word(state: mm_core::journal::OperationState) -> &'static str {
+/// Shared with `commands::operations` (F-145), which lists every kind in the
+/// same table.
+pub(super) fn operation_state_word(state: mm_core::journal::OperationState) -> &'static str {
     use mm_core::journal::OperationState as S;
     match state {
         S::Planned => "planned",
