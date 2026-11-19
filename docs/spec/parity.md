@@ -208,7 +208,7 @@
 
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
-| **F-102** | إنشاء بروفايل مخصّص | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+1) · كود: core/src/instances/registry.rs، core/src/journal/mod.rs |
+| **F-102** | إنشاء بروفايل مخصّص | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+1) · كود: core/src/instances/registry.rs، core/src/journal/mod.rs (+1) |
 | **F-103** | ربط مجلد موجود | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/registry.rs · كود: core/src/db/instances.rs، core/src/db/schema.rs (+2) |
 | **F-104** | **عمود `source`** على النسخ | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/db/mod.rs (+1) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+3) |
 | **F-105** | ~~`ownership_policy` مُنفَّذ~~ | Drop | — | متروك | — |
@@ -264,7 +264,7 @@
 | **F-142** | انتقالات مُقيّدة للعمليات والعناصر | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/journal/tests.rs · كود: core/src/journal/mod.rs |
 | **F-143** | **كشف مجلد عمليات غير منتهية** | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/journal/tests.rs · كود: core/src/journal/mod.rs |
 | **F-144** | **القفل عبر العمليات** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: src-tauri/src/commands/pack_tests.rs |
-| **F-145** | مركز العمليات (قراءة فقط) | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/operations/tests.rs، src-tauri/src/commands/operations_tests.rs · كود: core/src/journal/mod.rs، core/src/journal/store/mod.rs (+10) · اختبار (ذكر): src-tauri/src/commands/operations_tests.rs |
+| **F-145** | مركز العمليات (قراءة فقط) | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/operations/tests.rs (+1) · كود: core/src/journal/mod.rs، core/src/journal/store/mod.rs (+11) · اختبار (ذكر): src-tauri/src/commands/operations_tests.rs |
 | **F-146** | **تقييم الأدلة — أعداد فقط** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/recovery.rs، core/src/modpack/recovery_tests.rs (+1) · كود: core/src/instances/recovery.rs، src-tauri/src/commands/pack.rs (+5) · اختبار (ذكر): src-tauri/src/commands/pack_tests.rs |
 | **F-147** | **تعليق كـ«مُهجر»** | Defer | later | مؤجَّل | — |
 ### logging

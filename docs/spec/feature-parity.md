@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 39 |
+| حاضر — مُراجَع | 40 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 5 |
+| جزئي — مُراجَع | 4 |
 | مفقود — مُراجَع | 8 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**13** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**12** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -38,7 +38,6 @@
 | **F-130** | **قصّ الميتافيزقا فقط** | updates | مفقود — مُراجَع | No metadata-only prune/reconcile: lock entries are dropped only by explicit remove; scan_instance returns facts plus lock entries without reconciling them; grep for prune/reconcile in core finds one unrelated comment. No plan, no mandatory dry-run, no typed report. |
 | **F-131** | **التمييز «موجود» عن «مؤهَّل»** | updates | جزئي — مُراجَع | The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere. |
 | **F-132** | كاش لكل تشغيل في المخطّط | updates | جزئي — مُراجَع | The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour. |
-| **F-145** | مركز العمليات (قراءة فقط) | operations | جزئي — مُراجَع | No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record. |
 
 ## التفاصيل
 
@@ -175,7 +174,7 @@
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
 |---|---|---|---|---|---|
-| **F-102** | إنشاء بروفايل مخصّص | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+1) · كود: core/src/instances/registry.rs، core/src/journal/mod.rs |
+| **F-102** | إنشاء بروفايل مخصّص | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+1) · كود: core/src/instances/registry.rs، core/src/journal/mod.rs (+1) |
 | **F-103** | ربط مجلد موجود | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/registry.rs · كود: core/src/db/instances.rs، core/src/db/schema.rs (+2) |
 | **F-104** | **عمود `source`** على النسخ | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/db/mod.rs (+1) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+3) |
 | **F-105** | ~~`ownership_policy` مُنفَّذ~~ | Drop | — | مُستبعد (قرارُ المواصفة) | — |
@@ -231,7 +230,7 @@
 | **F-142** | انتقالات مُقيّدة للعمليات والعناصر | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/journal/tests.rs · كود: core/src/journal/mod.rs |
 | **F-143** | **كشف مجلد عمليات غير منتهية** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/journal/store/tests.rs، core/src/journal/tests.rs · كود: core/src/journal/mod.rs |
 | **F-144** | **القفل عبر العمليات** | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: src-tauri/src/commands/pack_tests.rs |
-| **F-145** | مركز العمليات (قراءة فقط) | Keep | M2 | جزئي — مُراجَع | E:\ModManager\src-tauri\src\commands.rs::list_pending_creates · E:\ModManager\src-tauri\src\commands\pack.rs::pending_pack_recoveries · E:\ModManager\src-tauri\src\lib.rs::generate_handler (no list-all-operations command) |
+| **F-145** | مركز العمليات (قراءة فقط) | Keep | M2 | حاضر — مُراجَع | core/src/operations/mod.rs::list_operations · core/src/operations/mod.rs::assess_operation · src-tauri/src/commands/operations.rs · src/app/pages/OperationsPage.tsx |
 | **F-146** | **تقييم الأدلة — أعداد فقط** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/recovery.rs، core/src/modpack/recovery_tests.rs (+1) · كود: core/src/instances/recovery.rs، src-tauri/src/commands/pack.rs (+5) · اختبار (ذكر): src-tauri/src/commands/pack_tests.rs |
 | **F-147** | **تعليق كـ«مُهجر»** | Defer | later | مؤجَّل (قرارُ المواصفة) | — |
 ### logging
