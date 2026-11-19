@@ -30,6 +30,9 @@ pub mod backup;
 /// F-181: the read-only preview of the old application's data.
 pub mod legacy;
 
+/// F-145: the unified, read-only operations view across kinds.
+pub mod operations;
+
 /// F-168: the content watcher bridge.
 pub mod watch;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
@@ -104,6 +107,9 @@ fn journal_error(e: &mm_core::journal::JournalError) -> IpcError {
     match e {
         // The operation id was not one of ours, so the request was malformed.
         J::NotCanonicalId | J::ItemMissing(_) | J::DuplicateItem(_) => IpcError::invalid_input(e),
+        // A record that is no longer there is a stale row, not a broken disk:
+        // the user's fix is Refresh.
+        J::NotFound => IpcError::new(ErrorCode::NotFound, e),
         // A state or counter that does not add up is our bookkeeping, not the
         // user's request — retrying the same action will hit it again. The
         // schema and the pack block are the same kind of thing: the record on
@@ -1554,6 +1560,8 @@ pub(crate) mod history_tests;
 pub(crate) mod install_tests;
 #[cfg(test)]
 pub(crate) mod legacy_tests;
+#[cfg(test)]
+pub(crate) mod operations_tests;
 #[cfg(test)]
 pub(crate) mod pack_tests;
 #[cfg(test)]

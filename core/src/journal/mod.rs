@@ -321,6 +321,11 @@ pub enum JournalError {
     CounterMismatch(&'static str),
     #[error("operation id must be a canonical lowercase uuid")]
     NotCanonicalId,
+    /// The record is not in the journal: it was deleted after the table was
+    /// read, or the id never named one. Not an io failure — the answer is
+    /// "not found", and the user's fix is Refresh.
+    #[error("operation record not found")]
+    NotFound,
     /// The record's schema is not one this build reads. It was written by a
     /// newer build, and guessing its shape would be reading a file whose
     /// meaning this build does not know.
@@ -341,6 +346,17 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Whether `id` is the one spelling the journal writes: a lowercase,
+/// round-tripping uuid.
+///
+/// This is a *path gate* as much as a format check. A caller may hand an id
+/// straight from the webview (F-145's assessor does), and an id that is not
+/// canonical must never be joined into a record path — `..\..\anything` would
+/// otherwise stat files outside the journal.
+pub fn is_canonical_id(id: &str) -> bool {
+    matches!(uuid::Uuid::parse_str(id), Ok(u) if u.to_string() == id)
 }
 
 impl OperationRecord {
@@ -473,9 +489,10 @@ impl OperationRecord {
     /// Canonical lowercase UUID only: `parse_str` also accepts uppercase
     /// and brace forms, so the round-trip string compare is the gate.
     pub fn verify_id(&self) -> Result<(), JournalError> {
-        match uuid::Uuid::parse_str(&self.operation_id) {
-            Ok(u) if u.to_string() == self.operation_id => Ok(()),
-            _ => Err(JournalError::NotCanonicalId),
+        if is_canonical_id(&self.operation_id) {
+            Ok(())
+        } else {
+            Err(JournalError::NotCanonicalId)
         }
     }
 

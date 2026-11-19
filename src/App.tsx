@@ -7,6 +7,7 @@ import { BrowsePage } from './app/pages/BrowsePage';
 import { DownloadsPage } from './app/pages/DownloadsPage';
 import { InstancesPage } from './app/pages/InstancesPage';
 import { ModpackPage } from './app/pages/ModpackPage';
+import { OperationsPage } from './app/pages/OperationsPage';
 import { PlaceholderPage } from './app/pages/PlaceholderPage';
 import { SettingsPage } from './app/pages/SettingsPage';
 
@@ -52,6 +53,8 @@ export default function App() {
         <ModpackPage />
       ) : page === 'downloads' ? (
         <DownloadsPage />
+      ) : page === 'operations' ? (
+        <OperationsPage onNavigate={navigate} />
       ) : page === 'settings' ? (
         <SettingsPage />
       ) : (

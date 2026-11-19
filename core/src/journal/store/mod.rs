@@ -108,16 +108,27 @@ impl Journal {
 
     fn read_record(&self, id: &str) -> Result<OperationRecord, JournalError> {
         let path = record_path(&self.root, id);
-        let meta = std::fs::metadata(&path).map_err(|e| io_err("stat record", e))?;
+        let meta = match std::fs::metadata(&path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(JournalError::NotFound);
+            }
+            Err(e) => return Err(io_err("stat record", e)),
+        };
         if meta.len() > MAX_OPERATION_JOURNAL_BYTES {
             return Err(JournalError::Io(
                 "operation journal record is too large".into(),
             ));
         }
         let mut text = String::new();
-        std::fs::File::open(&path)
-            .map_err(|e| io_err("open record", e))?
-            .read_to_string(&mut text)
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(JournalError::NotFound);
+            }
+            Err(e) => return Err(io_err("open record", e)),
+        };
+        file.read_to_string(&mut text)
             .map_err(|e| io_err("read record", e))?;
         let record: OperationRecord = serde_json::from_str(&text)
             .map_err(|e| JournalError::Io(format!("parse record: {e}")))?;
@@ -251,7 +262,23 @@ impl Journal {
     }
 
     pub fn read(&self, id: &str) -> Result<OperationRecord, JournalError> {
+        // The id can come from the webview (F-145's assessor takes one
+        // straight from a table row), so only the canonical spelling may
+        // become a path below the journal root.
+        if !super::is_canonical_id(id) {
+            return Err(JournalError::NotCanonicalId);
+        }
         self.read_record(id)
+    }
+
+    /// Whether a record with this id is in the journal, without reading it.
+    ///
+    /// Read-only, and canonical-only: a traversal-shaped id is `false` rather
+    /// than a stat outside the root. The answer can go stale in the instant
+    /// after it, which is why callers treat `false` as "not found" and still
+    /// map a later read failure normally.
+    pub fn knows(&self, id: &str) -> bool {
+        super::is_canonical_id(id) && record_path(&self.root, id).is_file()
     }
 
     pub fn transition_operation(

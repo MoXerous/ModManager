@@ -547,16 +547,17 @@
     },
     {
       "id": "F-145",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src-tauri\\src\\commands.rs::list_pending_creates",
-        "E:\\ModManager\\src-tauri\\src\\commands\\pack.rs::pending_pack_recoveries",
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no list-all-operations command)"
+        "core/src/operations/mod.rs::list_operations",
+        "core/src/operations/mod.rs::assess_operation",
+        "src-tauri/src/commands/operations.rs",
+        "src/app/pages/OperationsPage.tsx"
       ],
-      "test": null,
-      "note": "Verified no command exposes unfinished DownloadBatch records; state.rs's DownloadBatch reference is test code.",
-      "gap": "No unified operations view: only two per-kind recovery surfaces exist (list_pending_creates for instance creates, pending_pack_recoveries for pack applies), each with its own banner; download-batch records are never surfaced in any recovery UI (no IPC command lists unfinished DownloadBatch operations), there is no alerts table with Refresh, and no assessor for an arbitrary record.",
-      "review": "verified:confirmed"
+      "test": "spec_f145_the_list_does_not_hash_a_pack_archive",
+      "note": "حاضر: عرضٌ موحَّدٌ للقراءةِ فقط عبر الأنواع الخمسة (download_batch · update_download · update_install · mrpack_install · instance_create) وكلِّ الحالات بما المنتهية، مع السجلاتِ غير المقروءة كتحذيراتٍ بلا تعديل، ومقيّمٍ يُفوِّض كلَّ نوعٍ إلى سطحه القائم ويُثبت القرصَ بالنوع (is_file/is_dir)، ولقفلٍ بلا تجزئةٍ ولا hashing داخل القفل، وصفٍّ اختفى ⇒ notFound برمزه، وصفوفٍ بحالةٍ غير معروفة في مجموعة other صريحة. انحرافاتٌ مسجَّلة: صفحةٌ في الشريط الجانبي بدلَ نافذةِ التنبيه غيرِ النموذجية (`screens.md`)، ولا صفوفُ يعمل، ولا ترتيبٌ according-to-attention، ولا مصطلحاتُ unsafe/limitReached/mixed لكلِّ نوع.",
+      "gap": null,
+      "review": "fixed-s10: implemented, adversarially challenged twice (deepseek), six findings fixed"
     },
     {
       "id": "F-150",

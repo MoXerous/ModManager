@@ -11,6 +11,7 @@ pub mod journal;
 pub mod legacy;
 pub mod logging;
 pub mod modpack;
+pub mod operations;
 pub mod paths;
 pub mod providers;
 pub mod resolver;

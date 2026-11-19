@@ -206,6 +206,15 @@ pub fn pending_pack_applies(journal: &Journal) -> Vec<PackRecovery> {
 
 /// Inspects one pack-apply record. Never mutates anything.
 ///
+/// Public wrapper for [`assess`]: the unified operations view (F-145) assesses
+/// an arbitrary record with the logic that already owns its kind, and this is
+/// the one for a pack apply. Read-only, exactly like `assess` itself.
+pub fn assess_record(record: &OperationRecord) -> PackRecovery {
+    assess(record)
+}
+
+/// Inspects one pack-apply record. Never mutates anything.
+///
 /// The order of the questions is the order of the recovery's own: the
 /// instance folder first (a folder the user deleted is not ours to
 /// recreate), then the archive (without it there are no bytes to resume

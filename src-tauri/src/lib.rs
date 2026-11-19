@@ -151,6 +151,8 @@ pub fn run() -> i32 {
             commands::cancel_active_install,
             commands::list_download_history,
             commands::clear_download_history,
+            commands::operations::list_operations,
+            commands::operations::assess_operation,
             commands::curseforge_key_status,
             commands::save_curseforge_key,
             commands::legacy::scan_legacy_import,
