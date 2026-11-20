@@ -307,3 +307,42 @@ async fn spec_f145_a_corrupt_record_is_reported_as_an_issue_over_ipc() {
         "the listing rewrote the unreadable record"
     );
 }
+
+/// Every kind and state the operations table can emit must be translated in
+/// BOTH locales - including the "other" buckets for kinds and states this
+/// build does not know. A missing key renders as a raw `operations.*` token in
+/// an RTL page (found by a browser check of the Operations screen).
+#[test]
+fn spec_f145_every_kind_and_state_key_is_translated_in_both_locales() {
+    const KEYS: &[&str] = &[
+        "operations.kind.download_batch",
+        "operations.kind.update_download",
+        "operations.kind.update_install",
+        "operations.kind.mrpack_install",
+        "operations.kind.instance_create",
+        "operations.kind.other",
+        "operations.state.planned",
+        "operations.state.running",
+        "operations.state.completed",
+        "operations.state.failed",
+        "operations.state.cancelled",
+        "operations.state.other",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("i18n");
+    for locale in ["ar.json", "en.json"] {
+        let text = std::fs::read_to_string(root.join(locale))
+            .unwrap_or_else(|e| panic!("cannot read {locale}: {e}"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{locale} is not JSON: {e}"));
+        for key in KEYS {
+            let value = parsed.get(key).and_then(|v| v.as_str());
+            assert!(
+                value.is_some_and(|v| !v.is_empty()),
+                "{locale} is missing a translation for {key}"
+            );
+        }
+    }
+}

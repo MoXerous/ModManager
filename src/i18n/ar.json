@@ -838,6 +838,7 @@
   "operations.kind.update_install": "تثبيت تحديث",
   "operations.kind.mrpack_install": "تطبيق حزمة",
   "operations.kind.instance_create": "إنشاء نسخة",
+  "operations.kind.other": "نوع آخر",
   "operations.col.kind": "العملية",
   "operations.col.updated": "آخر تحديث",
   "operations.col.progress": "التقدُّم",

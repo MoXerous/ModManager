@@ -714,6 +714,7 @@
   "operations.kind.update_install": "Update install",
   "operations.kind.mrpack_install": "Pack apply",
   "operations.kind.instance_create": "Instance create",
+  "operations.kind.other": "Other kind",
   "operations.col.kind": "Operation",
   "operations.col.updated": "Updated",
   "operations.col.progress": "Progress",
