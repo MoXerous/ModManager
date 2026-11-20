@@ -249,6 +249,8 @@ fn spec_f019_every_error_code_is_translated_in_both_locales() {
         ErrorCode::Io,
         ErrorCode::NewerSchema,
         ErrorCode::LinkOrReparse,
+        ErrorCode::UpdateContextChanged,
+        ErrorCode::UpdateBackupNotConfirmed,
     ];
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -269,6 +271,41 @@ fn spec_f019_every_error_code_is_translated_in_both_locales() {
                 .to_owned();
             let key = format!("error.{name}");
             assert!(parsed.get(&key).is_some(), "{locale} has no {key}");
+        }
+    }
+}
+
+/// F-122: the five promises and every skip reason exist in BOTH locales. The
+/// keys are looked up dynamically by the dialog, so a missing one shows a raw
+/// `updates.contract.…` on screen and no compiler notices.
+#[test]
+fn spec_f122_contract_and_skip_copies_exist_in_both_locales() {
+    use mm_core::updates::apply::{SafetyContractItem, SkipReason};
+
+    let mut keys: Vec<String> = SafetyContractItem::all()
+        .iter()
+        .map(|item| item.key.to_string())
+        .collect();
+    for reason in [
+        SkipReason::MissingOldFile,
+        SkipReason::ChangedSincePreview,
+        SkipReason::TargetOccupied,
+        SkipReason::TargetAppeared,
+    ] {
+        keys.push(format!("updates.skip.{}", reason.code()));
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("i18n");
+    for locale in ["ar.json", "en.json"] {
+        let text = std::fs::read_to_string(root.join(locale))
+            .unwrap_or_else(|e| panic!("cannot read {locale}: {e}"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{locale} is not JSON: {e}"));
+        for key in &keys {
+            assert!(parsed.get(key).is_some(), "{locale} has no {key}");
         }
     }
 }

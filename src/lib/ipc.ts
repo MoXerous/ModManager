@@ -52,6 +52,11 @@ import type { RestoreRunDto } from '../bindings/RestoreRunDto';
 import type { SearchPageDto } from '../bindings/SearchPageDto';
 import type { TogglePlanDto } from '../bindings/TogglePlanDto';
 import type { ToggleResultDto } from '../bindings/ToggleResultDto';
+import type { ApplyUpdateRequest } from '../bindings/ApplyUpdateRequest';
+import type { UpdateDownloadResultDto } from '../bindings/UpdateDownloadResultDto';
+import type { UpdateInstallPlanDto } from '../bindings/UpdateInstallPlanDto';
+import type { UpdateInstallPlanRequest } from '../bindings/UpdateInstallPlanRequest';
+import type { UpdateInstallResultDto } from '../bindings/UpdateInstallResultDto';
 import type { UpdatePreviewDto } from '../bindings/UpdatePreviewDto';
 import type { WorldsPreviewDto } from '../bindings/WorldsPreviewDto';
 
@@ -213,6 +218,28 @@ export async function onContentStale(
  */
 export function checkInstanceUpdates(req: CheckUpdatesRequest): Promise<UpdatePreviewDto> {
   return invoke<UpdatePreviewDto>('check_instance_updates', { req });
+}
+
+/**
+ * خطة تثبيت التحديث (F-121): قراءة فقط، وتعطي رمزًا (`token`) يلزم أن يعود
+ * مع التأكيد؛ إن تغيّر القفل أو المجلد بينهما يُرفض التثبيت.
+ */
+export function previewUpdateInstall(
+  req: UpdateInstallPlanRequest,
+): Promise<UpdateInstallPlanDto> {
+  return invoke<UpdateInstallPlanDto>('preview_update_install', { req });
+}
+
+/** التثبيت الفعلي (F-121..F-123): الخطة تُعاد بناؤها في Rust قبل أي كتابة. */
+export function executeUpdateInstall(req: ApplyUpdateRequest): Promise<UpdateInstallResultDto> {
+  return invoke<UpdateInstallResultDto>('execute_update_install', { req });
+}
+
+/** تنزيل فقط (F-124): ملفات جاهزة في مجلد داخل النسخة، ولا يُلمس `mods/`. */
+export function executeUpdateDownloadOnly(
+  req: ApplyUpdateRequest,
+): Promise<UpdateDownloadResultDto> {
+  return invoke<UpdateDownloadResultDto>('execute_update_download_only', { req });
 }
 
 export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto> {

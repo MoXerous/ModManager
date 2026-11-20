@@ -86,6 +86,15 @@ async fn registered_instance(
     ))
 }
 
+/// The subject a backup needs, for a command that is not a backup itself
+/// (F-123: the Yes branch of the update install).
+pub(super) async fn instance_subject(
+    state: &AppState,
+    raw: &str,
+) -> Result<BackupSubject, IpcError> {
+    Ok(registered_instance(state, raw).await?.1)
+}
+
 /// Where an instance's content actually lives (`mods/`, `saves/`,
 /// `profile.json`): the detected game root when the row has one, its own path
 /// otherwise — the same fallback `metadata::mirror_of` uses.

@@ -179,6 +179,9 @@ pub fn run() -> i32 {
             commands::backup::preview_instance_worlds,
             commands::backup::pending_instance_restores,
             commands::watch::watch_instance_content,
+            commands::updates::preview_update_install,
+            commands::updates::execute_update_install,
+            commands::updates::execute_update_download_only,
             commands::watch::unwatch_instance_content,
         ])
         .build(tauri::generate_context!());

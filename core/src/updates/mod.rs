@@ -11,6 +11,11 @@
 //! locks written before `sha512` existed, never the first question. A provider
 //! that has no hash lookup at all is reported as `Unsupported`; falling
 //! through to "no update" would turn "I cannot tell" into "you are current".
+//!
+//! Applying an update is [`apply`]: plan first, re-check the context, then
+//! write (F-121..F-124).
+
+pub mod apply;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -45,6 +50,13 @@ pub struct UpdateCandidate {
     pub latest_filename: Option<String>,
     pub latest_sha1: Option<String>,
     pub latest_sha512: Option<String>,
+    /// The artifact URL, size and declared game versions of the newest
+    /// version. Carried so an install plan can be built from the preview the
+    /// user saw without a second provider round trip (F-121): a plan that
+    /// re-resolved would be a plan the user did not confirm.
+    pub latest_url: Option<String>,
+    pub latest_size: Option<u64>,
+    pub latest_game_versions: Vec<String>,
     pub status: UpdateStatus,
 }
 
@@ -212,6 +224,9 @@ pub async fn check_updates(
                 latest_filename: file.map(|f| f.filename.clone()),
                 latest_sha1: file.and_then(|f| f.sha1.clone()),
                 latest_sha512: file.and_then(|f| f.sha512.clone()),
+                latest_url: file.map(|f| f.url.clone()).filter(|u| !u.is_empty()),
+                latest_size: file.map(|f| f.size),
+                latest_game_versions: latest.map(|v| v.game_versions.clone()).unwrap_or_default(),
                 status,
             }
         })
@@ -295,5 +310,7 @@ fn primary_file(version: &Version) -> Option<&ProjectFile> {
         .or_else(|| version.files.first())
 }
 
+#[cfg(test)]
+mod apply_tests;
 #[cfg(test)]
 mod tests;
