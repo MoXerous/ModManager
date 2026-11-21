@@ -53,6 +53,10 @@
 - Consumes: لا شيء.
 - Produces: `buildAuditReport()` سلوك CLI (كتابة/فحص)؛ مخطّط `AuditUnit` الذي ستنتجه Tasks 3–6؛ سكربت `pnpm audit:check`.
 
+**انحرافات معتمدة من المستخدم (2026-11-21) بعد مراجعة المهمة:** (1) استبدال سطر `ROOT` ببحثٍ تصاعديّ `findRoot` + `fileURLToPath`؛ (2) إضافة قسم «الفهرس (كل الوحدات)» إلى المخرَج. كلاهما ظاهر في الكود أدناه، ولا يجوز نسخ السطر القديم في المهام التالية.
+
+**ملاحظات صغرى مُسجَّلة للمراجعة النهائية (لا تمنع التنفيذ):** سطر فارغ قبل `## حسب البُعد` عند غياب findings؛ التحقق من حقل `reviewer` و`deviation`؛ تغليف `JSON.parse` برسالة `audit:`؛ عدَم سطر newline في الدفتر الابتدائي؛ اختبار مسار `scripts/` الفعلي؛ حالات اختبار إضافية (تكرار id، registry بلا ترخيص، undocumented-deviation بـlow، ونجاح `--check`).
+
 - [ ] **Step 1: اكتب الاختبار الفاشل** — `scripts/test-audit-report.mjs`:
 
 ```js
@@ -139,10 +143,22 @@ Expected: FAIL بـ `ENOENT: no such file or directory, copyFileSync ... build-a
  * أو يتحقّق من حداثته مع --check. بلا تبعيات خارجية.
  *   node scripts/build-audit-report.mjs [--check]
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+/** انحراف معتمد من المستخدم 2026-11-21: بحث تصاعدي عن أول سلف يحتوي docs/spec.
+ *  السطر الأصلي `new URL("..", import.meta.url)` يصعد مستوىً زائدًا عند نسخ المولّد إلى مجلد مؤقت. */
+function findRoot(start) {
+  let dir = start;
+  for (;;) {
+    if (existsSync(join(dir, "docs", "spec"))) return dir;
+    const up = dirname(dir);
+    if (up === dir) return start;
+    dir = up;
+  }
+}
+const ROOT = findRoot(fileURLToPath(new URL(".", import.meta.url)));
 const LEDGER = join(ROOT, "docs/spec/audit-ledger.json");
 const OUT = join(ROOT, "docs/spec/audit-findings.md");
 const CHECK = process.argv.includes("--check");
@@ -231,6 +247,12 @@ for (const [dim, rows] of [...groups].sort((a, b) => a[0].localeCompare(b[0]))) 
 if (unverifiable.length) {
   L.push("", "## غير قابل للتحقّق", "");
   for (const u of unverifiable) L.push(`- ${u.id} (${u.dimension}): ${u.evidence}`);
+}
+L.push("", "## الفهرس (كل الوحدات)", "");
+L.push("| المعرّف | البُعد | spec | الحكم | الشدّة |");
+L.push("|---|---|---|---|---|");
+for (const u of ledger.units) {
+  L.push(`| ${u.id} | ${u.dimension} | ${u.spec_id || "-"} | ${u.verdict} | ${u.severity} |`);
 }
 L.push("");
 const md = L.join("\n");
