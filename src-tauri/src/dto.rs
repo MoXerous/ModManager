@@ -2816,3 +2816,63 @@ impl From<&mm_core::instances::backup::restore::PendingRestore> for PendingResto
         }
     }
 }
+
+// --- F-095: the read-only validation report --------------------------------
+//
+// The report is data, not prose: every `check` and `severity` is a stable code
+// the UI translates, and `value`/`path`/`count`/`total` are the concrete
+// datums the check read. The bridge owns no wording, so both locales and both
+// layouts get the same report.
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ValidationItemDto {
+    /// Stable check code (`instanceRoot`, `modsDir`, `lockMissingFiles`, ...).
+    pub check: String,
+    /// `ok` | `info` | `warning` | `error`.
+    pub severity: String,
+    /// The concrete datum the check read, when it has one.
+    pub value: Option<String>,
+    /// The path the check read, when it has one.
+    pub path: Option<String>,
+    #[ts(type = "number | null")]
+    pub count: Option<usize>,
+    #[ts(type = "number | null")]
+    pub total: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ValidationReportDto {
+    /// The worst item's severity: `ok` | `info` | `warning` | `error`.
+    pub overall: String,
+    #[ts(type = "number")]
+    pub checked_at: i64,
+    /// One row per check, in the order core emits them.
+    pub items: Vec<ValidationItemDto>,
+}
+
+impl From<&mm_core::instances::validation::ValidationItem> for ValidationItemDto {
+    fn from(item: &mm_core::instances::validation::ValidationItem) -> Self {
+        Self {
+            check: item.check.as_str().to_string(),
+            severity: item.severity.as_str().to_string(),
+            value: item.value.clone(),
+            path: item.path.clone(),
+            count: item.count,
+            total: item.total,
+        }
+    }
+}
+
+impl From<mm_core::instances::validation::ValidationReport> for ValidationReportDto {
+    fn from(report: mm_core::instances::validation::ValidationReport) -> Self {
+        Self {
+            overall: report.overall.as_str().to_string(),
+            checked_at: report.checked_at,
+            items: report.items.iter().map(Into::into).collect(),
+        }
+    }
+}

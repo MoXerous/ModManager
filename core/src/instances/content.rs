@@ -15,6 +15,7 @@
 //! Reading only. Nothing here writes, moves or renames a file.
 
 use super::lock::{LockEntry, LockFile};
+use super::version_range::{self, RangeVerdict};
 use super::LocalContentFact;
 
 /// Where a file came from: the lock's record of it, or nowhere.
@@ -58,14 +59,12 @@ impl Ownership {
 pub enum CompatibilityReason {
     /// The instance has no game version and no concrete loader to compare to.
     NoTarget,
-    /// The archive declares nothing that could settle the question, or only
-    /// ranges. `>=1.20` is a claim about a set, not a list, so it never proves
-    /// an exclusion.
+    /// The archive declares nothing at all that could settle the question.
     Unproven,
-    /// A *recorded* provider declaration is only a range (`>=1.20`, `1.20.x`,
-    /// `[1.20.1,1.21.2)`). Judging it needs the range parser this slice does
-    /// not have, so the verdict is unknown — the reason travels so the screen
-    /// can say why, and the range is never silently dropped.
+    /// A declared *range* this build cannot read (`1.20 || 1.21`). Judging it
+    /// would be a guess, so the verdict is unknown — the reason travels so the
+    /// screen can say why, and the range is never silently dropped or read as
+    /// an exclusion.
     Range,
     /// The archive's declared versions do not include the instance's.
     GameVersion { target: String },
@@ -401,25 +400,40 @@ fn compatibility(fact: &LocalContentFact, target: &ContentTarget) -> Compatibili
     } else {
         &fact.game_versions
     };
+    // Every non-empty declaration is judged; a range is a claim about a set,
+    // and membership is the one question it can answer (F-097).
     let declared: Vec<&str> = evidence
         .iter()
         .map(|value| value.trim())
-        .filter(|value| is_exact_version(value))
+        .filter(|value| !value.is_empty())
         .collect();
+    if declared.is_empty() {
+        return Compatibility::Unknown(CompatibilityReason::Unproven);
+    }
     if !game.is_empty() {
-        if declared.is_empty() {
-            // A recorded range is a real claim about a set of versions, not an
-            // empty declaration: it stays unknown and says which it was.
-            return Compatibility::Unknown(if recorded {
-                CompatibilityReason::Range
-            } else {
-                CompatibilityReason::Unproven
-            });
+        // A list is a union: one entry that admits the target is enough. A
+        // declaration that cannot be read only matters when nothing admits the
+        // target — then the exclusion is unproven, never assumed.
+        let mut unreadable = false;
+        let mut admitted = false;
+        for declaration in &declared {
+            match version_range::judge(declaration, game) {
+                RangeVerdict::Includes => {
+                    admitted = true;
+                    break;
+                }
+                RangeVerdict::Excludes => {}
+                RangeVerdict::Unparseable => unreadable = true,
+            }
         }
-        if !declared.contains(&game) {
-            return Compatibility::Incompatible(CompatibilityReason::GameVersion {
-                target: game.to_string(),
-            });
+        if !admitted {
+            return if unreadable {
+                Compatibility::Unknown(CompatibilityReason::Range)
+            } else {
+                Compatibility::Incompatible(CompatibilityReason::GameVersion {
+                    target: game.to_string(),
+                })
+            };
         }
     }
     if loader_is_constraint {
@@ -437,20 +451,4 @@ fn compatibility(fact: &LocalContentFact, target: &ContentTarget) -> Compatibili
         }
     }
     Compatibility::Compatible
-}
-
-/// A token that names one release (`1.21.1`, `1.20`) rather than a range
-/// (`[1.20.1,1.21.2)`, `>=1.20`, `1.20.x`). Only the former can be tested for
-/// membership; reading a range as "not this version" would invent an
-/// incompatibility the metadata never asserted.
-fn is_exact_version(token: &str) -> bool {
-    let token = token.trim();
-    let mut chars = token.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    first.is_ascii_digit()
-        && token
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '_')
 }

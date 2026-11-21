@@ -14,6 +14,8 @@ pub mod registry;
 pub mod remove;
 pub mod stamp;
 pub mod toggle;
+pub mod validation;
+pub mod version_range;
 
 pub mod backup;
 

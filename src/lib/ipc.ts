@@ -65,6 +65,7 @@ import type { PrunePlanRequest } from '../bindings/PrunePlanRequest';
 import type { ExecutePruneRequest } from '../bindings/ExecutePruneRequest';
 import type { PruneReportDto } from '../bindings/PruneReportDto';
 import type { WorldsPreviewDto } from '../bindings/WorldsPreviewDto';
+import type { ValidationReportDto } from '../bindings/ValidationReportDto';
 
 // الواجهة تصل إلى النواة عبر هذا الملف فقط.
 
@@ -185,6 +186,17 @@ export function scanInstance(
   loader: string,
 ): Promise<InstanceSnapshotDto> {
   return invoke<InstanceSnapshotDto>('scan_instance', { instanceRoot, gameVersion, loader });
+}
+
+/**
+ * F-095: the read-only validation report for one registered instance.
+ *
+ * The id, not the folder: the checks read the registry row (source, name,
+ * recorded target), and only the row has them. Nothing is repaired or written;
+ * the report is the whole answer.
+ */
+export function validateInstance(instanceId: string): Promise<ValidationReportDto> {
+  return invoke<ValidationReportDto>('validate_instance', { instanceId });
 }
 
 // --- Content staleness (F-168) -------------------------------------------

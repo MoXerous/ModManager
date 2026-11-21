@@ -13,7 +13,7 @@ use crate::dto::{
     LockEntryDto, PlanEntryDto, PlanSummaryDto, PreviewEntryDto, PreviewToggleDto, ProjectDto,
     ProjectVersionDto, RemoveEntryDto, RemoveExecuteRequestDto, RemovePlanDto,
     RemovePreviewRequestDto, RemoveResultDto, RemoveRunDto, SearchPageDto, SearchQueryDto,
-    TogglePlanDto, ToggleResultDto, UpdatePreviewDto, WarningDto,
+    TogglePlanDto, ToggleResultDto, UpdatePreviewDto, ValidationReportDto, WarningDto,
 };
 use crate::state::AppState;
 use mm_core::db::Db;
@@ -431,6 +431,46 @@ pub(crate) fn scan_instance_at(
             .map(ContentWarningDto::from_core)
             .collect(),
     })
+}
+
+/// F-095: the read-only validation report for one registered instance.
+///
+/// The row is the input, not the folder: the checks read `source`, the name
+/// and the recorded target, and only the registry knows them. The id is the
+/// row key, so the webview never names a folder core has not been told about.
+#[tauri::command]
+pub async fn validate_instance(
+    state: tauri::State<'_, AppState>,
+    instance_id: String,
+) -> Result<ValidationReportDto, IpcError> {
+    validate_instance_at(state.inner(), &instance_id).await
+}
+
+/// The body of [`validate_instance`], with the state as a parameter so the
+/// bridge's own mapping — id to row, row to report — is testable.
+pub(crate) async fn validate_instance_at(
+    state: &AppState,
+    instance_id: &str,
+) -> Result<ValidationReportDto, IpcError> {
+    let id = instance_id.trim().to_string();
+    if id.is_empty() {
+        return Err(IpcError::invalid_input("instance id is empty"));
+    }
+    let row = state
+        .with_db(move |db| {
+            mm_core::db::instances::get(db, &id)
+                .map_err(|e| row_error(&e))?
+                .ok_or_else(|| IpcError::new(ErrorCode::NotFound, format!("no instance {id}")))
+        })
+        .await?;
+    // The validator stats, lists and reads the folder; it is blocking work and
+    // belongs off the async worker like every other disk pass.
+    tauri::async_runtime::spawn_blocking(move || {
+        mm_core::instances::validation::validate_instance(&row)
+    })
+    .await
+    .map_err(|e| IpcError::internal(format!("blocking task failed: {e}")))
+    .map(ValidationReportDto::from)
 }
 
 /// Read-only update preview (F-120): no journal, no lock rewrite, no row.
@@ -1574,3 +1614,5 @@ pub(crate) mod target_tests;
 pub(crate) mod tests;
 #[cfg(test)]
 pub(crate) mod updates_tests;
+#[cfg(test)]
+pub(crate) mod validation_tests;
