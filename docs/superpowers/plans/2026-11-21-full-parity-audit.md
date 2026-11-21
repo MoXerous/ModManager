@@ -325,18 +325,18 @@ Commit: `git add scripts/build-audit-report.mjs scripts/test-audit-report.mjs do
     "lessons": { "count": 10, "source": "docs/spec/lessons.md §1..§10" },
     "tests": { "count": 8, "source": "34 old test files vs 24 Rust + 5 TS" }
   },
-  "expectedTotal": 273
+  "expectedTotal": 276
 }
 ```
 
 - [ ] **Step 2: تحقّق من العدد**
 
 Run: `node -e "const i=require('./docs/spec/audit-inventory.json');const s=Object.values(i.dimensions).reduce((a,d)=>a+d.count,0);if(s!==i.expectedTotal)throw new Error(s+' != '+i.expectedTotal);console.log('inventory ok:',s)"`
-Expected: `inventory ok: 273`.
+Expected: `inventory ok: 276`.
 
 - [ ] **Step 3: اجمع**
 
-Commit: `git add docs/spec/audit-inventory.json && git commit -m "docs(audit): fix the audit unit inventory at 273 units"`
+Commit: `git add docs/spec/audit-inventory.json && git commit -m "docs(audit): fix the audit unit inventory at 276 units"`
 
 ---
 
@@ -413,7 +413,7 @@ Commit: `git add .opencode/analyses/audit/prompts/ws1-brief.md .opencode/analyse
 - Create/Delete: `preview-mock.html` (مؤقت، يُحذف قبل الالتزام)
 
 **Interfaces:**
-- Consumes: `audit-inventory.json` (ui=24، i18n=4، safety=10، performance=6) = 44 وحدة.
+- Consumes: `audit-inventory.json` (ui=26، i18n=4، safety=10، performance=7) = 47 وحدة.
 - Produces: `ws2.json` + لقطات تحت `.opencode/analyses/audit/shots/`.
 
 - [ ] **Step 0: جهّز محفّح المتصفّح** (قرار المستخدم 2026-11-21):
@@ -430,11 +430,11 @@ cp .opencode/analyses/browser-preview.html preview-mock.html
 ```text
 # WS2 brief — UI, i18n, safety, performance
 
-## نطاقك (44 وحدة)
-- 24 شاشة من docs/spec/screens.md §3 (قارن كل شاشة بالواجهة الحالية في src/app/pages/).
+## نطاقك (47 وحدة)
+- 26 شاشة من docs/spec/screens.md §3 (24 classed + نافذتان بلا صنف: `Target Version Planner` و`Saved mods`) — قارن كل شاشة بالواجهة الحالية في src/app/pages/.
 - 4 وحدات i18n: اكتمال en/ar، RTL، مفاتيح خامّة،_plural forms.
 - 10 وحدات safety: حواجز المسار، SHA-1/SHA-512، .part ثم rename، الأرشيف enclosed_name، symlinks، الحدود، :disabled، fail-closed redaction، PRESENT مقابل ELIGIBLE، التقليم الجاف.
-- 6 وحدات performance من docs/spec/performance-budgets.md: throttle التقدّم، التمرير الافتراضي، الإلغاء، الذاكرة، زمن الفحص، حجم الحزمة.
+- 7 وحدات performance (`B-1..B-7`) من docs/spec/performance-budgets.md: throttle التقدّم، التمرير الافتراضي، الإلغاء، الذاكرة، زمن الفحص، حجم الحزمة.
 
 ## إلزام المتصفّح
 لكل واجهة (24 + i18n): افتح http://localhost:1420/preview-mock.html في تبويب المتصفّح المدمج، ثم snapshot وconsole(level=error) وscreenshot.
@@ -447,7 +447,7 @@ cp .opencode/analyses/browser-preview.html preview-mock.html
 safety/performance: method=code أو test أو run. اقرأ الكود الفعلي؛ لا تكتفِ باسم الاختبار.
 
 ## الإخراج
-.opencode/analyses/audit/ws2.json بصيغة {"dimensionCounts":{"ui":24,"i18n":4,"safety":10,"performance":6},"units":[...]}، معرّفات A-0194..A-0237. reviewer="deepseek" للكود، "browser" للواجهات.
+.opencode/analyses/audit/ws2.json بصيغة {"dimensionCounts":{"ui":26,"i18n":4,"safety":10,"performance":7},"units":[...]}، معرّفات A-0194..A-0240. reviewer="deepseek" للكود، "browser" للواجهات.
 ```
 
 - [ ] **Step 2: شغّل الوكيل** — subagent `general` بنموذج deepseek يقرأ الموجز وينفّذه، مع تذكير: «لا تعديل على مصادر المشروع؛ المتصفّح للقراءة فقط».
@@ -456,9 +456,9 @@ safety/performance: method=code أو test أو run. اقرأ الكود الفع
 
 Run:
 ```bash
-node -e "const j=require('./.opencode/analyses/audit/ws2.json');if(j.units.length!==44)throw new Error(j.units.length);let b=0;for(const u of j.units)if(u.method==='browser'){if(!/console/i.test(u.evidence))throw new Error(u.id+' browser without console');b++};console.log('ws2 ok:',j.units.length,'browser:',b)"
+node -e "const j=require('./.opencode/analyses/audit/ws2.json');if(j.units.length!==47)throw new Error(j.units.length);let b=0;for(const u of j.units)if(u.method==='browser'){if(!/console/i.test(u.evidence))throw new Error(u.id+' browser without console');b++};console.log('ws2 ok:',j.units.length,'browser:',b)"
 ```
-Expected: `ws2 ok: 44 browser: 28`.
+Expected: `ws2 ok: 47 browser: 30`.
 
 - [ ] **Step 4: احذف المحفّح المؤقت واجمع**
 
@@ -479,7 +479,7 @@ Expected: `git status` نظيف، ولا `preview-mock.html` في الالتزا
 
 **Interfaces:**
 - Consumes: `audit-inventory.json` (packaging=8، deps=4، cli=6) = 18 وحدة.
-- Produces: `ws3.json`، معرّفات A-0238..A-0255.
+- Produces: `ws3.json`، معرّفات A-0241..A-0258.
 
 - [ ] **Step 1: اكتب موجز الوكيل**:
 
@@ -525,7 +525,7 @@ Commit: `git add .opencode/analyses/audit/prompts/ws3-brief.md .opencode/analyse
 
 **Interfaces:**
 - Consumes: `audit-inventory.json` (lessons=10، tests=8) = 18 وحدة.
-- Produces: `ws4.json`، معرّفات A-0256..A-0273.
+- Produces: `ws4.json`، معرّفات A-0259..A-0276.
 
 - [ ] **Step 1: اكتب موجز الوكيل**:
 
@@ -565,8 +565,8 @@ Commit: `git add .opencode/analyses/audit/prompts/ws4-brief.md .opencode/analyse
 - Modify: `docs/spec/audit-findings.md` (مولّد)
 
 **Interfaces:**
-- Consumes: `ws1.json`..`ws4.json` (273 وحدة) + Task 1 schema.
-- Produces: دفترٌ كامل بـ273 وحدة، ومخرَج مُعاد توليده.
+- Consumes: `ws1.json`..`ws4.json` (276 وحدة) + Task 1 schema.
+- Produces: دفترٌ كامل بـ276 وحدة، ومخرَج مُعاد توليده.
 
 - [ ] **Step 1: ادمج**
 
@@ -576,7 +576,7 @@ node -e "
 const fs=require('fs');const cp=require('child_process');
 const parts=['ws1','ws2','ws3','ws4'].map(n=>JSON.parse(fs.readFileSync('.opencode/analyses/audit/'+n+'.json','utf8')).units);
 const units=parts.flat();
-if(units.length!==273)throw new Error('expected 273 units, got '+units.length);
+if(units.length!==276)throw new Error('expected 276 units, got '+units.length);
 const ids=units.map(u=>u.id);if(new Set(ids).size!==ids.length)throw new Error('duplicate ids');
 for(let i=0;i<units.length;i++)if(units[i].id!=='A-'+String(i+1).padStart(4,'0'))throw new Error('bad id order at '+i+' '+units[i].id);
 const ledger={version:1,baseCommit:'4f71f18736c95a1eeb877fe8363f11871118c618',headCommit:cp.execSync('git rev-parse HEAD',{encoding:'utf8'}).trim(),units};
@@ -584,16 +584,16 @@ fs.writeFileSync('docs/spec/audit-ledger.json',JSON.stringify(ledger,null,2));
 console.log('merged:',units.length);
 "
 ```
-Expected: `merged: 273`.
+Expected: `merged: 276`.
 
 - [ ] **Step 2: ولّد وتحقّق**
 
 Run: `pnpm audit:report && pnpm audit:check`
-Expected: `audit: wrote ... (273 units)` ثم `audit: findings up to date`.
+Expected: `audit: wrote ... (276 units)` ثم `audit: findings up to date`.
 
 - [ ] **Step 3: اجمع**
 
-Commit: `git add docs/spec/audit-ledger.json docs/spec/audit-findings.md && git commit -m "audit: merge four workstreams into the 273-unit ledger"`
+Commit: `git add docs/spec/audit-ledger.json docs/spec/audit-findings.md && git commit -m "audit: merge four workstreams into the 276-unit ledger"`
 
 ---
 
@@ -657,7 +657,7 @@ Commit: `git add .opencode/analyses/audit/audit-review.md docs/spec/audit-ledger
 ```markdown
 # التقرير الختامي للتدقيق الشامل — القديم ↔ الجديد
 
-> BASE: `4f71f18` · HEAD: `<git rev-parse HEAD>` · الدفتر: 273 وحدة.
+> BASE: `4f71f18` · HEAD: `<git rev-parse HEAD>` · الدفتر: 276 وحدة.
 
 ## ما تحقّقتُ منه
 (جدول الأبعاد: عدد الوحدات، مطابق، انحراف موثّق، findings، غير مُتحقَّق — من audit-findings.md)
@@ -700,7 +700,7 @@ Run: `git push -u origin docs/audit-full-parity`
 
 - **Spec coverage:** §1 (إعادة إثبات من الصفر) ← Tasks 3–6 · §3 (الدفتر) ← Task 1+7 · §4 (المسارات) ← Tasks 3–6 · §5 (verdict/severity/مراجع عدائي) ← Task 1+8 · §6 (المخرجات/البوابات) ← Task 1+9 · §7 (الترتيب) ← 1→9 · §8 (خارج النطاق) ← Global Constraints · §9 (المخاطر) ← Task 8 + browser في Task 4. لا فجوة.
 - **Placeholder scan:** لا `TBD`/`TODO`/«أضف معالجة مناسبة»؛ كل خطوة كود أو أمر أو موجز كامل.
-- **Type consistency:** `AuditUnit` بنفس الحقول في Tasks 1/3–8؛ `A-NNNN` متسلسل 0001–0273 عبرTasks 3–7؛ `pnpm audit:check` بنفس الاسم في Task 1 وCI؛ `ws1..ws4.json` بنفس الأسماء في Tasks 3–7.
+- **Type consistency:** `AuditUnit` بنفس الحقول في Tasks 1/3–8؛ `A-NNNN` متسلسل 0001–0276 عبرTasks 3–7؛ `pnpm audit:check` بنفس الاسم في Task 1 وCI؛ `ws1..ws4.json` بنفس الأسماء في Tasks 3–7.
 
 ---
 

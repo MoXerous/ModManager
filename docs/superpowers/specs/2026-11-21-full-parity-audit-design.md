@@ -80,7 +80,7 @@
 |---|---|---|
 | السلوك | 181 (`F-001`..`F-181`) | `docs/spec/features.md` |
 | البيانات والتنسيقات | صفوف لكل جدول/تنسيق في `docs/spec/data-model.md` + توافق القراءة مع القديم | `data-model.md` · `core/src/db/` · `app/storage/` |
-| الواجهة | 24 شاشة + التدفقات المشتركة | `docs/spec/screens.md` §3 |
+| الواجهة | 26 شاشة + التدفقات المشتركة | `docs/spec/screens.md` §3 |
 | i18n | مفاتيح en/ar + RTL | `src/i18n/` |
 | الأمان والسلامة | حواجز المسار · الهاش · الكتابة الذرية · الأرشيف · `:disabled` · fail-closed | `core/src/safety/` · `downloader/` · `modpack/` |
 | الأداء | ميزانيات `docs/spec/performance-budgets.md` + التمرير والإلغاء Throttling | `performance-budgets.md` · `src/` |
@@ -101,7 +101,7 @@
 | المسار | الاسم | النطاق | إخراج مؤقت |
 |---|---|---|---|
 | WS1 | `audit-ws1-behavior-data` | 181 مواصفة + البيانات والتنسيقات والتوافق | `.opencode/analyses/audit/ws1.json` |
-| WS2 | `audit-ws2-ui-safety-perf` | 24 شاشة + i18n/RTL + الأمان + الأداء | `.opencode/analyses/audit/ws2.json` |
+| WS2 | `audit-ws2-ui-safety-perf` | 26 شاشة + i18n/RTL + الأمان + الأداء | `.opencode/analyses/audit/ws2.json` |
 | WS3 | `audit-ws3-packaging-cli` | M4 + التبعيات/التراخيص + CLI/IPC | `.opencode/analyses/audit/ws3.json` |
 | WS4 | `audit-ws4-lessons-tests` | `lessons.md` + 34 اختبارًا قديمًا | `.opencode/analyses/audit/ws4.json` |
 
