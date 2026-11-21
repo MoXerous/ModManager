@@ -240,31 +240,29 @@
     },
     {
       "id": "F-095",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\src\\app\\pages\\InstanceDetails.tsx (line 115: 'Validate, repair, backup and restore are gone on purpose')",
-        "grep 'validate|severity' in core/src → no profile-validation code",
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no validate command)"
+        "core/src/instances/validation.rs::validate_instance",
+        "src-tauri/src/commands.rs::validate_instance_at",
+        "src/app/pages/InstanceValidation.tsx"
       ],
-      "test": null,
-      "note": "features.md is authoritative: Keep stands, so missing confirmed with the source conflict noted.",
-      "gap": "No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision.",
-      "review": "verified:confirmed"
+      "test": "spec_f095_the_report_has_thirty_named_checks_and_reports_each_once",
+      "note": "حاضر: ٣٠ فحصًا مُسمًّى (Ok/Info/Warning/Error والحالةُ الإجماليةُ = الأسوأ) قراءةً فقط على صفّ السجلّ ومرآة profile.json والمجلدات والقفل والملفات المُصنَّفة، مع بطاقةٍ مُرتَّبةٍ بالشدّة. انحرافاتٌ مسجَّلة: الفحوصُ تتمحور حول القفل بدل installed_mods.json/saved-project target/side/dependency، ولا يوجد إصلاح، والمجلدُ المفقود يُحسب Warning فقط للمُدار (Info للlinked)، وسياسةُ اللودر مُضيَّقة، والتحقّقُ صريحٌ وغيرُ قابلٍ للإلغاء.",
+      "gap": null,
+      "review": "fixed-final: implemented, adversarially challenged (deepseek), findings fixed"
     },
     {
       "id": "F-097",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "core/src/instances/content.rs::classify_content",
+        "core/src/instances/version_range.rs::judge",
         "core/src/instances/content.rs::compatibility",
-        "core/src/instances/lock.rs::LockEntry.game_versions",
-        "core/src/instances/record.rs::InstalledRecord.game_versions",
-        "src/app/pages/InstanceDetails.tsx::classTitle"
+        "core/src/instances/version_range.rs::parse"
       ],
-      "test": "spec_f097_recorded_provider_versions_are_preferred_over_the_jar",
-      "note": "جزئي: الفئاتُ الخمس (مملوك · خارجي/مجهول · معطّل · مكرّر · غير متوافق) والسُلَّمُ القديمُ (معطّل←مكرّر←غير متوافق←مملوك←خارجي) مُنفَّذة، والملكيةُ بأدلّة (SHA-1 أو هوية الإصدار)، والتكرارُ بالمفتاحين (SHA-1 وهوية المشروع)، وتعارضُ الهاش مُبلَّغ، والأدلّةُ معروضةٌ في الواجهة مع `<bdi>` للرموز اللاتينية. ويُحفظُ ما أعلنه المزوّدُ من نطاقاتِ الإصدارات وقتَ التثبيت في القفل ليُقاسَ التوافقُ بلا شبكة؛ **لكنّ تحليلَ النطاقات (>= · <= · ^ · ~ · 1.20.x · [a,b)) غيرُ منفَّذ**، فالنطاقُ المسجَّل يُقرأ «غير مثبت» بسببه.",
-      "gap": "تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها.",
-      "review": "fixed-s3: implemented, adversarially challenged (glm), findings fixed (recorded versions, evidence in the UI, RTL bdi)"
+      "test": "spec_f097_operator_spacing_and_caret_zero_are_read",
+      "note": "حاضر: أشكالٌ تدعمها `>= · <= · > · < · ^ · ~ · 1.20.x · [a,b)` واتحادُ التصريحات؛ المقارنةُ عدديةٌ صحيحة (1.9 < 1.20). التضمينُ ⇒ Compatible، والاستبعادُ ⇒ Incompatible(GameVersion)، وغيرُ المقروء ⇒ Unknown(Range) أبدًا لا «غير متوافق» كاذب. حدودٌ موثَّقة: اتحاداتُ Maven متعددة النطاقات، واللقطات/ما قبل الإصدار تبقى Unparseable.",
+      "gap": null,
+      "review": "fixed-final: implemented, adversarially challenged (deepseek), findings fixed"
     },
     {
       "id": "F-098",

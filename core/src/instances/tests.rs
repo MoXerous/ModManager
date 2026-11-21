@@ -426,6 +426,16 @@ fn spec_f097_compatibility_needs_positive_metadata() {
             expected: Compatibility::Unknown(CompatibilityReason::NoTarget),
         },
         Case {
+            // A concrete loader is not a game version: the range was never
+            // judged, so a matching loader alone cannot prove compatibility.
+            label: "loader-without-game-version",
+            versions: vec!["1.21.1"],
+            loaders: vec![Loader::Fabric],
+            game: "",
+            loader: "fabric",
+            expected: Compatibility::Unknown(CompatibilityReason::NoTarget),
+        },
+        Case {
             label: "any-loader",
             versions: vec!["1.21.1"],
             loaders: vec![],
@@ -439,7 +449,7 @@ fn spec_f097_compatibility_needs_positive_metadata() {
             loaders: vec![Loader::Fabric],
             game: "1.21.1",
             loader: "fabric",
-            expected: Compatibility::Unknown(CompatibilityReason::Unproven),
+            expected: Compatibility::Compatible,
         },
     ];
 
@@ -492,12 +502,49 @@ fn spec_f097_recorded_provider_versions_are_preferred_over_the_jar() {
     );
 }
 
-/// F-097: a recorded *range* is not discarded silently and not read as proof.
-/// `>=1.21` cannot be judged without a range parser (a later slice), so the
-/// answer is unknown — with a reason that says a range arrived — never
-/// "compatible" and never "incompatible".
+/// F-097: the entry that proved ownership by SHA-1 speaks for the file, even
+/// when the name-matched entry recorded different versions. A record under the
+/// old name is not evidence about these bytes; if the identity-matched record
+/// recorded nothing, the jar's own declaration is the fallback.
 #[test]
-fn spec_f097_a_recorded_version_range_is_unknown_with_its_reason() {
+fn spec_f097_the_identity_matched_entry_speaks_for_the_file() {
+    let mut f = fact("renamed.jar", "same-bytes");
+    f.game_versions = vec!["1.21.1".to_string()];
+
+    let mut by_name = lock_entry("renamed.jar", "proj", "v2", "other-bytes");
+    by_name.game_versions = vec!["1.20.1".to_string()];
+    let by_identity = lock_entry("old-name.jar", "proj", "v1", "same-bytes");
+
+    let snapshot = classify_content(
+        vec![f],
+        &LockFile {
+            entries: vec![by_name, by_identity],
+        },
+        &target("1.21.1", ""),
+    );
+
+    assert_eq!(
+        snapshot.facts[0].ownership,
+        Ownership::ManagedBySha1,
+        "the bytes, not the name, proved ownership"
+    );
+    assert!(
+        snapshot.facts[0].recorded_game_versions.is_empty(),
+        "the identity-matched record recorded nothing"
+    );
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Compatible,
+        "with nothing recorded, the jar's own 1.21.1 declaration is the evidence"
+    );
+}
+
+/// F-097: a recorded *range* is judged, not discarded. The old app compared
+/// the target with `>=1.21` as a string and called the file incompatible in a
+/// `1.20.1` instance; the range excludes `1.20.1`, so the verdict is the same
+/// but now it is *derived* — and the reason names the target.
+#[test]
+fn spec_f097_a_recorded_range_that_excludes_the_target_is_incompatible() {
     let mut f = fact("range.jar", "h");
     // The jar's own metadata would call this file compatible; the record is
     // what the scan must answer from.
@@ -515,10 +562,84 @@ fn spec_f097_a_recorded_version_range_is_unknown_with_its_reason() {
 
     assert_eq!(
         snapshot.facts[0].compatibility,
+        Compatibility::Incompatible(CompatibilityReason::GameVersion {
+            target: "1.20.1".to_string(),
+        }),
+        "`>=1.21` excludes a 1.20.1 instance, and the exclusion is proven"
+    );
+    assert_eq!(snapshot.facts[0].class(), ContentClass::Incompatible);
+}
+
+/// F-097: the direction that makes the parser worth having. `>=1.20.1` in a
+/// `1.21.1` instance includes the target, so the file is compatible — from the
+/// provider's record and from the jar's own declaration alike.
+#[test]
+fn spec_f097_a_range_that_includes_the_instance_target_is_compatible() {
+    let mut recorded = fact("recorded-range.jar", "h");
+    recorded.game_versions = vec!["1.20.1".to_string()];
+    let mut entry = lock_entry("recorded-range.jar", "proj", "v1", "h");
+    entry.game_versions = vec![">=1.20.1".to_string()];
+    let snapshot = classify_content(
+        vec![recorded],
+        &LockFile {
+            entries: vec![entry],
+        },
+        &target("1.21.1", ""),
+    );
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Compatible,
+        "the provider's range admits 1.21.1"
+    );
+
+    let mut jar = fact("jar-range.jar", "h");
+    jar.game_versions = vec!["1.20.x".to_string()];
+    let snapshot = classify_content(vec![jar], &LockFile::default(), &target("1.20.4", ""));
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Compatible,
+        "the jar's wildcard admits 1.20.4"
+    );
+}
+
+/// F-097: the rule that keeps the incompatible class honest. A declaration
+/// this build cannot read settles nothing: it stays `Unknown`, never a false
+/// `Incompatible` — and the class stays `Managed`, not `Incompatible`.
+#[test]
+fn spec_f097_an_unparseable_range_stays_unknown_never_incompatible() {
+    let mut f = fact("unreadable-range.jar", "h");
+    f.game_versions = vec!["1.20.1".to_string()];
+    let mut entry = lock_entry("unreadable-range.jar", "proj", "v1", "h");
+    entry.game_versions = vec!["1.20 || 1.21".to_string()];
+
+    let snapshot = classify_content(
+        vec![f],
+        &LockFile {
+            entries: vec![entry],
+        },
+        &target("1.20.1", ""),
+    );
+
+    assert_eq!(
+        snapshot.facts[0].compatibility,
         Compatibility::Unknown(CompatibilityReason::Range),
-        "an unjudgeable recorded range is unknown, with the reason"
+        "an unreadable range is unknown, with the reason"
     );
     assert_eq!(snapshot.facts[0].class(), ContentClass::Managed);
+}
+
+/// F-097: a declaration list is a union. One entry that admits the target is
+/// enough, even beside one that does not and one that cannot be read.
+#[test]
+fn spec_f097_one_declaration_that_admits_the_target_wins() {
+    let mut f = fact("mixed.jar", "h");
+    f.game_versions = vec![
+        "1.20 || 1.21".to_string(),
+        ">=1.21".to_string(),
+        "1.20.1".to_string(),
+    ];
+    let snapshot = classify_content(vec![f], &LockFile::default(), &target("1.20.1", ""));
+    assert_eq!(snapshot.facts[0].compatibility, Compatibility::Compatible);
 }
 
 /// F-097: the fallback half. A managed record with no recorded versions — an

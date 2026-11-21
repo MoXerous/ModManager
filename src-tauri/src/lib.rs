@@ -130,6 +130,7 @@ pub fn run() -> i32 {
             commands::list_project_versions,
             commands::build_install_plan,
             commands::scan_instance,
+            commands::validate_instance,
             commands::check_instance_updates,
             commands::preview_toggle,
             commands::execute_toggle,

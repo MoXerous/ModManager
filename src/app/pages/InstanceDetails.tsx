@@ -29,6 +29,7 @@ import { afterRescan, isForInstance, markStale, type StalenessState } from '../i
 import { InstanceBackup } from './InstanceBackup';
 import { InstanceExport } from './InstanceExport';
 import { InstanceTargetPlanner } from './InstanceTargetPlanner';
+import { InstanceValidation } from './InstanceValidation';
 import { RemoveDialog } from './RemoveDialog';
 import { UpdateInstallDialog } from './UpdateInstallDialog';
 
@@ -171,6 +172,8 @@ function UpdateResults({
 }
 
 interface Props {
+  /** The registry row's id: validation reads the row, not just the folder. */
+  instanceId: string;
   root: string;
   /** The registry's name for this instance; only the export default uses it. */
   instanceName: string;
@@ -182,16 +185,23 @@ interface Props {
 
 /**
  * The one tab `screens.md` §6 keeps for instance details: installed content.
- * Validate, repair, backup and restore are gone on purpose — four tabs and five
- * dialogs in the old app, for things a context menu does. Export stayed because
- * it is the one action whose result leaves the app: a `.mrpack` the user can
- * share, and its plan is worth reading before it is written (F-081/F-082).
+ * Validation is read-only and lives here as a report, never as a repair action
+ * (features.md keeps F-095 at read-only). Backup, restore and export stayed
+ * because each is a plan the user reviews before anything is written (F-081,
+ * F-082, F-113..F-118), and their results leave the app or replace the folder.
  *
  * Toggle is preview-then-execute. The preview carries the refusals too, which
  * is the part worth showing: `allowed: false` with a `reason` is the only place
  * the user learns why a file was left alone.
  */
-export function InstanceDetails({ root, instanceName, gameVersion, loader, onChanged }: Props) {
+export function InstanceDetails({
+  instanceId,
+  root,
+  instanceName,
+  gameVersion,
+  loader,
+  onChanged,
+}: Props) {
   const { t } = useTranslation();
   const [snap, setSnap] = useState<InstanceSnapshotDto | null>(null);
   const [error, setError] = useState<IpcError | null>(null);
@@ -506,6 +516,10 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         )}
         {updates && <UpdateResults preview={updates} onInstall={() => setInstallOpen(true)} />}
       </div>
+
+      {/* F-095: the folder-health report. Read-only by design, so it sits
+          beside the other read-only checks rather than in an action row. */}
+      <InstanceValidation instanceId={instanceId} />
 
       {/* The target planner answers the other question: what this instance
           becomes at another Minecraft version. It is separate from the update

@@ -19,21 +19,21 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 123 | 123 |
-| مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
+| مُختبَر بمعرّف المواصفة | 124 | 124 |
+| مُنفَّذ ومُشار إليه في الكود | 10 | 10 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
 | إشارة في الوثائق فقط | 0 | 0 |
-| بلا أثر | 20 | 20 |
+| بلا أثر | 18 | 18 |
 
-**123 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **20** بلا أثرٍ قابلٍ للتتبّع.
+**124 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **10** مذكورٌ في كود الإنتاج · **18** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
 | M1 | 72 | 65 | 3 | 4 |
-| M2 | 38 | 26 | 2 | 10 |
-| M3 | 41 | 31 | 4 | 6 |
+| M2 | 38 | 27 | 2 | 9 |
+| M3 | 41 | 31 | 5 | 5 |
 | later | 1 | 1 | 0 | 0 |
 
 ## بنود `Keep` بلا أثر قابلٍ للتتبّع — قائمة hygiene
@@ -52,8 +52,6 @@
 | **F-078** | احتياطي روابط التنزيل | modpacks | M3 |
 | **F-079** | قائمة بيضاء لمضيفين `.mrpack` | modpacks | M3 |
 | **F-087** | قراءة `quilt.mod.json` | jar | M3 |
-| **F-094** | كشف تخطيط Prism/MultiMC | instances | M3 |
-| **F-095** | التحقق من البروفايل (30 فحصاً) | instances | M2 |
 | **F-108** | تفعيل/تعطيل (إعادة تسمية) | profiles | M2 |
 | **F-109** | **تراجع تنفيذي عكسي** | profiles | M2 |
 | **F-155** | تصدير بروفايل zip | - | M2 |
@@ -186,20 +184,20 @@
 |---|---|---|---|---|---|
 | **F-092** | كشف الـloader من بيانات المشغّل | Keep | M3 | مُنفَّذ ومُشار إليه في الكود | كود: core/src/instances/registry.rs، src-tauri/src/commands.rs (+2) |
 | **F-093** | **فحص الـjars بديل فقط** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/jar_reader/tests.rs · كود: src-tauri/src/commands.rs، src-tauri/src/dto.rs (+1) |
-| **F-094** | كشف تخطيط Prism/MultiMC | Keep | M3 | بلا أثر | — |
-| **F-095** | التحقق من البروفايل (30 فحصاً) | Keep | M2 | بلا أثر | — |
+| **F-094** | كشف تخطيط Prism/MultiMC | Keep | M3 | مُنفَّذ ومُشار إليه في الكود | كود: core/src/instances/validation.rs |
+| **F-095** | التحقق من البروفايل (30 فحصاً) | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/validation/tests.rs، src-tauri/src/commands/validation_tests.rs · كود: core/src/instances/validation.rs، core/src/instances/validation/tests.rs (+5) · اختبار (ذكر): src-tauri/src/commands/validation_tests.rs |
 | **F-096** | فحص صحة النسخة | Defer | M2 | مؤجَّل | — |
-| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs (+2) · كود: cli/src/commands/install.rs، core/src/downloader/batch.rs (+13) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs (+3) · كود: cli/src/commands/install.rs، core/src/downloader/batch.rs (+16) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-098** | **المحاور الأربعة متعامدة** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/tests.rs (+2) |
 | **F-099** | كشف التكرار (SHA-1 + هوية المشروع) | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+6) |
-| **F-100** | كشف تعارض الهاش | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+7) |
-| **F-101** | مسار تحديث ميتافيزقا البروفايل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+2) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+5) |
+| **F-100** | كشف تعارض الهاش | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+8) |
+| **F-101** | مسار تحديث ميتافيزقا البروفايل | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+2) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+7) |
 ### profiles
 
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
 | **F-102** | إنشاء بروفايل مخصّص | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+1) · كود: core/src/instances/registry.rs، core/src/journal/mod.rs (+1) |
-| **F-103** | ربط مجلد موجود | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/registry.rs · كود: core/src/db/instances.rs، core/src/db/schema.rs (+2) |
+| **F-103** | ربط مجلد موجود | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/registry.rs · كود: core/src/db/instances.rs، core/src/db/schema.rs (+3) |
 | **F-104** | **عمود `source`** على النسخ | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/db/instances.rs، core/src/db/mod.rs (+1) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+3) |
 | **F-105** | ~~`ownership_policy` مُنفَّذ~~ | Drop | — | متروك | — |
 | **F-106** | معاينة إنشاء على مجلد موجود | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/registry.rs · كود: core/src/instances/registry.rs، src/app/pages/NewInstanceDialog.tsx |
@@ -232,7 +230,7 @@
 | **F-128** | `installed_mods.json` مانيفست | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs · كود: core/src/instances/tests.rs، core/src/updates/mod.rs |
 | **F-129** | مسح المودات المحلية + استيراد | Keep | M3 | مُنفَّذ ومُشار إليه في الكود | كود: core/src/updates/mod.rs |
 | **F-130** | **قصّ الميتافيزقا فقط** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/prune_tests.rs، src-tauri/src/commands/target_tests.rs · كود: core/src/updates/prune.rs، core/src/updates/target.rs (+5) · اختبار (ذكر): core/src/updates/prune_tests.rs |
-| **F-131** | **التمييز «موجود» عن «مؤهَّل»** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/prune_tests.rs، core/src/updates/target_tests.rs · كود: core/src/instances/mod.rs، core/src/updates/prune.rs (+2) · اختبار (ذكر): core/src/updates/prune_tests.rs، core/src/updates/target_tests.rs |
+| **F-131** | **التمييز «موجود» عن «مؤهَّل»** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/prune_tests.rs، core/src/updates/target_tests.rs · كود: core/src/instances/mod.rs، core/src/instances/validation.rs (+4) · اختبار (ذكر): core/src/updates/prune_tests.rs، core/src/updates/target_tests.rs |
 | **F-132** | كاش لكل تشغيل في المخطّط | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/target_tests.rs · كود: core/src/updates/target.rs، src-tauri/src/commands/target.rs (+1) · اختبار (ذكر): core/src/updates/target_tests.rs |
 ### storage
 

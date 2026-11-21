@@ -13,21 +13,19 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 49 |
+| حاضر — مُراجَع | 51 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 2 |
-| مفقود — مُراجَع | 1 |
+| جزئي — مُراجَع | 1 |
+| مفقود — مُراجَع | 0 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**3** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**1** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
 | المعرّف | السلوك | المجال | الحالة | ما ينقص بالضبط |
 |---|---|---|---|---|
-| **F-095** | التحقق من البروفايل (30 فحصاً) | instances | مفقود — مُراجَع | No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision. |
-| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | instances | جزئي — مُراجَع | تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها. |
 | **F-125** | مخطّط الإصدار المستهدف | updates | جزئي — مُراجَع | كتابةُ الهدف إلى سجل النسخة واختيارُ إصدارٍ مستهدفٍ مختلفٌّ كلاهما غيرُ منفَّذ; عمود الإصدار يعرض معرّفًا بدل رقم. |
 
 ## التفاصيل
@@ -154,19 +152,19 @@
 | **F-092** | كشف الـloader من بيانات المشغّل | Keep | M3 | حاضر — بتتبّعِ اختبار | كود: core/src/instances/registry.rs، src-tauri/src/commands.rs (+2) |
 | **F-093** | **فحص الـjars بديل فقط** | Keep | M3 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/jar_reader/tests.rs · كود: src-tauri/src/commands.rs، src-tauri/src/dto.rs (+1) |
 | **F-094** | كشف تخطيط Prism/MultiMC | Keep | M3 | حاضر — مُراجَع | core/src/instances/mod.rs::detect_instance_roots (casefolded `.minecraft`/`minecraft` child + parent metadata ⇒ parent is the instance root) · core/src/instances/mod.rs::has_launcher_metadata (mmc-pack.json | instance.cfg | modrinth.index.json) · core/src/instances/registry.rs::link_instance · core/src/legacy/import.rs (same detection when importing an old profile root) |
-| **F-095** | التحقق من البروفايل (30 فحصاً) | Keep | M2 | مفقود — مُراجَع | E:\ModManager\src\app\pages\InstanceDetails.tsx (line 115: 'Validate, repair, backup and restore are gone on purpose') · grep 'validate|severity' in core/src → no profile-validation code · E:\ModManager\src-tauri\src\lib.rs::generate_handler (no validate command) |
+| **F-095** | التحقق من البروفايل (30 فحصاً) | Keep | M2 | حاضر — مُراجَع | core/src/instances/validation.rs::validate_instance · src-tauri/src/commands.rs::validate_instance_at · src/app/pages/InstanceValidation.tsx |
 | **F-096** | فحص صحة النسخة | Defer | M2 | مؤجَّل (قرارُ المواصفة) | — |
-| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | جزئي — مُراجَع | core/src/instances/content.rs::classify_content · core/src/instances/content.rs::compatibility · core/src/instances/lock.rs::LockEntry.game_versions · core/src/instances/record.rs::InstalledRecord.game_versions · src/app/pages/InstanceDetails.tsx::classTitle |
+| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | حاضر — مُراجَع | core/src/instances/version_range.rs::judge · core/src/instances/content.rs::compatibility · core/src/instances/version_range.rs::parse |
 | **F-098** | **المحاور الأربعة متعامدة** | Keep | M3 | حاضر — مُراجَع | core/src/instances/content.rs::LocalContentFact · core/src/instances/content.rs::ContentClass::class |
 | **F-099** | كشف التكرار (SHA-1 + هوية المشروع) | Keep | M3 | حاضر — مُراجَع | core/src/instances/content.rs::duplicate_keys · core/src/instances/content.rs::DuplicateKey |
 | **F-100** | كشف تعارض الهاش | Keep | M3 | حاضر — مُراجَع | core/src/instances/content.rs::hashes_differ · core/src/instances/content.rs::ContentWarning::ManagedHashMismatch |
-| **F-101** | مسار تحديث ميتافيزقا البروفايل | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+2) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+5) |
+| **F-101** | مسار تحديث ميتافيزقا البروفايل | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+2) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+7) |
 ### profiles
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
 |---|---|---|---|---|---|
 | **F-102** | إنشاء بروفايل مخصّص | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+1) · كود: core/src/instances/registry.rs، core/src/journal/mod.rs (+1) |
-| **F-103** | ربط مجلد موجود | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/registry.rs · كود: core/src/db/instances.rs، core/src/db/schema.rs (+2) |
+| **F-103** | ربط مجلد موجود | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/registry.rs · كود: core/src/db/instances.rs، core/src/db/schema.rs (+3) |
 | **F-104** | **عمود `source`** على النسخ | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/db/mod.rs (+1) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+3) |
 | **F-105** | ~~`ownership_policy` مُنفَّذ~~ | Drop | — | مُستبعد (قرارُ المواصفة) | — |
 | **F-106** | معاينة إنشاء على مجلد موجود | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/registry.rs · كود: core/src/instances/registry.rs، src/app/pages/NewInstanceDialog.tsx |

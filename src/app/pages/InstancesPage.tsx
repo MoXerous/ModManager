@@ -134,6 +134,7 @@ function Card({
           what the app is. The scan only happens once the user asks for it. */}
       {open && (
         <InstanceDetails
+          instanceId={row.id}
           root={row.path}
           instanceName={row.name}
           gameVersion={row.minecraftVersion}
