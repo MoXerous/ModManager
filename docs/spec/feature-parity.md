@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 44 |
+| حاضر — مُراجَع | 49 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 3 |
-| مفقود — مُراجَع | 5 |
+| جزئي — مُراجَع | 2 |
+| مفقود — مُراجَع | 1 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**8** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**3** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -28,12 +28,7 @@
 |---|---|---|---|---|
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | مفقود — مُراجَع | No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision. |
 | **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | instances | جزئي — مُراجَع | تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها. |
-| **F-125** | مخطّط الإصدار المستهدف | updates | مفقود — مُراجَع | No target-version planner: core/src/updates/mod.rs implements only the read-only F-120 preview at the instance's current game version/loader; there is no per-mod current->target table, no game_version/loader write-back, and grep for target_version/planner across core, CLI and bridge finds only the modpack planner comments. |
-| **F-126** | اقتراح هدف مشترك | updates | مفقود — مُراجَع | No common-target suggestion: no intersection of game_versions across projects, no loader-verified best-upgrade candidate, no sticky pinned targets; grep for suggest/common_target/target_version returns nothing relevant in core, CLI or src. |
-| **F-127** | **تنظيف الهدف يترك المجهول** | updates | مفقود — مُراجَع | No target cleanup step exists, so nothing keeps and reports unknown local files during one; the nearest preserved-unknown behaviours are the removal flow's typed REMOVE gate and the pack apply's own-destinations-only rule. |
-| **F-130** | **قصّ الميتافيزقا فقط** | updates | مفقود — مُراجَع | No metadata-only prune/reconcile: lock entries are dropped only by explicit remove; scan_instance returns facts plus lock entries without reconciling them; grep for prune/reconcile in core finds one unrelated comment. No plan, no mandatory dry-run, no typed report. |
-| **F-131** | **التمييز «موجود» عن «مؤهَّل»** | updates | جزئي — مُراجَع | The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere. |
-| **F-132** | كاش لكل تشغيل في المخطّط | updates | جزئي — مُراجَع | The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour. |
+| **F-125** | مخطّط الإصدار المستهدف | updates | جزئي — مُراجَع | كتابةُ الهدف إلى سجل النسخة واختيارُ إصدارٍ مستهدفٍ مختلفٌّ كلاهما غيرُ منفَّذ; عمود الإصدار يعرض معرّفًا بدل رقم. |
 
 ## التفاصيل
 
@@ -119,7 +114,7 @@
 | **F-064** | تحذيرات السلامة المحلية | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/resolver/plan/tests.rs |
 | **F-065** | تحذير الوجهة الموجودة | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/resolver/plan/tests.rs، src-tauri/src/commands/tests.rs · كود: core/src/resolver/batch.rs، core/src/resolver/plan/mod.rs (+1) |
 | **F-066** | **لا شيء يحجب في `safety_checks`** | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/resolver/plan/tests.rs · كود: core/src/resolver/plan/mod.rs، src-tauri/src/dto.rs (+1) |
-| **F-067** | تعطيل = إعادة تسمية `.jar.disabled` | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/tests.rs، core/src/instances/toggle/tests.rs (+1) · كود: core/src/instances/mod.rs، core/src/instances/toggle/mod.rs |
+| **F-067** | تعطيل = إعادة تسمية `.jar.disabled` | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/tests.rs، core/src/instances/toggle/tests.rs (+1) · كود: core/src/instances/mod.rs، core/src/instances/toggle/mod.rs (+1) · اختبار (ذكر): core/src/updates/target_tests.rs |
 ### modpacks
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
@@ -165,7 +160,7 @@
 | **F-098** | **المحاور الأربعة متعامدة** | Keep | M3 | حاضر — مُراجَع | core/src/instances/content.rs::LocalContentFact · core/src/instances/content.rs::ContentClass::class |
 | **F-099** | كشف التكرار (SHA-1 + هوية المشروع) | Keep | M3 | حاضر — مُراجَع | core/src/instances/content.rs::duplicate_keys · core/src/instances/content.rs::DuplicateKey |
 | **F-100** | كشف تعارض الهاش | Keep | M3 | حاضر — مُراجَع | core/src/instances/content.rs::hashes_differ · core/src/instances/content.rs::ContentWarning::ManagedHashMismatch |
-| **F-101** | مسار تحديث ميتافيزقا البروفايل | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+2) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+4) |
+| **F-101** | مسار تحديث ميتافيزقا البروفايل | Keep | M1 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/db/instances.rs، core/src/instances/metadata.rs (+2) · كود: core/src/db/instances.rs، core/src/db/schema.rs (+5) |
 ### profiles
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
@@ -198,14 +193,14 @@
 | **F-122** | عقد السلامة (5 بنود) | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::SAFETY_CONTRACT · src/app/pages/UpdateInstallDialog.tsx · src/i18n/en.json · src/i18n/ar.json |
 | **F-123** | **نسخ احتياطي Yes/No/Cancel** | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::resolve_backup_choice · src-tauri/src/dto.rs::ErrorCode::UpdateBackupNotConfirmed · src/app/pages/UpdateInstallDialog.tsx |
 | **F-124** | تحديث بالتنزيل فقط | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::download_only · cli/src/commands/update.rs::download_only |
-| **F-125** | مخطّط الإصدار المستهدف | Keep | M3 | مفقود — مُراجَع | E:\ModManager\core\src\updates\mod.rs::check_updates (module header: 'Installing a newer version is a separate flow ... deliberately not part of this module') · E:\ModManager\src-tauri\src\commands.rs::check_instance_updates |
-| **F-126** | اقتراح هدف مشترك | Keep | M3 | مفقود — مُراجَع | workspace grep for 'target_version|common_target|suggest' — only export/instance settings fields |
-| **F-127** | **تنظيف الهدف يترك المجهول** | Keep | M3 | مفقود — مُراجَع | workspace grep for 'cleanup' — only pack staging and db cache cleanups |
+| **F-125** | مخطّط الإصدار المستهدف | Keep | M3 | جزئي — مُراجَع | core/src/updates/target.rs::TARGET_COLUMNS · core/src/updates/target.rs::plan_targets_with_cache · src/app/pages/InstanceTargetPlanner.tsx |
+| **F-126** | اقتراح هدف مشترك | Keep | M3 | حاضر — مُراجَع | core/src/updates/target.rs::plan_common_target · core/src/updates/target.rs::viable_game_versions · core/src/updates/target.rs::best_upgrade |
+| **F-127** | **تنظيف الهدف يترك المجهول** | Keep | M3 | حاضر — مُراجَع | core/src/updates/target.rs · core/src/updates/prune.rs::CleanupReport |
 | **F-128** | `installed_mods.json` مانيفست | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs · كود: core/src/instances/tests.rs، core/src/updates/mod.rs |
 | **F-129** | مسح المودات المحلية + استيراد | Keep | M3 | حاضر — بتتبّعِ اختبار | كود: core/src/updates/mod.rs |
-| **F-130** | **قصّ الميتافيزقا فقط** | Keep | M3 | مفقود — مُراجَع | E:\ModManager\core\src\instances\registry.rs (line 151: 'reconcile' only in a comment) · E:\ModManager\core\src\instances\remove\mod.rs::execute_remove (the only lock-entry dropper) |
-| **F-131** | **التمييز «موجود» عن «مؤهَّل»** | Keep | M3 | جزئي — مُراجَع | E:\ModManager\core\src\instances\mod.rs::LocalContentFact · E:\ModManager\core\src\instances\lock.rs::read_lock · E:\ModManager\src-tauri\src\dto.rs::LocalFactDto (project_id: Option<String>) |
-| **F-132** | كاش لكل تشغيل في المخطّط | Keep | M3 | جزئي — مُراجَع | E:\ModManager\core\src\resolver\batch.rs::check (lines 37-52: RunCache::new(true) passed to resolve_dependency for the batch plan) · E:\ModManager\core\src\resolver\cache.rs::RunCache (12-field ResolveKey + HashKey, enabled bypass) · E:\ModManager\core\src\resolver\resolve\tests.rs::spec_f058_cache_reuses_duplicate_resolve |
+| **F-130** | **قصّ الميتافيزقا فقط** | Keep | M3 | حاضر — مُراجَع | core/src/updates/prune.rs::plan_prune · core/src/updates/prune.rs::execute_prune · src-tauri/src/commands/target.rs |
+| **F-131** | **التمييز «موجود» عن «مؤهَّل»** | Keep | M3 | حاضر — مُراجَع | core/src/instances/mod.rs::scan_mods_recursive · core/src/updates/target.rs::entry_is_present · core/src/updates/prune.rs::candidates_for |
+| **F-132** | كاش لكل تشغيل في المخطّط | Keep | M3 | حاضر — مُراجَع | core/src/updates/target.rs::plan_targets_with_cache · core/src/resolver/cache.rs::RunCache |
 ### storage
 
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
