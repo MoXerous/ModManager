@@ -571,7 +571,7 @@
   "details.compat.loader": "Does not declare {{target}}.",
   "details.compat.unproven": "Compatibility cannot be proven from the metadata this file declares.",
   "details.compat.range": "The provider recorded a version range this build could not read, so compatibility is unknown.",
-  "details.compat.noTarget": "This instance has no Minecraft version or loader set, so compatibility cannot be judged.",
+  "details.compat.noTarget": "This instance has no Minecraft version set, so game compatibility cannot be judged.",
   "details.badge.hashMismatch": "Changed on disk",
   "details.warn.managedHashMismatch": "<token>{{name}}</token> no longer matches the SHA-1 the lock records; it changed after it was installed.",
   "details.warn.duplicateLocalIdentity.sha1": "Two or more files have identical bytes (same SHA-1): <token>{{key}}</token>",

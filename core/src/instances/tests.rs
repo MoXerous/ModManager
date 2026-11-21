@@ -426,6 +426,16 @@ fn spec_f097_compatibility_needs_positive_metadata() {
             expected: Compatibility::Unknown(CompatibilityReason::NoTarget),
         },
         Case {
+            // A concrete loader is not a game version: the range was never
+            // judged, so a matching loader alone cannot prove compatibility.
+            label: "loader-without-game-version",
+            versions: vec!["1.21.1"],
+            loaders: vec![Loader::Fabric],
+            game: "",
+            loader: "fabric",
+            expected: Compatibility::Unknown(CompatibilityReason::NoTarget),
+        },
+        Case {
             label: "any-loader",
             versions: vec!["1.21.1"],
             loaders: vec![],
@@ -489,6 +499,43 @@ fn spec_f097_recorded_provider_versions_are_preferred_over_the_jar() {
             target: "1.21.1".to_string(),
         }),
         "the recorded provider declaration is the evidence that settles this"
+    );
+}
+
+/// F-097: the entry that proved ownership by SHA-1 speaks for the file, even
+/// when the name-matched entry recorded different versions. A record under the
+/// old name is not evidence about these bytes; if the identity-matched record
+/// recorded nothing, the jar's own declaration is the fallback.
+#[test]
+fn spec_f097_the_identity_matched_entry_speaks_for_the_file() {
+    let mut f = fact("renamed.jar", "same-bytes");
+    f.game_versions = vec!["1.21.1".to_string()];
+
+    let mut by_name = lock_entry("renamed.jar", "proj", "v2", "other-bytes");
+    by_name.game_versions = vec!["1.20.1".to_string()];
+    let by_identity = lock_entry("old-name.jar", "proj", "v1", "same-bytes");
+
+    let snapshot = classify_content(
+        vec![f],
+        &LockFile {
+            entries: vec![by_name, by_identity],
+        },
+        &target("1.21.1", ""),
+    );
+
+    assert_eq!(
+        snapshot.facts[0].ownership,
+        Ownership::ManagedBySha1,
+        "the bytes, not the name, proved ownership"
+    );
+    assert!(
+        snapshot.facts[0].recorded_game_versions.is_empty(),
+        "the identity-matched record recorded nothing"
+    );
+    assert_eq!(
+        snapshot.facts[0].compatibility,
+        Compatibility::Compatible,
+        "with nothing recorded, the jar's own 1.21.1 declaration is the evidence"
     );
 }
 

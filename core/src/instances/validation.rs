@@ -28,6 +28,16 @@ use crate::jar_reader::{detect_loaders, ScanCache};
 /// The four loaders this build can plan and install for.
 const KNOWN_LOADERS: [&str; 4] = ["fabric", "quilt", "forge", "neoforge"];
 
+/// The other value the old policy called a profile loader: a vanilla instance
+/// has no mod loader, but it is a recognised target, not a broken one.
+const VANILLA_LOADER: &str = "vanilla";
+
+/// Values that name a Discover content platform, never a profile mod loader.
+/// The old `profile_loader_policy` graded every one of them an error: a
+/// persisted platform makes compatibility checks and scans misleading.
+const NON_PROFILE_LOADERS: [&str; 6] =
+    ["any", "minecraft", "datapack", "iris", "optifine", "canvas"];
+
 /// The standard folder a Minecraft instance always has.
 const MODS_DIR: &str = "mods";
 
@@ -318,7 +328,14 @@ fn check_target(row: &InstanceRow, items: &mut Vec<ValidationItem>) {
                 loader.clone(),
             ));
             let normalized = loader.to_lowercase();
-            if KNOWN_LOADERS.contains(&normalized.as_str()) {
+            if NON_PROFILE_LOADERS.contains(&normalized.as_str()) {
+                // A content platform is not a mod loader (old
+                // `profile_loader_policy::profile_loader_issue`).
+                items.push(with_value(
+                    item(ValidationCheck::LoaderRecognized, Severity::Error),
+                    loader,
+                ));
+            } else if KNOWN_LOADERS.contains(&normalized.as_str()) || normalized == VANILLA_LOADER {
                 items.push(item(ValidationCheck::LoaderRecognized, Severity::Ok));
             } else {
                 items.push(with_value(
@@ -690,19 +707,18 @@ fn check_mods_content(
 
     // A record whose file is gone is a stale record, not a missing install: the
     // user's answer is the lock cleanup, and this row is what points at it.
+    //
+    // Presence is a recursive question (F-131): moving a jar into `mods/<sub>/`
+    // does not make the recorded file absent, even though the content listing
+    // above stays non-recursive (F-101). The scan and the helper are the ones
+    // the lock prune already uses, so the two paths cannot disagree about what
+    // "present" means.
     if let Some(lock) = lock {
-        let present: Vec<&str> = snapshot
-            .facts
-            .iter()
-            .filter_map(|fact| {
-                super::lock_entry_for_name(&lock.entries, &fact.filename)
-                    .map(|entry| entry.filename.as_str())
-            })
-            .collect();
+        let presence = super::scan_mods_recursive(&instance);
         let mut missing: Vec<String> = lock
             .entries
             .iter()
-            .filter(|entry| !present.contains(&entry.filename.as_str()))
+            .filter(|entry| !crate::updates::target::entry_is_present(entry, &presence))
             .map(|entry| entry.filename.clone())
             .collect();
         missing.sort();

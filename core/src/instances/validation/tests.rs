@@ -57,12 +57,26 @@ fn lock_entry(filename: &str) -> LockEntry {
 
 /// F-095: the report is a fixed set of named checks, each emitted once, and a
 /// healthy folder produces no error. The count is part of the contract — the
-/// old report had thirty rows and the UI groups them by severity.
+/// old report had thirty rows and the UI groups them by severity. The fixture
+/// carries a lock and one recorded file, so the lock-entry checks run too:
+/// every check in the exhaustive list must be emitted exactly once.
 #[test]
 fn spec_f095_the_report_has_thirty_named_checks_and_reports_each_once() {
     let dir = temp();
     let root = dir.path().join("Survival");
     let row = healthy(&root);
+    std::fs::write(root.join("mods").join("a.jar"), b"not a zip").expect("jar");
+    // No recorded SHA-1: the bytes on disk are not a zip, and this fixture is
+    // about the check set, not about a hash mismatch.
+    let mut entry = lock_entry("a.jar");
+    entry.sha1 = String::new();
+    write_lock(
+        &root.join(LOCK_FILE_NAME),
+        &LockFile {
+            entries: vec![entry],
+        },
+    )
+    .expect("lock");
 
     let report = validate_instance(&row);
 
@@ -76,17 +90,12 @@ fn spec_f095_the_report_has_thirty_named_checks_and_reports_each_once() {
         );
         seen.push(item.check);
     }
-    for check in [
-        ValidationCheck::InstanceRoot,
-        ValidationCheck::MinecraftVersion,
-        ValidationCheck::Loader,
-        ValidationCheck::ModsDir,
-        ValidationCheck::ConfigDir,
-        ValidationCheck::ProfileJson,
-        ValidationCheck::Lock,
-        ValidationCheck::ModsFolderFiles,
-        ValidationCheck::LoaderSource,
-    ] {
+    assert_eq!(
+        seen.len(),
+        30,
+        "a healthy fixture with a lock emits all thirty checks: {seen:?}"
+    );
+    for check in ValidationCheck::ALL {
         assert!(seen.contains(&check), "{check:?} is missing");
     }
     assert_ne!(
@@ -103,6 +112,72 @@ fn spec_f095_the_report_has_thirty_named_checks_and_reports_each_once() {
         Severity::Ok,
         "the mirror agrees with the row"
     );
+}
+
+/// F-095: a record is missing only when the file is gone from the whole
+/// `mods/` tree. Moving a jar into `mods/sub/` keeps the file on disk — the
+/// content listing stays non-recursive (F-101), but presence is the recursive
+/// question F-131 already answers for the lock prune.
+#[test]
+fn spec_f095_a_jar_in_a_subfolder_is_not_a_missing_record() {
+    let dir = temp();
+    let root = dir.path().join("Subfolder");
+    let row = healthy(&root);
+    std::fs::create_dir_all(root.join("mods").join("sub")).expect("sub");
+    std::fs::write(root.join("mods").join("sub").join("moved.jar"), b"bytes").expect("jar");
+    let mut entry = lock_entry("moved.jar");
+    entry.sha1 = String::new();
+    write_lock(
+        &root.join(LOCK_FILE_NAME),
+        &LockFile {
+            entries: vec![entry],
+        },
+    )
+    .expect("lock");
+
+    let report = validate_instance(&row);
+
+    let missing = item_of(&report, ValidationCheck::LockMissingFiles);
+    assert_eq!(
+        missing.severity,
+        Severity::Ok,
+        "a jar under mods/sub/ is still present"
+    );
+    assert_eq!(missing.value, None, "nothing is missing");
+}
+
+/// F-095: the loader policy the old report used (`profile_loader_policy`).
+/// `vanilla` is a profile loader and is recognised; the Discover platform
+/// values (`any`, `minecraft`, `datapack`, `iris`, `optifine`, `canvas`) are
+/// errors, not warnings; an unknown loader stays a warning.
+#[test]
+fn spec_f095_loader_policy_severity_ladder() {
+    let dir = temp();
+    let root = dir.path().join("Loaders");
+    std::fs::create_dir_all(root.join("mods")).expect("mods");
+    std::fs::create_dir_all(root.join("config")).expect("config");
+
+    for (loader, expected) in [
+        ("fabric", Severity::Ok),
+        ("quilt", Severity::Ok),
+        ("forge", Severity::Ok),
+        ("neoforge", Severity::Ok),
+        ("vanilla", Severity::Ok),
+        ("any", Severity::Error),
+        ("minecraft", Severity::Error),
+        ("datapack", Severity::Error),
+        ("iris", Severity::Error),
+        ("optifine", Severity::Error),
+        ("canvas", Severity::Error),
+        ("rift", Severity::Warning),
+    ] {
+        let report = validate_instance(&row_at(&root, Some("1.21.1"), Some(loader)));
+        assert_eq!(
+            item_of(&report, ValidationCheck::LoaderRecognized).severity,
+            expected,
+            "loader {loader} got the wrong severity"
+        );
+    }
 }
 
 /// F-095: the ladder, and the check that reads the folder the install depends
@@ -243,8 +318,9 @@ fn spec_f095_profile_json_drift_is_a_warning() {
 }
 
 /// F-095: the file checks are the F-097 classification, not a second opinion.
-/// A jar that declares `1.20.1` in a `1.21.1` instance is incompatible, and the
-/// report names it.
+/// The declarations are ranges on purpose: `1.20.x` excludes a `1.21.1`
+/// instance while `>=1.20` admits it, so a lexical compare (which flags both)
+/// cannot pass this test.
 #[test]
 fn spec_f095_an_incompatible_file_is_reported_from_the_range_judgement() {
     let dir = temp();
@@ -254,7 +330,14 @@ fn spec_f095_an_incompatible_file_is_reported_from_the_range_judgement() {
         &root.join("mods").join("old.jar"),
         &[(
             "fabric.mod.json",
-            br#"{"id":"tmod","depends":{"minecraft":"1.20.1"}}"#,
+            br#"{"id":"tmod","depends":{"minecraft":"1.20.x"}}"#,
+        )],
+    );
+    crate::jar_reader::tests::build_jar(
+        &root.join("mods").join("range.jar"),
+        &[(
+            "fabric.mod.json",
+            br#"{"id":"tmod2","depends":{"minecraft":">=1.20"}}"#,
         )],
     );
 
@@ -267,7 +350,7 @@ fn spec_f095_an_incompatible_file_is_reported_from_the_range_judgement() {
     assert_eq!(
         item_of(&report, ValidationCheck::LoaderDeclaredByJars).severity,
         Severity::Ok,
-        "the jar declares fabric, which is the instance loader"
+        "the jars declare fabric, which is the instance loader"
     );
 }
 

@@ -121,25 +121,25 @@ impl Range {
             return Self::parse_interval(raw);
         }
         if let Some(rest) = raw.strip_prefix(">=") {
-            return Version::parse(rest).map(Range::GreaterOrEqual);
+            return Version::parse(rest.trim()).map(Range::GreaterOrEqual);
         }
         if let Some(rest) = raw.strip_prefix("<=") {
-            return Version::parse(rest).map(Range::LessOrEqual);
+            return Version::parse(rest.trim()).map(Range::LessOrEqual);
         }
         if let Some(rest) = raw.strip_prefix('>') {
-            return Version::parse(rest).map(Range::Greater);
+            return Version::parse(rest.trim()).map(Range::Greater);
         }
         if let Some(rest) = raw.strip_prefix('<') {
-            return Version::parse(rest).map(Range::Less);
+            return Version::parse(rest.trim()).map(Range::Less);
         }
         if let Some(rest) = raw.strip_prefix('^') {
-            return Version::parse(rest).map(caret);
+            return Version::parse(rest.trim()).map(caret);
         }
         if let Some(rest) = raw.strip_prefix('~') {
-            return Version::parse(rest).map(tilde);
+            return Version::parse(rest.trim()).map(tilde);
         }
         if let Some(rest) = raw.strip_prefix('=') {
-            return Version::parse(rest).map(Range::Exact);
+            return Version::parse(rest.trim()).map(Range::Exact);
         }
         if raw.contains(['x', 'X', '*']) {
             return Self::parse_wildcard(raw);
@@ -244,12 +244,21 @@ impl Range {
 
 /// `^1.20.1` ⇒ `>=1.20.1, <2.0.0`: the first non-zero segment may not change.
 /// `^0.2.3` ⇒ `<0.3.0`, `^0.0.3` ⇒ `<0.0.4` — Cargo's rule, which is what the
-/// catalogues mean when they emit it.
+/// catalogues mean when they emit it. When every segment is zero, only the
+/// last named position may move: `^0.0.0` ⇒ `<0.0.1`, `^0.0` ⇒ `<0.1.0`.
 fn caret(lower: Version) -> Range {
     let parts = &lower.0;
     let upper = match parts.iter().position(|part| *part != 0) {
-        // All zeros: only the patch position may move.
-        None => vec![1],
+        None => {
+            let mut upper = parts.clone();
+            match upper.last_mut() {
+                Some(last) => *last += 1,
+                // `Version::parse` never yields an empty release; the fallback
+                // keeps this total without an unreachable panic.
+                None => upper.push(1),
+            }
+            upper
+        }
         Some(index) => {
             let mut upper = parts[..=index].to_vec();
             if let Some(last) = upper.last_mut() {
@@ -295,6 +304,41 @@ fn tilde(lower: Version) -> Range {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F-097: the cheap edges of the parser. A space after an operator is what
+    /// a hand-written metadata file looks like, and `^0.0.0` may move only the
+    /// last named position (Cargo's rule), so it never admits `0.0.1`.
+    #[test]
+    fn spec_f097_operator_spacing_and_caret_zero_are_read() {
+        for (declaration, target) in [
+            (">= 1.20.1", "1.21.1"),
+            ("<= 1.21", "1.20.1"),
+            ("> 1.20", "1.20.1"),
+            ("< 1.21", "1.20.1"),
+            ("= 1.20.1", "1.20.1"),
+            ("^ 1.20.1", "1.21.1"),
+            ("~ 1.20.1", "1.20.9"),
+        ] {
+            assert_eq!(
+                judge(declaration, target),
+                RangeVerdict::Includes,
+                "{declaration} must include {target}"
+            );
+        }
+
+        assert_eq!(judge("^0.0.0", "0.0.0"), RangeVerdict::Includes);
+        assert_eq!(
+            judge("^0.0.0", "0.0.1"),
+            RangeVerdict::Excludes,
+            "^0.0.0 is <0.0.1, not <1.0.0"
+        );
+        assert_eq!(judge("^0.0", "0.0.9"), RangeVerdict::Includes);
+        assert_eq!(
+            judge("^0.0", "0.1.0"),
+            RangeVerdict::Excludes,
+            "^0.0 is <0.1.0"
+        );
+    }
 
     /// F-097: every form the catalogues and jars emit, judged against a target
     /// it admits. A range that includes the target is compatible — the whole

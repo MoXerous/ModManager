@@ -57,7 +57,8 @@ impl Ownership {
 /// Why a file is (or cannot be proven) compatible with the instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompatibilityReason {
-    /// The instance has no game version and no concrete loader to compare to.
+    /// The instance has no game version to compare against (and no concrete
+    /// loader either), so no declaration can be judged.
     NoTarget,
     /// The archive declares nothing at all that could settle the question.
     Unproven,
@@ -289,11 +290,11 @@ pub fn classify_content(
             .unwrap_or(Ownership::External);
         // The entry that proved ownership speaks for the file: a byte-identical
         // file can be recorded under another name, and the name lookup above
-        // would then have found nothing.
+        // would then have found a different record. Its declaration is used
+        // unconditionally — if it recorded none, the jar's own metadata is the
+        // fallback, never the unrelated name-matched record's versions.
         if let Some((entry, _)) = matched {
-            if !entry.game_versions.is_empty() {
-                fact.recorded_game_versions = entry.game_versions.clone();
-            }
+            fact.recorded_game_versions = entry.game_versions.clone();
         }
         fact.duplicate_keys = own_keys.into_iter().filter(|key| shared(key)).collect();
         fact.compatibility = compatibility(fact, target);
@@ -449,6 +450,12 @@ fn compatibility(fact: &LocalContentFact, target: &ContentTarget) -> Compatibili
                 target: loader_display.to_string(),
             });
         }
+    }
+    // A matching loader is not evidence about the game version. With no target
+    // game version the range was never judged, so a concrete loader alone
+    // cannot make the file compatible.
+    if game.is_empty() {
+        return Compatibility::Unknown(CompatibilityReason::NoTarget);
     }
     Compatibility::Compatible
 }
