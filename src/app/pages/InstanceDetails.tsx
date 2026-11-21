@@ -29,6 +29,7 @@ import { afterRescan, isForInstance, markStale, type StalenessState } from '../i
 import { InstanceBackup } from './InstanceBackup';
 import { InstanceExport } from './InstanceExport';
 import { RemoveDialog } from './RemoveDialog';
+import { UpdateInstallDialog } from './UpdateInstallDialog';
 
 type Action = 'enable' | 'disable';
 
@@ -87,10 +88,16 @@ function classTitle(m: LocalFactDto, t: TFunction): string | undefined {
 
 /**
  * The answer, and only the answer. It names the current file, the latest
- * version and a status word; there is no install button because installing an
- * update needs a plan, a backup and a re-check, and none of that exists yet.
+ * version and a status word; installing is a separate dialog because it needs
+ * a plan, the five-promise contract and a backup decision.
  */
-function UpdateResults({ preview }: { preview: UpdatePreviewDto }) {
+function UpdateResults({
+  preview,
+  onInstall,
+}: {
+  preview: UpdatePreviewDto;
+  onInstall: () => void;
+}) {
   const { t } = useTranslation();
   const available = preview.candidates.filter((c) => c.status === 'available').length;
   const current = preview.candidates.filter((c) => c.status === 'upToDate').length;
@@ -129,14 +136,29 @@ function UpdateResults({ preview }: { preview: UpdatePreviewDto }) {
                   </span>
                 )}
                 <span className={`shrink-0 ${statusClass(c.status)}`}>
-                  {t(`details.updates.status.${c.status}`)}
+                  {t(
+                    `details.updates.status.${
+                      c.status === 'available' ||
+                      c.status === 'upToDate' ||
+                      c.status === 'unidentified' ||
+                      c.status === 'unsupported'
+                        ? c.status
+                        : 'unidentified'
+                    }`,
+                  )}
                 </span>
               </li>
             ))}
           </ul>
-          <p className="mt-1.5 text-caption text-muted-foreground">
-            {t('details.updates.installDeferred')}
-          </p>
+          <div className="mt-1.5 text-caption text-muted-foreground">
+            {available > 0 ? (
+              <Button type="button" variant="outline" onClick={onInstall}>
+                {t('details.updates.install')}
+              </Button>
+            ) : (
+              <p>{t('details.updates.nothingToInstall')}</p>
+            )}
+          </div>
         </>
       ) : (
         preview.warnings.length === 0 && (
@@ -181,6 +203,7 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
   const [updates, setUpdates] = useState<UpdatePreviewDto | null>(null);
   const [updatesError, setUpdatesError] = useState<IpcError | null>(null);
   const [updatesBusy, setUpdatesBusy] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
   /**
    * Selection is by `relPath`, not filename: `disabled_mods/c.jar` and a
    * top-level `c.jar` are two different files.
@@ -480,7 +503,7 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
             {t('details.updates.failed', { reason: t(`error.${updatesError.code}`) })}
           </p>
         )}
-        {updates && <UpdateResults preview={updates} />}
+        {updates && <UpdateResults preview={updates} onInstall={() => setInstallOpen(true)} />}
       </div>
 
       {/* The pack leaves the app, so it gets its own review card rather than a
@@ -662,6 +685,22 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
           onClose={() => setRemoveOpen(false)}
           onRemoved={() => {
             setSelected(new Set());
+            load();
+            onChanged();
+          }}
+        />
+      )}
+
+      {installOpen && (
+        <UpdateInstallDialog
+          root={root}
+          gameVersion={targetVersion}
+          loader={targetLoader}
+          provider={provider}
+          onClose={() => setInstallOpen(false)}
+          onApplied={() => {
+            // The scan the table shows is now stale: files were replaced.
+            setUpdates(null);
             load();
             onChanged();
           }}

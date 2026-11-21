@@ -117,6 +117,13 @@ pub enum ErrorCode {
     /// Not a failing disk and not a corrupt pack: a foreign file, which the
     /// `.mrpack` install path exists for.
     NotOurExport,
+    /// F-121: the instance moved between the update plan and the confirm —
+    /// the lock, the folder, or the target itself. Nothing was written; the
+    /// user shows the plan again.
+    UpdateContextChanged,
+    /// F-123: installing without a profile backup was not confirmed a second
+    /// time. The three-way question has no silent default.
+    UpdateBackupNotConfirmed,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -760,6 +767,138 @@ impl From<mm_core::updates::UpdatePreview> for UpdatePreviewDto {
             warnings: p.warnings.into_iter().map(Into::into).collect(),
         }
     }
+}
+
+// --- applying updates (F-121..F-124) -------------------------------------
+
+/// One line of the confirmation copy. The UI renders `key` from its own
+/// locale; `text` is the English fallback for a locale that lags behind.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SafetyContractItemDto {
+    pub id: String,
+    pub key: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdatePlanEntryDto {
+    pub project_id: String,
+    pub old_filename: String,
+    pub filename: String,
+    pub version_number: String,
+    pub size: u64,
+}
+
+/// The plan the dialog shows: what will be replaced, and the token the confirm
+/// must carry back (F-121).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateInstallPlanDto {
+    pub token: String,
+    pub entries: Vec<UpdatePlanEntryDto>,
+    pub contract: Vec<SafetyContractItemDto>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateInstallPlanRequest {
+    pub instance_root: String,
+    pub provider: String,
+    pub game_version: String,
+    pub loader: String,
+    /// Project ids to install; empty means every candidate the preview marked
+    /// `Available`.
+    #[serde(default)]
+    pub selected: Vec<String>,
+}
+
+/// The three-way answer to "create a full profile backup first?" (F-123).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum BackupDecisionDto {
+    Yes,
+    No,
+    Cancel,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ApplyUpdateRequest {
+    pub instance_root: String,
+    pub provider: String,
+    pub game_version: String,
+    pub loader: String,
+    #[serde(default)]
+    pub selected: Vec<String>,
+    /// The token `preview_update_install` returned. A mismatch is
+    /// `UpdateContextChanged`: the instance moved, so the plan is stale.
+    pub expected_token: String,
+    /// Ignored by download-only, which touches nothing installed.
+    pub backup: BackupDecisionDto,
+    /// The second, explicit answer that makes `No` a decision rather than a
+    /// default (F-123).
+    #[serde(default)]
+    pub confirm_no_backup: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InstalledUpdateDto {
+    pub project_id: String,
+    pub filename: String,
+    pub version_number: String,
+    /// The replaced file inside the dated folder, when there was one.
+    pub replaced: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SkippedUpdateDto {
+    pub project_id: String,
+    pub filename: String,
+    /// `updates.skip.<reasonCode>` in both locales.
+    pub reason_code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateInstallResultDto {
+    pub operation_id: String,
+    pub installed: Vec<InstalledUpdateDto>,
+    pub skipped: Vec<SkippedUpdateDto>,
+    pub replaced_backup_dir: String,
+    pub profile_backup_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PreparedUpdateDto {
+    pub project_id: String,
+    pub filename: String,
+    pub path: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateDownloadResultDto {
+    pub operation_id: String,
+    pub directory: String,
+    pub prepared: Vec<PreparedUpdateDto>,
 }
 
 // --- toggle -------------------------------------------------------------

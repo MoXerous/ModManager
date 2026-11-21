@@ -4,4 +4,4 @@
  * رمز الخطأ المرسل للواجهة؛ تترجمه الواجهة إلى نص حسب لغة المستخدم.
  * `message` للتشخيص فقط (سجلّ) ولا يُعرض أبدًا.
  */
-export type ErrorCode = "internal" | "invalidInput" | "packChanged" | "instanceChanged" | "noInstanceLock" | "emptyExport" | "notFound" | "providerApi" | "providerUnauthorized" | "unsupported" | "rateLimited" | "timeout" | "io" | "linkOrReparse" | "newerSchema" | "cancelled" | "busy" | "databaseBusy" | "migrationFailed" | "restoreMismatch" | "backupChanged" | "notOurExport";
+export type ErrorCode = "internal" | "invalidInput" | "packChanged" | "instanceChanged" | "noInstanceLock" | "emptyExport" | "notFound" | "providerApi" | "providerUnauthorized" | "unsupported" | "rateLimited" | "timeout" | "io" | "linkOrReparse" | "newerSchema" | "cancelled" | "busy" | "databaseBusy" | "migrationFailed" | "restoreMismatch" | "backupChanged" | "notOurExport" | "updateContextChanged" | "updateBackupNotConfirmed";

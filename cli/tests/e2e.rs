@@ -37,16 +37,22 @@ fn tmp_instance() -> tempfile::TempDir {
 }
 
 /// A real zip (downloader rejects non-archives) + its real SHA-1/SHA-512.
-fn fixture_jar(mod_id: &str) -> (Vec<u8>, String, String) {
+/// Deterministic: the entry timestamp is pinned, so two calls with the same
+/// arguments are byte-identical. The version string is what makes v1 and v2
+/// different files — a test must never depend on the clock for that.
+fn fixture_jar(mod_id: &str, version: &str) -> (Vec<u8>, String, String) {
     let body = format!(
-        r#"{{"id": "{mod_id}", "name": "{mod_id}", "version": "1.0",
+        r#"{{"id": "{mod_id}", "name": "{mod_id}", "version": "{version}",
             "description": "d", "depends": {{"minecraft": "1.21"}}}}"#
     );
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut w = zip::ZipWriter::new(&mut buf);
-        w.start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
-            .expect("entry");
+        w.start_file(
+            "fabric.mod.json",
+            zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::default()),
+        )
+        .expect("entry");
         w.write_all(body.as_bytes()).expect("write");
         w.finish().expect("finish");
     }
@@ -79,7 +85,7 @@ struct Api {
 impl Api {
     async fn setup() -> Self {
         let server = MockServer::start().await;
-        let (jar, sha1, sha512) = fixture_jar("testmod");
+        let (jar, sha1, sha512) = fixture_jar("testmod", "1.0");
         let cdn = format!("{}/cdn/x.jar", server.uri());
         let search = serde_json::json!({
             "hits": [{
@@ -278,17 +284,15 @@ async fn e2e_install_refuses_plain_http_without_flag() {
     );
 }
 
-#[tokio::test]
-async fn e2e_update_bumps_version() {
-    let api = Api::setup().await;
-    let dir = tmp_instance();
-    let (inst, base) = api_arg(&api, &dir);
-    // Install v1 first.
+/// Install v1 into the temp instance, then serve v2 for v1's hash on the
+/// update endpoint. Both update tests start here, so they differ only in the
+/// backup answer they give.
+async fn install_v1_and_serve_v2(api: &Api, dir: &tempfile::TempDir, inst: &str, base: &str) {
     let (code, _, err) = run(&[
         "--instance",
-        &inst,
+        inst,
         "--api-base",
-        &base,
+        base,
         INSECURE_LOOPBACK,
         "install",
         "testmod",
@@ -299,8 +303,8 @@ async fn e2e_update_bumps_version() {
         "--yes",
     ]);
     assert_eq!(code, 0, "{err}");
-    // Serve v2 for the same sha1 via the update endpoint.
-    let (jar2, sha2, sha512_2) = fixture_jar("testmod");
+    assert!(dir.path().join("mods").join("x.jar").is_file());
+    let (jar2, sha2, sha512_2) = fixture_jar("testmod", "2.0");
     let cdn2 = format!("{}/cdn/y.jar", api.server.uri());
     let v2 = serde_json::json!({
         api.sha1.clone(): {
@@ -327,6 +331,14 @@ async fn e2e_update_bumps_version() {
         .respond_with(ResponseTemplate::new(200).set_body_bytes(jar2))
         .mount(&api.server)
         .await;
+}
+
+#[tokio::test]
+async fn e2e_update_bumps_version() {
+    let api = Api::setup().await;
+    let dir = tmp_instance();
+    let (inst, base) = api_arg(&api, &dir);
+    install_v1_and_serve_v2(&api, &dir, &inst, &base).await;
     let (code, out, err) = run(&[
         "--instance",
         &inst,
@@ -338,6 +350,11 @@ async fn e2e_update_bumps_version() {
         "1.21",
         "--loader",
         "fabric",
+        // F-123: the backup question has no default; this test says "no"
+        // twice, which is the second, explicit confirmation.
+        "--backup",
+        "no",
+        "--confirm-no-backup",
         "--yes",
     ]);
     assert_eq!(code, 0, "{err} {out}");
@@ -345,6 +362,36 @@ async fn e2e_update_bumps_version() {
     let lock = std::fs::read_to_string(dir.path().join("instance.lock.json")).expect("lock");
     assert!(lock.contains("V2"), "{lock}");
     assert!(dir.path().join("mods").join("y.jar").is_file());
+}
+
+/// F-123: a bare `--backup no` is not consent. The run stops before any write.
+#[tokio::test]
+async fn e2e_update_refuses_no_backup_without_the_second_confirmation() {
+    let api = Api::setup().await;
+    let dir = tmp_instance();
+    let (inst, base) = api_arg(&api, &dir);
+    install_v1_and_serve_v2(&api, &dir, &inst, &base).await;
+    let (code, _, err) = run(&[
+        "--instance",
+        &inst,
+        "--api-base",
+        &base,
+        INSECURE_LOOPBACK,
+        "update",
+        "--game",
+        "1.21",
+        "--loader",
+        "fabric",
+        "--backup",
+        "no",
+        "--yes",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--confirm-no-backup"), "{err}");
+    // Nothing was written: no new jar, and the lock still pins v1.
+    assert!(!dir.path().join("mods").join("y.jar").exists());
+    let lock = std::fs::read_to_string(dir.path().join("instance.lock.json")).expect("lock");
+    assert!(lock.contains("V1"), "{lock}");
 }
 
 #[tokio::test]

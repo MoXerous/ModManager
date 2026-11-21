@@ -19,20 +19,20 @@
 
 | الأثر | بنود `Keep` | بنود كلُّها |
 |---|---|---|
-| مُختبَر بمعرّف المواصفة | 113 | 113 |
+| مُختبَر بمعرّف المواصفة | 117 | 117 |
 | مُنفَّذ ومُشار إليه في الكود | 9 | 9 |
 | مذكور في الاختبارات (بلا معرّف في الاسم) | 0 | 0 |
-| إشارة في الوثائق فقط | 1 | 1 |
-| بلا أثر | 29 | 29 |
+| إشارة في الوثائق فقط | 0 | 0 |
+| بلا أثر | 26 | 26 |
 
-**113 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **30** بلا أثرٍ قابلٍ للتتبّع.
+**117 من 152** بندًا `Keep` له اختبارٌ يحمل معرّفه · **9** مذكورٌ في كود الإنتاج · **26** بلا أثرٍ قابلٍ للتتبّع.
 
 ## حسب المرحلة
 
 | المرحلة | بنود Keep | مُختبَر بمعرّف | مُشار إليه في الكود | بلا أثر |
 |---|---|---|---|---|
 | M1 | 72 | 65 | 3 | 4 |
-| M2 | 38 | 22 | 2 | 14 |
+| M2 | 38 | 26 | 2 | 10 |
 | M3 | 41 | 25 | 4 | 12 |
 | later | 1 | 1 | 0 | 0 |
 
@@ -56,10 +56,6 @@
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | M2 |
 | **F-108** | تفعيل/تعطيل (إعادة تسمية) | profiles | M2 |
 | **F-109** | **تراجع تنفيذي عكسي** | profiles | M2 |
-| **F-121** | **إعادة تحقق قبل التنفيذ** | updates | M2 |
-| **F-122** | عقد السلامة (5 بنود) | updates | M2 |
-| **F-123** | **نسخ احتياطي Yes/No/Cancel** | updates | M2 |
-| **F-124** | تحديث بالتنزيل فقط | updates | M2 |
 | **F-125** | مخطّط الإصدار المستهدف | updates | M3 |
 | **F-126** | اقتراح هدف مشترك | updates | M3 |
 | **F-127** | **تنظيف الهدف يترك المجهول** | updates | M3 |
@@ -199,7 +195,7 @@
 | **F-094** | كشف تخطيط Prism/MultiMC | Keep | M3 | بلا أثر | — |
 | **F-095** | التحقق من البروفايل (30 فحصاً) | Keep | M2 | بلا أثر | — |
 | **F-096** | فحص صحة النسخة | Defer | M2 | مؤجَّل | — |
-| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs (+2) · كود: cli/src/commands/install.rs، cli/src/commands/update.rs (+13) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/record.rs، core/src/instances/tests.rs (+2) · كود: cli/src/commands/install.rs، core/src/downloader/batch.rs (+12) · اختبار (ذكر): src-tauri/src/commands/channel_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-098** | **المحاور الأربعة متعامدة** | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/tests.rs (+2) |
 | **F-099** | كشف التكرار (SHA-1 + هوية المشروع) | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+6) |
 | **F-100** | كشف تعارض الهاش | Keep | M3 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/tests.rs · كود: core/src/instances/content.rs، core/src/instances/mod.rs (+7) |
@@ -219,7 +215,7 @@
 | **F-110** | رفض الروابط الرمزية والتجاوز والتصادم | Keep | M1 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/toggle/tests.rs |
 | **F-111** | حذف بمشغّل أمان **بلا حذف دائم** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/remove/tests.rs، src-tauri/src/commands/tests.rs · كود: cli/src/commands/remove.rs، core/src/instances/remove/mod.rs (+4) |
 | **F-112** | كلمة تأكيد `REMOVE` للملفات الخارجية | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/remove/tests.rs · كود: core/src/instances/remove/mod.rs، src-tauri/src/commands.rs (+2) |
-| **F-113** | نسخ احتياطي كامل للبروفايل | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs، src-tauri/src/commands/backup_tests.rs (+1) · كود: core/src/instances/backup/manifest.rs، core/src/instances/backup/mod.rs (+9) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-113** | نسخ احتياطي كامل للبروفايل | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs، src-tauri/src/commands/backup_tests.rs (+1) · كود: core/src/instances/backup/manifest.rs، core/src/instances/backup/mod.rs (+10) · اختبار (ذكر): core/src/updates/apply_tests.rs، docs/adr/0007-profile-backup-and-restore.md (+1) · وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-114** | استعادة بحفظ الوجهة القائمة جانباً | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs، src-tauri/src/commands/backup_tests.rs · كود: core/src/instances/backup/restore.rs، core/src/instances/backup/tests.rs (+6) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-115** | **نسخ `saves` اختياري** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/instances/backup/tests.rs · كود: core/src/instances/backup/mod.rs، core/src/instances/backup/restore.rs (+8) · اختبار (ذكر): docs/adr/0007-profile-backup-and-restore.md، src-tauri/src/commands/backup_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
 | **F-116** | مدير نسخ التحديث (لكل ملف) | Defer | later | مؤجَّل | وثائق: docs/adr/0007-profile-backup-and-restore.md |
@@ -232,10 +228,10 @@
 | المعرّف | البند | القرار | المرحلة | الأثر | الدليل |
 |---|---|---|---|---|---|
 | **F-120** | معاينة التحديث | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/tests.rs، src-tauri/src/commands/updates_tests.rs · كود: core/src/updates/mod.rs، src-tauri/src/commands.rs (+1) |
-| **F-121** | **إعادة تحقق قبل التنفيذ** | Keep | M2 | إشارة في الوثائق فقط | وثائق: docs/adr/0007-profile-backup-and-restore.md |
-| **F-122** | عقد السلامة (5 بنود) | Keep | M2 | بلا أثر | — |
-| **F-123** | **نسخ احتياطي Yes/No/Cancel** | Keep | M2 | بلا أثر | — |
-| **F-124** | تحديث بالتنزيل فقط | Keep | M2 | بلا أثر | — |
+| **F-121** | **إعادة تحقق قبل التنفيذ** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/apply_tests.rs · كود: core/src/updates/apply.rs، core/src/updates/mod.rs (+6) · اختبار (ذكر): core/src/updates/apply_tests.rs · وثائق: docs/adr/0007-profile-backup-and-restore.md |
+| **F-122** | عقد السلامة (5 بنود) | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/apply_tests.rs، src-tauri/src/commands/tests.rs · كود: cli/src/commands/update.rs، core/src/updates/apply.rs (+3) · اختبار (ذكر): core/src/updates/apply_tests.rs |
+| **F-123** | **نسخ احتياطي Yes/No/Cancel** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/apply_tests.rs · كود: cli/src/commands/update.rs، cli/src/main.rs (+7) · اختبار (ذكر): cli/tests/e2e.rs، core/src/updates/apply_tests.rs |
+| **F-124** | تحديث بالتنزيل فقط | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/updates/apply_tests.rs · كود: cli/src/commands/update.rs، cli/src/main.rs (+7) · اختبار (ذكر): core/src/updates/apply_tests.rs |
 | **F-125** | مخطّط الإصدار المستهدف | Keep | M3 | بلا أثر | — |
 | **F-126** | اقتراح هدف مشترك | Keep | M3 | بلا أثر | — |
 | **F-127** | **تنظيف الهدف يترك المجهول** | Keep | M3 | بلا أثر | — |
@@ -303,7 +299,7 @@
 | **F-165** | جدول نتائج (13 عموداً) | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/providers/curseforge/mod.rs، core/src/providers/modrinth.rs (+4) · كود: core/src/providers/curseforge/mod.rs، core/src/providers/modrinth.rs (+8) · اختبار (ذكر): src-tauri/src/commands/tests/browse_tests.rs، src/app/browse/columns.test.ts (+2) |
 | **F-166** | ترقيم «Load more» | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: src/app/browse/paging.test.ts · كود: src/app/browse/ResultsTable.tsx، src/app/browse/paging.ts (+1) · اختبار (ذكر): src/app/browse/paging.test.ts |
 | **F-167** | **سجلّ تنقّل 32 مدخلاً** | Drop | — | متروك | — |
-| **F-168** | **مراقب نظام الملفات (تلميح)** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/watcher.rs، src-tauri/src/commands/watch/tests.rs (+1) · كود: core/src/watcher.rs، src-tauri/src/commands.rs (+11) · اختبار (ذكر): src/app/instances/staleness.test.ts |
+| **F-168** | **مراقب نظام الملفات (تلميح)** | Keep | M2 | مُختبَر بمعرّف المواصفة | اختبار بمعرّف: core/src/watcher.rs، src-tauri/src/commands/watch/tests.rs (+1) · كود: core/src/watcher.rs، src-tauri/src/commands.rs (+12) · اختبار (ذكر): src/app/instances/staleness.test.ts |
 | **F-169** | لوحة تنقّل لوحة المفاتيح (cmdk) | Keep | M2 | بلا أثر | — |
 | **F-170** | الثيم واللون | Keep | M2 | بلا أثر | — |
 | **F-171** | **اختصارات لوحة المفاتيح** | Keep | M2 | مُنفَّذ ومُشار إليه في الكود | كود: src/app/CommandPalette.tsx |

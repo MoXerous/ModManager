@@ -21,6 +21,14 @@ struct Cli {
     command: Command,
 }
 
+/// The three-way backup answer on the command line (F-123).
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum BackupMode {
+    Yes,
+    No,
+    Cancel,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Show version and platform.
@@ -67,6 +75,17 @@ enum Command {
         game: Option<String>,
         #[arg(long)]
         loader: Option<String>,
+        /// Prepare the new files without installing anything (F-124).
+        #[arg(long)]
+        download_only: bool,
+        /// Create a full profile backup first? No default: the choice is
+        /// yours, and "no" also needs --confirm-no-backup (F-123).
+        #[arg(long, value_enum)]
+        backup: Option<BackupMode>,
+        /// Accept installing without a profile backup (the replaced jars are
+        /// then the only copies kept).
+        #[arg(long)]
+        confirm_no_backup: bool,
         #[arg(long)]
         yes: bool,
         #[arg(long)]
@@ -127,9 +146,31 @@ async fn run(cli: Cli) -> Result<(), commands::CliError> {
         Command::Update {
             game,
             loader,
+            download_only,
+            backup,
+            confirm_no_backup,
             yes,
             dry_run,
-        } => commands::update(&ctx, game, loader, yes, dry_run).await,
+        } => {
+            let backup = backup.map(|mode| match mode {
+                BackupMode::Yes => commands::update::BackupArg::Yes,
+                BackupMode::No => commands::update::BackupArg::No,
+                BackupMode::Cancel => commands::update::BackupArg::Cancel,
+            });
+            commands::update(
+                &ctx,
+                commands::update::UpdateFlags {
+                    game,
+                    loader,
+                    yes,
+                    dry_run,
+                    download_only,
+                    backup,
+                    confirm_no_backup,
+                },
+            )
+            .await
+        }
         Command::Remove {
             selectors,
             yes,

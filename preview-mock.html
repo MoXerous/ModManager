@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ModManager — UI browser check (mocked IPC)</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // TEMPORARY dev-only harness: a mocked Tauri v2 IPC surface so the React
+      // app can be inspected in the in-app browser. Never committed.
+      window.__calls = [];
+      window.__callbacks = {};
+      window.__cbId = 0;
+      const now = Math.floor(Date.now() / 1000);
+      const fakeOperations = [
+        {
+          operationId: "11111111-1111-4111-8111-111111111111",
+          kind: "download_batch", state: "failed", createdAt: now - 3600,
+          updatedAt: now - 3500, profileId: "", targetPath: "mods/sodium.jar",
+          plannedCount: 3, completedCount: 2, failedCount: 1,
+          reason: "operations.reason.interrupted"
+        },
+        {
+          operationId: "22222222-2222-4222-8222-222222222222",
+          kind: "instance_create", state: "running", createdAt: now - 600,
+          updatedAt: now - 300, profileId: "demo", targetPath: "instances/demo",
+          plannedCount: 1, completedCount: 0, failedCount: 0,
+          reason: null
+        },
+        {
+          operationId: "33333333-3333-4333-8333-333333333333",
+          kind: "other", state: "mystery", createdAt: now - 100,
+          updatedAt: now - 90, profileId: "", targetPath: "",
+          plannedCount: 0, completedCount: 0, failedCount: 0,
+          reason: null
+        }
+      ];
+      const reply = (cmd, args) => {
+        if (cmd.startsWith("list_operations")) return { rows: fakeOperations.map(r => ({ cancelledCount: 0, skippedCount: 0, ...r })), issues: [{ filename: "bad-record.json", reason: "corrupt" }] };
+        if (cmd === "list_instance_backups") return { backupRoot: "/tmp/mm/backups", backups: [] };
+        if (cmd === "preview_instance_worlds") return { savesDir: "/tmp/mm/instances/demo/saves", savesExists: true, worlds: [] };
+        if (cmd === "list_instances") return [{ id: "demo", name: "نسخة تجريبية", minecraftVersion: "1.21.1", loader: "fabric", path: "/tmp/mm/instances/demo", minecraftRoot: "/tmp/mm/instances/demo", source: "manual", pathMissing: false, modCount: 2, createdAt: 1, updatedAt: 1 }];
+        if (cmd === "check_instance_updates") return { checked: 1, candidates: [{ filename: "sodium.jar", provider: "modrinth", projectId: "sodium", currentVersionId: "v1", currentSha1: "", currentSha512: "", currentSize: 1, latestVersionId: "v2", latestVersionNumber: "0.6.13", latestFilename: "sodium.jar", latestSha1: "", latestSha512: "", latestSize: 1, downloadUrl: "https://example.test/sodium.jar", source: "modrinth" }], warnings: [] };
+        if (cmd === "preview_update_install") return { token: "preview-token", entries: [{ projectId: "sodium", oldFilename: "sodium.jar", filename: "sodium-0.6.13.jar", versionNumber: "0.6.13", size: 1 }], contract: [
+          { id: "backup", key: "updates.contract.backup", text: "نسخة احتياطية قبل التثبيت" },
+          { id: "noDelete", key: "updates.contract.noDelete", text: "لا حذف نهائي" },
+          { id: "unknownUntouched", key: "updates.contract.unknownUntouched", text: "الملفات الخارجية لا تُلمس" },
+          { id: "changedSkipped", key: "updates.contract.changedSkipped", text: "ما تغيّر بعد المعاينة يُتخطّى" },
+          { id: "noOverwrite", key: "updates.contract.noOverwrite", text: "لا كتابة فوق ملف غير مُقيَّد" }
+        ] };
+        if (cmd === "execute_update_install" || cmd === "execute_update_download_only") return { applied: 1, failed: 0, skipped: 0, target: "/tmp/mm/instances/demo" };
+        if (cmd === "app_info") return { version: "0.1.0-dev", name: "ModManager" };
+        if (cmd === "app_paths") return { data: "/tmp/mm", config: "/tmp/mm/config", cache: "/tmp/mm/cache", logs: "/tmp/mm/logs" };
+        if (cmd === "curseforge_key_status") return { configured: false, source: "none" };
+        if (cmd === "list_download_history") return [];
+        if (cmd === "list_pending_creates" || cmd === "pending_pack_recoveries" || cmd === "pending_instance_restores") return [];
+        if (cmd === "check_instance_updates") return [];
+        if (cmd === "search_projects") return { projects: [], total: 0, offset: 0, limit: 20 };
+        if (cmd === "assess_operation") return { kind: "download_batch", state: "failed", targetPath: "mods/sodium.jar", items: [], finalOnDisk: false, partOnDisk: false, action: "retry", link: "downloads" };
+        if (cmd === "plugin:event|listen") return 1;
+        if (cmd.startsWith("scan_instance")) return { loaders: [], loaderSource: "lock", mods: [], locked: [], contentWarnings: [] };
+        if (cmd.startsWith("list_") || cmd.startsWith("preview_")) return [];
+        return null;
+      };
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+      window.__TAURI_INTERNALS__ = {
+        transformCallback: (cb, once) => {
+          const id = ++window.__cbId;
+          window.__callbacks[id] = cb;
+          return id;
+        },
+        unregisterCallback: (id) => { delete window.__callbacks[id]; },
+        invoke: (cmd, args, options) => {
+          window.__calls.push({ cmd, args });
+          return Promise.resolve(reply(cmd, args));
+        },
+        convertFileSrc: (p) => p,
+        metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } }
+      };
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

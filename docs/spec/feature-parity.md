@@ -13,14 +13,14 @@
 
 | الدرجة | بنود `Keep` |
 |---|---|
-| حاضر — مُراجَع | 40 |
+| حاضر — مُراجَع | 44 |
 | حاضر — بتتبّعِ اختبار | 97 |
-| جزئي — مُراجَع | 4 |
-| مفقود — مُراجَع | 8 |
+| جزئي — مُراجَع | 3 |
+| مفقود — مُراجَع | 5 |
 | خارج النطاق — مُراجَع | 3 |
 | قيد المراجعة (لا دليل) | 0 |
 
-**12** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
+**8** بندًا `Keep` يحتاج عملًا في نسخة الرست (مفقودٌ أو جزئي).
 
 ## ما ينقص نسخة الرست — قائمة العمل
 
@@ -28,10 +28,6 @@
 |---|---|---|---|---|
 | **F-095** | التحقق من البروفايل (30 فحصاً) | instances | مفقود — مُراجَع | No read-only profile validation exists: no severity ladder, no 30-check report, no overall-status derivation, no IPC command or screen; the only trace is a comment in registry.rs about optional standard dirs. features.md keeps F-095 (M2) while InstanceDetails.tsx:115 declares validate/repair dropped on purpose — the conflict the reviewer flagged is real and needs an explicit decision, but per features.md it is a gap, not a by-decision. |
 | **F-097** | التصنيف: مدار/خارجي/معطّل/مكرر/غير متوافق | instances | جزئي — مُراجَع | تحليلُ نطاقاتِ إصدارات ماينكرافت غيرُ منفَّذ ⇒ ملفٌّ نطاقُه مسجَّل لا يُحكم عليه (Unknown مع سبب)، وصنفُ «غير المتوافق» لا يُشتقّ من النطاقات. شريحةٌ لاحقة (عزلُها خلف is_exact_version)، مع تصحيح اختبار range-only عندها. |
-| **F-121** | **إعادة تحقق قبل التنفيذ** | updates | جزئي — مُراجَع | The stale-plan gate exists only in the flows that exist: pack apply re-hashes the archive (PackChanged) and export compares expectedLockSha512 (InstanceChanged), both with tests. The CLI update is the only update-install path and it reads the lock once, prints rows, confirms and swaps without re-reading the lock, the instance target or the folder — no ticket, no context comparison. The GUI has no update-install command at all (only checkInstanceUpdates). docs/todo.md records F-121..F-124 as deliberately deferred to a later milestone, but features.md keeps them, so they stay gaps. |
-| **F-122** | عقد السلامة (5 بنود) | updates | مفقود — مُراجَع | The five-item safety contract copy (timestamped backup, no permanent delete, unknown files untouched, changed-since-preview update skipped, never overwrite an unlinked existing file) is absent everywhere; the only confirmation is confirm_forced's count-only prompt 'Apply N change(s)? [y/N]'. |
-| **F-123** | **نسخ احتياطي Yes/No/Cancel** | updates | مفقود — مُراجَع | No Yes/No/Cancel backup decision exists; cli update.rs unconditionally renames each replaced old jar into the shared backup dir before placing the new one, with no prompt and no whole-profile backup path the Yes branch could call. |
-| **F-124** | تحديث بالتنزيل فقط | updates | مفقود — مُراجَع | No download-only mode: cli update.rs downloads straight into mods/ (line 122 targets mods.join(filename); the .part gives per-file atomicity but at the live destination) and there is no separate staging folder, no 'touch nothing installed' guarantee, and no journaled update operation to recover the swap. |
 | **F-125** | مخطّط الإصدار المستهدف | updates | مفقود — مُراجَع | No target-version planner: core/src/updates/mod.rs implements only the read-only F-120 preview at the instance's current game version/loader; there is no per-mod current->target table, no game_version/loader write-back, and grep for target_version/planner across core, CLI and bridge finds only the modpack planner comments. |
 | **F-126** | اقتراح هدف مشترك | updates | مفقود — مُراجَع | No common-target suggestion: no intersection of game_versions across projects, no loader-verified best-upgrade candidate, no sticky pinned targets; grep for suggest/common_target/target_version returns nothing relevant in core, CLI or src. |
 | **F-127** | **تنظيف الهدف يترك المجهول** | updates | مفقود — مُراجَع | No target cleanup step exists, so nothing keeps and reports unknown local files during one; the nearest preserved-unknown behaviours are the removal flow's typed REMOVE gate and the pack apply's own-destinations-only rule. |
@@ -198,10 +194,10 @@
 | المعرّف | السلوك | القرار | المرحلة | الحالة | الدليل |
 |---|---|---|---|---|---|
 | **F-120** | معاينة التحديث | Keep | M2 | حاضر — بتتبّعِ اختبار | اختبار بمعرّف: core/src/updates/tests.rs، src-tauri/src/commands/updates_tests.rs · كود: core/src/updates/mod.rs، src-tauri/src/commands.rs (+1) |
-| **F-121** | **إعادة تحقق قبل التنفيذ** | Keep | M2 | جزئي — مُراجَع | E:\ModManager\cli\src\commands\update.rs::update (lines 39-45: single read_lock; lines 111-186: confirm then swap, no re-verify) · E:\ModManager\src-tauri\src\commands.rs::check_instance_updates (read-only F-120 only) · E:\ModManager\src-tauri\src\lib.rs::generate_handler (no update-install command) |
-| **F-122** | عقد السلامة (5 بنود) | Keep | M2 | مفقود — مُراجَع | E:\ModManager\cli\src\commands\mod.rs::confirm_forced (line 174) · E:\ModManager\cli\src\commands\update.rs::update (line 111) |
-| **F-123** | **نسخ احتياطي Yes/No/Cancel** | Keep | M2 | مفقود — مُراجَع | E:\ModManager\cli\src\commands\update.rs::update (lines 138-147: unconditional rename to backup) · E:\ModManager\core\src\instances (no profile backup module) |
-| **F-124** | تحديث بالتنزيل فقط | Keep | M2 | مفقود — مُراجَع | E:\ModManager\cli\src\commands\update.rs::update (lines 113-158: direct-to-mods download and swap) |
+| **F-121** | **إعادة تحقق قبل التنفيذ** | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::plan_install · core/src/updates/apply.rs::check_context · core/src/updates/apply.rs::apply_install · src-tauri/src/dto.rs::ErrorCode::UpdateContextChanged |
+| **F-122** | عقد السلامة (5 بنود) | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::SAFETY_CONTRACT · src/app/pages/UpdateInstallDialog.tsx · src/i18n/en.json · src/i18n/ar.json |
+| **F-123** | **نسخ احتياطي Yes/No/Cancel** | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::resolve_backup_choice · src-tauri/src/dto.rs::ErrorCode::UpdateBackupNotConfirmed · src/app/pages/UpdateInstallDialog.tsx |
+| **F-124** | تحديث بالتنزيل فقط | Keep | M2 | حاضر — مُراجَع | core/src/updates/apply.rs::download_only · cli/src/commands/update.rs::download_only |
 | **F-125** | مخطّط الإصدار المستهدف | Keep | M3 | مفقود — مُراجَع | E:\ModManager\core\src\updates\mod.rs::check_updates (module header: 'Installing a newer version is a separate flow ... deliberately not part of this module') · E:\ModManager\src-tauri\src\commands.rs::check_instance_updates |
 | **F-126** | اقتراح هدف مشترك | Keep | M3 | مفقود — مُراجَع | workspace grep for 'target_version|common_target|suggest' — only export/instance settings fields |
 | **F-127** | **تنظيف الهدف يترك المجهول** | Keep | M3 | مفقود — مُراجَع | workspace grep for 'cleanup' — only pack staging and db cache cleanups |

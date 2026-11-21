@@ -385,51 +385,56 @@
     },
     {
       "id": "F-121",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (lines 39-45: single read_lock; lines 111-186: confirm then swap, no re-verify)",
-        "E:\\ModManager\\src-tauri\\src\\commands.rs::check_instance_updates (read-only F-120 only)",
-        "E:\\ModManager\\src-tauri\\src\\lib.rs::generate_handler (no update-install command)"
+        "core/src/updates/apply.rs::plan_install",
+        "core/src/updates/apply.rs::check_context",
+        "core/src/updates/apply.rs::apply_install",
+        "src-tauri/src/dto.rs::ErrorCode::UpdateContextChanged"
       ],
-      "test": "spec_f081_write_export_refuses_a_lock_that_moved_after_the_preview",
-      "note": "Verified the CLI swap path directly; the deferral is recorded in docs/todo.md lines 19/147/186 but features.md is authoritative.",
-      "gap": "The stale-plan gate exists only in the flows that exist: pack apply re-hashes the archive (PackChanged) and export compares expectedLockSha512 (InstanceChanged), both with tests. The CLI update is the only update-install path and it reads the lock once, prints rows, confirms and swaps without re-reading the lock, the instance target or the folder — no ticket, no context comparison. The GUI has no update-install command at all (only checkInstanceUpdates). docs/todo.md records F-121..F-124 as deliberately deferred to a later milestone, but features.md keeps them, so they stay gaps.",
-      "review": "verified:confirmed"
+      "test": "spec_f121_lock_changed_after_preview_aborts_before_any_write",
+      "note": "حاضر: الخطة تحمل بصمة القفل والهدف وحالة الملفات، وapply_install يعيد الاشتقاق ويرفض UpdateContextChanged كأول سطر قبل أي كتابة (بما فيها إنشاء القيد). انحراف: لا إلغاءُ تحديثٍ أثناء التشغيل (العَلَمُ يمرَّر false) — لا بندُ مواصفةٍ يطلبه.",
+      "gap": null,
+      "review": "fixed-s11a: implemented; critical safety points reviewed directly (subagent review blocked by the free-model limit)"
     },
     {
       "id": "F-122",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\cli\\src\\commands\\mod.rs::confirm_forced (line 174)",
-        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (line 111)"
+        "core/src/updates/apply.rs::SAFETY_CONTRACT",
+        "src/app/pages/UpdateInstallDialog.tsx",
+        "src/i18n/en.json",
+        "src/i18n/ar.json"
       ],
-      "test": null,
-      "note": "Workspace grep for the contract items found nothing in core, CLI, bridge or UI.",
-      "gap": "The five-item safety contract copy (timestamped backup, no permanent delete, unknown files untouched, changed-since-preview update skipped, never overwrite an unlinked existing file) is absent everywhere; the only confirmation is confirm_forced's count-only prompt 'Apply N change(s)? [y/N]'.",
-      "review": "verified:confirmed"
+      "test": "spec_f122_contract_lists_five_items_each_with_its_own_guard",
+      "note": "حاضر: عقدُ السلامة ذو البنود الخمسة بياناتٌ في النواة، والواجهةُ ترسمه، وكل بندٍ يشير إلى دالة حارِسٍ موجودة ومُختبَرة (moving-to-backup · no permanent delete · unknown untouched · changed skipped · no overwrite of an unlinked file).",
+      "gap": null,
+      "review": "fixed-s11a: implemented; critical safety points reviewed directly"
     },
     {
       "id": "F-123",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (lines 138-147: unconditional rename to backup)",
-        "E:\\ModManager\\core\\src\\instances (no profile backup module)"
+        "core/src/updates/apply.rs::resolve_backup_choice",
+        "src-tauri/src/dto.rs::ErrorCode::UpdateBackupNotConfirmed",
+        "src/app/pages/UpdateInstallDialog.tsx"
       ],
-      "test": null,
-      "note": "The per-file rename is not the old ask-first flow; no BackupChoice enum anywhere.",
-      "gap": "No Yes/No/Cancel backup decision exists; cli update.rs unconditionally renames each replaced old jar into the shared backup dir before placing the new one, with no prompt and no whole-profile backup path the Yes branch could call.",
-      "review": "verified:confirmed"
+      "test": "spec_f123_backup_cancel_aborts_with_no_write",
+      "note": "حاضر: Yes يستدعي نسخةً كاملةً من F-113، No يُرفض حتى تأكيدٍ صريحٍ مُصنَّف، Cancel يوقف قبل إنشاء أي قيد. انحراف: نسخةُ الملف الشخصي من داخل التحديث لا تُسجَّل كعملية Backup مستقلة (يُذكر مسارها في تقرير التحديث فقط).",
+      "gap": null,
+      "review": "fixed-s11a: implemented; critical safety points reviewed directly"
     },
     {
       "id": "F-124",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\cli\\src\\commands\\update.rs::update (lines 113-158: direct-to-mods download and swap)"
+        "core/src/updates/apply.rs::download_only",
+        "cli/src/commands/update.rs::download_only"
       ],
-      "test": null,
-      "note": "Verified the download destination is the live mods folder.",
-      "gap": "No download-only mode: cli update.rs downloads straight into mods/ (line 122 targets mods.join(filename); the .part gives per-file atomicity but at the live destination) and there is no separate staging folder, no 'touch nothing installed' guarantee, and no journaled update operation to recover the swap.",
-      "review": "verified:confirmed"
+      "test": "spec_f124_download_only_leaves_mods_byte_identical",
+      "note": "حاضر: وضعُ «تنزيل فقط» يكتب في modrinth-update-downloads/ داخل النسخة ويقيّد العملية، وmods/ تبقى بايتًا ببايت (مُختبَرة).",
+      "gap": null,
+      "review": "fixed-s11a: implemented; critical safety points reviewed directly"
     },
     {
       "id": "F-125",
