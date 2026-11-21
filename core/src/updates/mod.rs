@@ -16,6 +16,8 @@
 //! write (F-121..F-124).
 
 pub mod apply;
+pub mod prune;
+pub mod target;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -312,5 +314,9 @@ fn primary_file(version: &Version) -> Option<&ProjectFile> {
 
 #[cfg(test)]
 mod apply_tests;
+#[cfg(test)]
+mod prune_tests;
+#[cfg(test)]
+mod target_tests;
 #[cfg(test)]
 mod tests;

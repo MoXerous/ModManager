@@ -58,6 +58,12 @@ import type { UpdateInstallPlanDto } from '../bindings/UpdateInstallPlanDto';
 import type { UpdateInstallPlanRequest } from '../bindings/UpdateInstallPlanRequest';
 import type { UpdateInstallResultDto } from '../bindings/UpdateInstallResultDto';
 import type { UpdatePreviewDto } from '../bindings/UpdatePreviewDto';
+import type { TargetPlanDto } from '../bindings/TargetPlanDto';
+import type { TargetPlanRequest } from '../bindings/TargetPlanRequest';
+import type { PrunePlanDto } from '../bindings/PrunePlanDto';
+import type { PrunePlanRequest } from '../bindings/PrunePlanRequest';
+import type { ExecutePruneRequest } from '../bindings/ExecutePruneRequest';
+import type { PruneReportDto } from '../bindings/PruneReportDto';
 import type { WorldsPreviewDto } from '../bindings/WorldsPreviewDto';
 
 // الواجهة تصل إلى النواة عبر هذا الملف فقط.
@@ -240,6 +246,27 @@ export function executeUpdateDownloadOnly(
   req: ApplyUpdateRequest,
 ): Promise<UpdateDownloadResultDto> {
   return invoke<UpdateDownloadResultDto>('execute_update_download_only', { req });
+}
+
+/**
+ * جدول الأهداف (F-125..F-127): قراءة فقط. لكل مشروع صفّ بثمانية أعمدة، مع
+ * الهدف المشترك المقترح (F-126) وتقرير التنظيف (F-127).
+ */
+export function planTargetVersions(req: TargetPlanRequest): Promise<TargetPlanDto> {
+  return invoke<TargetPlanDto>('plan_target_versions', { req });
+}
+
+/** التجربة الجافة الإلزامية لتنظيف القفل (F-130): لا تكتب شيئاً. */
+export function previewLockPrune(req: PrunePlanRequest): Promise<PrunePlanDto> {
+  return invoke<PrunePlanDto>('preview_lock_prune', { req });
+}
+
+/**
+ * الحذف الفعلي (F-130): `expectedDigest` من التجربة الجافة، ويُعاد بناء الخطة
+ * في Rust قبل الكتابة؛ القفل الذي تحرّك يُرفض.
+ */
+export function executeLockPrune(req: ExecutePruneRequest): Promise<PruneReportDto> {
+  return invoke<PruneReportDto>('execute_lock_prune', { req });
 }
 
 export function previewToggle(req: PreviewToggleRequest): Promise<TogglePlanDto> {

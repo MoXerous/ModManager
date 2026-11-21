@@ -438,75 +438,79 @@
     },
     {
       "id": "F-125",
-      "status": "missing",
+      "status": "partial",
       "evidence": [
-        "E:\\ModManager\\core\\src\\updates\\mod.rs::check_updates (module header: 'Installing a newer version is a separate flow ... deliberately not part of this module')",
-        "E:\\ModManager\\src-tauri\\src\\commands.rs::check_instance_updates"
+        "core/src/updates/target.rs::TARGET_COLUMNS",
+        "core/src/updates/target.rs::plan_targets_with_cache",
+        "src/app/pages/InstanceTargetPlanner.tsx"
       ],
-      "test": null,
-      "note": "The updates module is the closest code and it explicitly excludes installation.",
-      "gap": "No target-version planner: core/src/updates/mod.rs implements only the read-only F-120 preview at the instance's current game version/loader; there is no per-mod current->target table, no game_version/loader write-back, and grep for target_version/planner across core, CLI and bridge finds only the modpack planner comments.",
-      "review": "verified:confirmed"
+      "test": "spec_f125_plans_each_locked_project_against_the_target",
+      "note": "جزئي: جدولُ الأعمدة الثمانية حقيقيٌّ من البيانات (title · currentVersion · targetVersion · gameVersion · loader · download · sync · status) مع تخطيطٍ للقراءة فقط. **ما ينقص**: لا كتابةَ هدفٍ بعد، ولا اختيارَ إصدارِ ماينكرافت آخر (الهدفُ هو إصدار النسخة نفسها دائمًا)، وعمودُ «الإصدار الحالي» هو `version_id` المعتم لا رقمُ الإصدار.",
+      "gap": "كتابةُ الهدف إلى سجل النسخة واختيارُ إصدارٍ مستهدفٍ مختلفٌّ كلاهما غيرُ منفَّذ; عمود الإصدار يعرض معرّفًا بدل رقم.",
+      "review": "fixed-s11b: implemented, adversarially challenged (deepseek), six findings fixed"
     },
     {
       "id": "F-126",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "workspace grep for 'target_version|common_target|suggest' — only export/instance settings fields"
+        "core/src/updates/target.rs::plan_common_target",
+        "core/src/updates/target.rs::viable_game_versions",
+        "core/src/updates/target.rs::best_upgrade"
       ],
-      "test": null,
-      "note": "Nothing to soften: the whole command and result contract is absent.",
-      "gap": "No common-target suggestion: no intersection of game_versions across projects, no loader-verified best-upgrade candidate, no sticky pinned targets; grep for suggest/common_target/target_version returns nothing relevant in core, CLI or src.",
-      "review": "verified:confirmed"
+      "test": "spec_f126_loader_verification_excludes_a_loader_only_target",
+      "note": "حاضر: تقاطعُ نسخ ماينكرافت مُتحقَّقٌ بنفس دالة التوافق التي يستخدمها مخطّط التثبيت (compatibility_issue)، والتقاطعُ الفارغ يُنتج no suggestion، والترقيةُ الاستشارية لا تُلغي الاقتراحَ الصارم وتُسمّي معرقليها. والاختبارُ أُصلح ليحتوي نسخةً غيرَ fabric (كان يمرّ حتى لو حُذفت بوابةُ اللودر).",
+      "gap": null,
+      "review": "fixed-s11b: implemented, adversarially challenged (deepseek), six findings fixed"
     },
     {
       "id": "F-127",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "workspace grep for 'cleanup' — only pack staging and db cache cleanups"
+        "core/src/updates/target.rs",
+        "core/src/updates/prune.rs::CleanupReport"
       ],
-      "test": null,
-      "note": "The cleanup-after-target-install behaviour and its 'unknown local files kept' report have no counterpart.",
-      "gap": "No target cleanup step exists, so nothing keeps and reports unknown local files during one; the nearest preserved-unknown behaviours are the removal flow's typed REMOVE gate and the pack apply's own-destinations-only rule.",
-      "review": "verified:confirmed"
+      "test": "spec_f127_unknown_local_files_are_kept_not_removed",
+      "note": "حاضر: الملفاتُ غيرُ المسجَّلة تُبلَّغ `kept_unknown` بنمط notInLock ولا تُحذف، والملفاتُ المعروفةُ غيرُ المتوافقة تُسمّى فقط.",
+      "gap": null,
+      "review": "fixed-s11b: implemented, adversarially challenged (deepseek), six findings fixed"
     },
     {
       "id": "F-130",
-      "status": "missing",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\instances\\registry.rs (line 151: 'reconcile' only in a comment)",
-        "E:\\ModManager\\core\\src\\instances\\remove\\mod.rs::execute_remove (the only lock-entry dropper)"
+        "core/src/updates/prune.rs::plan_prune",
+        "core/src/updates/prune.rs::execute_prune",
+        "src-tauri/src/commands/target.rs"
       ],
-      "test": null,
-      "note": "Confirmed the data-loss-risk feature with its mandatory dry-run does not exist.",
-      "gap": "No metadata-only prune/reconcile: lock entries are dropped only by explicit remove; scan_instance returns facts plus lock entries without reconciling them; grep for prune/reconcile in core finds one unrelated comment. No plan, no mandatory dry-run, no typed report.",
-      "review": "verified:confirmed"
+      "test": "spec_f130_execute_refuses_a_record_the_dry_run_never_showed",
+      "note": "حاضر: تجربةٌ جافةٌ إلزامية، وبصمةُ التأكيد تغطّي بايتات القفل **وأسماء المرشَّحين**، والتنفيذ يُعيد قراءةَ القفل ويقارن قبل write_lock، فيرفض سجلًّا لم تعرضه المعاينة ولا يُحذف أيّ ملف jar. لا حاجة لسلة نظام: التقليم يُزيل سجلاتِ القفل فقط.",
+      "gap": null,
+      "review": "fixed-s11b: implemented, adversarially challenged (deepseek), six findings fixed"
     },
     {
       "id": "F-131",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\instances\\mod.rs::LocalContentFact",
-        "E:\\ModManager\\core\\src\\instances\\lock.rs::read_lock",
-        "E:\\ModManager\\src-tauri\\src\\dto.rs::LocalFactDto (project_id: Option<String>)"
+        "core/src/instances/mod.rs::scan_mods_recursive",
+        "core/src/updates/target.rs::entry_is_present",
+        "core/src/updates/prune.rs::candidates_for"
       ],
-      "test": null,
-      "note": "Guard is architectural only, exactly as reviewed; no f131 test found.",
-      "gap": "The present-vs-eligible separation is structural (LocalContentFact per file with Option project_id vs LockEntry, joined by filename in the bridge) and cannot silently collapse, but no consumer compares the two sets (no prune, no import reconcile) and no spec_f131_* test exists anywhere.",
-      "review": "verified:confirmed"
+      "test": "spec_f131_a_jar_in_a_subfolder_still_satisfies_its_record",
+      "note": "حاضر: PRESENT (مسحُ القرص، Including `.jar.disabled` والمجلدات الفرعية حتى عمق 8) وELIGIBLE (سجلات القفل الموجودة) مجموعتان منفصلتان، والموجودُ غيرُ المؤهَّل ليس مرشَّح حذف — وهو إصلاحُ خطأِ الحذفِ القديم في lessons.md §4.2. نطاقُ التمريرِ recursive للتقليم فقط؛ عرضُ المحتوى يبقى غيرَ recursive (F-101).",
+      "gap": null,
+      "review": "fixed-s11b: implemented, adversarially challenged (deepseek), six findings fixed"
     },
     {
       "id": "F-132",
-      "status": "partial",
+      "status": "present",
       "evidence": [
-        "E:\\ModManager\\core\\src\\resolver\\batch.rs::check (lines 37-52: RunCache::new(true) passed to resolve_dependency for the batch plan)",
-        "E:\\ModManager\\core\\src\\resolver\\cache.rs::RunCache (12-field ResolveKey + HashKey, enabled bypass)",
-        "E:\\ModManager\\core\\src\\resolver\\resolve\\tests.rs::spec_f058_cache_reuses_duplicate_resolve"
+        "core/src/updates/target.rs::plan_targets_with_cache",
+        "core/src/resolver/cache.rs::RunCache"
       ],
-      "test": "spec_f058_cache_reuses_duplicate_resolve",
-      "note": "The reviewed note 'it serves the resolver, not a target planner' understates it: the batch install planner uses the same cache; the real gap is F-125's planner absence.",
-      "gap": "The per-run cache is exercised by a planner, not only the resolver: core/src/resolver/batch.rs creates RunCache::new(true) and feeds it through resolve_dependency for the whole batch install plan (F-063) before build_batch_install_plan runs, so the 'per-run cache inside a planning flow' behaviour is present for the planner that exists. What is missing is the target-version planner itself (F-125, deliberately deferred), which this same cache would serve; no spec_f132 test pins the planner-scope behaviour.",
-      "review": "verified:overstated"
+      "test": "spec_f132_planner_reads_a_seeded_run_cache",
+      "note": "حاضر: المخطّط يملك RunCache لكل جولة ويُسقطه معها، والاختبار يُثبت أن التخطيط يقرأ مدخلاتٍ مزروعةً في الكاش قبل الشبكة.",
+      "gap": null,
+      "review": "fixed-s11b: implemented, adversarially challenged (deepseek), six findings fixed"
     },
     {
       "id": "F-137",
