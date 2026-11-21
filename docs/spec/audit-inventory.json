@@ -1,0 +1,17 @@
+{
+  "baseCommit": "4f71f18736c95a1eeb877fe8363f11871118c618",
+  "dimensions": {
+    "behavior": { "count": 181, "source": "docs/spec/features.md", "note": "F-001..F-181 — يُعاد إثبات كلٍّ منها" },
+    "data": { "count": 12, "source": "docs/spec/data-model.md + app/storage + core/src/db" },
+    "ui": { "count": 26, "source": "docs/spec/screens.md §3 (24 classed + Target Version Planner + Saved mods)" },
+    "i18n": { "count": 4, "source": "src/i18n/en.json + ar.json" },
+    "safety": { "count": 10, "source": "core/src/safety + downloader + modpack" },
+    "performance": { "count": 7, "source": "docs/spec/performance-budgets.md B-1..B-7" },
+    "packaging": { "count": 8, "source": "D:/latest_project/packaging (48 files) + .github/workflows" },
+    "deps": { "count": 4, "source": "Cargo.toml + package.json" },
+    "cli": { "count": 6, "source": "cli/ + src-tauri/ + src/lib/ipc.ts" },
+    "lessons": { "count": 10, "source": "docs/spec/lessons.md §1..§10" },
+    "tests": { "count": 8, "source": "34 old test files vs 24 Rust + 5 TS" }
+  },
+  "expectedTotal": 276
+}
