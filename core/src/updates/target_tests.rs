@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use super::target::{
-    plan_targets, plan_targets_with_cache, TargetRequest, TargetStatus, TARGET_COLUMNS,
+    plan_targets, plan_targets_with_cache, TargetError, TargetRequest, TargetStatus, TARGET_COLUMNS,
 };
 use crate::instances::lock::{write_lock, LockEntry, LockFile, LOCK_FILE_NAME};
 use crate::providers::{
@@ -157,7 +157,11 @@ impl Fixture {
     }
 
     fn write(&self, name: &str, bytes: &[u8]) -> String {
-        std::fs::write(self.mods.join(name), bytes).expect("jar");
+        let path = self.mods.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent dir");
+        }
+        std::fs::write(path, bytes).expect("jar");
         sha1_hex(bytes)
     }
 
@@ -246,6 +250,28 @@ fn row<'a>(plan: &'a super::target::TargetPlan, project_id: &str) -> &'a super::
 }
 
 // --- F-125: the planner table ---------------------------------------------
+
+#[tokio::test]
+async fn spec_f125_rejects_any_as_a_game_version() {
+    // `any` is the old app's "no filter" sentinel and `unknown` is this app's
+    // "could not detect" one. Neither is a Minecraft version, and a plan
+    // against them would have to guess.
+    let fixture = Fixture::new();
+    let provider = FakeProvider::new();
+    for game in ["any", "ANY", "unknown", ""] {
+        let error = plan_targets(
+            &provider,
+            &fixture.root,
+            &TargetRequest::new(game, "fabric"),
+        )
+        .await
+        .expect_err("must refuse a non-concrete game version");
+        assert!(
+            matches!(error, TargetError::NeedsConcreteTarget),
+            "game version {game:?} must not be planned against"
+        );
+    }
+}
 
 #[tokio::test]
 async fn spec_f125_plans_each_locked_project_against_the_target() {
@@ -438,6 +464,33 @@ async fn spec_f125_a_missing_file_is_planned_not_an_error() {
     );
 }
 
+#[tokio::test]
+async fn spec_f125_a_foreign_provider_row_is_named_not_judged() {
+    // Asking one catalogue about another catalogue's files answers nothing:
+    // the row stays visible with its own status and never enters the
+    // intersection.
+    let fixture = Fixture::new();
+    let mut foreign = entry("x.jar", "gamma", "gamma-v1", "");
+    foreign.provider = "curseforge".to_string();
+    fixture.lock(vec![foreign]);
+
+    let provider = FakeProvider::new();
+    let plan = fixture.plan(&provider).await;
+
+    let gamma = row(&plan, "gamma");
+    assert_eq!(gamma.status, TargetStatus::OtherProvider);
+    assert_eq!(gamma.reason.code, "otherProvider");
+    assert!(
+        plan.common.is_none(),
+        "a foreign row is not a common target"
+    );
+    assert_eq!(
+        provider.project_calls(),
+        0,
+        "a foreign provider is never asked"
+    );
+}
+
 // --- F-126: common target --------------------------------------------------
 
 #[tokio::test]
@@ -531,21 +584,42 @@ async fn spec_f126_loader_verification_excludes_a_loader_only_target() {
         )
         .with(
             project("beta", "Beta"),
-            vec![version(
-                "beta",
-                "b-v1",
-                "1.0",
-                "b.jar",
-                &b_sha,
-                &["1.20.1"],
-                &["fabric"],
-            )],
+            vec![
+                version(
+                    "beta",
+                    "b-v1",
+                    "1.0",
+                    "b.jar",
+                    &b_sha,
+                    &["1.20.1"],
+                    &["fabric"],
+                ),
+                // 1.21 fits the game-version axis but not the loader one. If
+                // the loader gate disappeared, this row alone would make 1.21
+                // common and the suggestion would move.
+                version(
+                    "beta",
+                    "b-v2",
+                    "2.0",
+                    "b-2.jar",
+                    "bb22",
+                    &["1.21"],
+                    &["forge"],
+                ),
+            ],
         );
 
     let plan = fixture.plan(&provider).await;
     let common = plan.common.expect("common target");
     assert_eq!(common.suggested.as_deref(), Some("1.20.1"));
     assert_eq!(common.common_versions, vec!["1.20.1"]);
+    assert!(
+        !common
+            .common_versions
+            .iter()
+            .any(|version| version == "1.21"),
+        "a forge-only 1.21 must not widen a fabric intersection"
+    );
 }
 
 #[tokio::test]
@@ -594,6 +668,65 @@ async fn spec_f126_best_upgrade_names_its_blockers() {
     assert_eq!(upgrade.blockers, vec!["Beta".to_string()]);
     // Advisory only: the strict suggestion does not move.
     assert_eq!(common.suggested.as_deref(), Some("1.20.1"));
+}
+
+#[tokio::test]
+async fn spec_f126_an_empty_intersection_is_no_suggestion() {
+    // Two projects with no shared game version: the honest answer is "none",
+    // not the newest row of either project.
+    let fixture = Fixture::new();
+    let a_sha = fixture.write("a.jar", b"a");
+    let b_sha = fixture.write("b.jar", b"b");
+    fixture.lock(vec![
+        entry("a.jar", "alpha", "a-v1", &a_sha),
+        entry("b.jar", "beta", "b-v1", &b_sha),
+    ]);
+
+    let provider = FakeProvider::new()
+        .with(
+            project("alpha", "Alpha"),
+            vec![version(
+                "alpha",
+                "a-v1",
+                "1.0",
+                "a.jar",
+                &a_sha,
+                &["1.21", "1.20.1"],
+                &["fabric"],
+            )],
+        )
+        .with(
+            project("beta", "Beta"),
+            vec![version(
+                "beta",
+                "b-v1",
+                "1.0",
+                "b.jar",
+                &b_sha,
+                &["1.19.4"],
+                &["fabric"],
+            )],
+        );
+
+    let plan = fixture.plan(&provider).await;
+    let common = plan.common.expect("common target");
+    assert_eq!(common.suggested, None);
+    assert!(common.common_versions.is_empty());
+    assert!(common.skipped.is_empty(), "both projects answered");
+    assert_eq!(common.checked, 2);
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|warning| warning.code() == "noCommonTarget"),
+        "an empty intersection is reported, not silent: {:?}",
+        plan.warnings
+    );
+    // The advisory may still name the least-blocked newer target; it must
+    // never fill the strict suggestion.
+    if let Some(upgrade) = common.best_upgrade {
+        assert!(!upgrade.target.is_empty());
+        assert!(!upgrade.blockers.is_empty());
+    }
 }
 
 // --- F-127: cleanup keeps unknowns ----------------------------------------
@@ -745,6 +878,61 @@ async fn spec_f131_a_disabled_file_still_satisfies_its_lock_entry() {
     assert!(row(&plan, "beta").file_present);
     assert!(plan.prune_candidates.is_empty());
     assert!(plan.cleanup.kept_unknown.is_empty());
+}
+
+#[tokio::test]
+async fn spec_f131_a_jar_in_a_subfolder_still_satisfies_its_record() {
+    // Presence is recursive for cleanup: moving a jar into `mods/<sub>/` is
+    // still having the file, so its record is not absent.
+    let fixture = Fixture::new();
+    let sha = fixture.write("nested/a.jar", b"a");
+    fixture.lock(vec![entry("a.jar", "alpha", "a-v1", &sha)]);
+
+    let provider = FakeProvider::new().with(
+        project("alpha", "Alpha"),
+        vec![version(
+            "alpha",
+            "a-v2",
+            "2.0",
+            "a-2.jar",
+            "aa22",
+            &["1.21"],
+            &["fabric"],
+        )],
+    );
+
+    let plan = fixture.plan(&provider).await;
+    assert!(row(&plan, "alpha").file_present);
+    assert!(
+        plan.prune_candidates.is_empty(),
+        "a record whose jar sits in a subfolder is not missing"
+    );
+}
+
+#[tokio::test]
+async fn spec_f131_a_reenabled_file_still_satisfies_a_disabled_record() {
+    // The record says `x.jar.disabled`; the user re-enabled it to `x.jar`.
+    // The lock entry and the file are the same artifact (F-067).
+    let fixture = Fixture::new();
+    fixture.write("b.jar", b"b");
+    fixture.lock(vec![entry("b.jar.disabled", "beta", "b-v1", "")]);
+
+    let provider = FakeProvider::new().with(
+        project("beta", "Beta"),
+        vec![version(
+            "beta",
+            "b-v2",
+            "2.0",
+            "b-2.jar",
+            "bb22",
+            &["1.21"],
+            &["fabric"],
+        )],
+    );
+
+    let plan = fixture.plan(&provider).await;
+    assert!(row(&plan, "beta").file_present);
+    assert!(plan.prune_candidates.is_empty());
 }
 
 // --- F-132: the per-run cache ---------------------------------------------

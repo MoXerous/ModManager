@@ -6,7 +6,8 @@
 //! [`PruneConfirmation`] that only a plan can mint. The execute step re-reads
 //! the lock and re-scans the folder, so a file that came back between the plan
 //! and the confirm keeps its entry (`lessons.md` §4.3: absence is a result, not
-//! an error - and presence is a veto).
+//! an error - and presence is a veto); a record that only became absent after
+//! the dry run is refused, because the user never saw it.
 //!
 //! Only metadata is touched. No `.jar` is renamed, moved or deleted, and an
 //! entry is a candidate only when NO file on disk satisfies it (F-131). A file
@@ -17,7 +18,7 @@ use std::path::Path;
 use crate::instances::lock::{
     read_lock, write_lock, LockEntry, LockError, LockFile, LOCK_FILE_NAME,
 };
-use crate::instances::{scan_mods, Instance, LocalContentFact};
+use crate::instances::{scan_mods_recursive, Instance, LocalContentFact};
 
 use super::target::entry_is_present;
 
@@ -39,7 +40,12 @@ pub struct PrunePlan {
     pub dry_run: bool,
     pub present_files: usize,
     pub lock_entries: usize,
+    /// The confirming token: the lock's bytes **and** the candidate names, so
+    /// a fresh plan that would remove a record the user never saw cannot
+    /// produce the same token.
     digest: String,
+    /// The lock bytes alone, compared again immediately before the write.
+    lock_digest: String,
 }
 
 impl PrunePlan {
@@ -47,8 +53,8 @@ impl PrunePlan {
         self.candidates.is_empty()
     }
 
-    /// The token a confirm carries back; it is a hash of the lock's bytes, not
-    /// the bytes themselves.
+    /// The token a confirm carries back; it is a hash of the lock's bytes and
+    /// the previewed candidate names, not the bytes themselves.
     pub fn digest(&self) -> &str {
         &self.digest
     }
@@ -56,7 +62,7 @@ impl PrunePlan {
     /// Consumes the dry run. There is no other constructor.
     pub fn confirm(self) -> PruneConfirmation {
         PruneConfirmation {
-            digest: self.digest,
+            lock_digest: self.lock_digest,
             filenames: self
                 .candidates
                 .into_iter()
@@ -70,7 +76,7 @@ impl PrunePlan {
 /// public constructor: it comes from [`PrunePlan::confirm`] and nowhere else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PruneConfirmation {
-    digest: String,
+    lock_digest: String,
     filenames: Vec<String>,
 }
 
@@ -110,21 +116,26 @@ pub fn plan_prune(instance_root: &Path) -> Result<PrunePlan, PruneError> {
         Err(error) => return Err(LockError::Io(error).into()),
     };
     let facts = scan_facts(instance_root);
+    let candidates = candidates_for(&lock.entries, &facts);
+    let lock_digest = lock_bytes_digest(&bytes);
+    let digest = plan_digest(&bytes, &candidates);
     Ok(PrunePlan {
-        candidates: candidates_for(&lock.entries, &facts),
+        candidates,
         dry_run: true,
         present_files: facts.len(),
         lock_entries: lock.entries.len(),
-        digest: lock_digest(&bytes),
+        digest,
+        lock_digest,
     })
 }
 
 /// Remove the confirmed entries, but only those whose file is STILL absent.
 ///
 /// A candidate whose file reappeared is kept and named in
-/// [`PruneReport::kept_present`]. The write happens only when at least one
-/// entry really goes, and it is the same atomic lock writer every other
-/// mutation uses.
+/// [`PruneReport::kept_present`]. A record that became a candidate **after**
+/// the dry run is a different case: removing it would delete a record the user
+/// never reviewed, so the whole confirm is refused with
+/// [`PruneError::LockChanged`] and nothing is written.
 pub fn execute_prune(
     instance_root: &Path,
     confirmation: PruneConfirmation,
@@ -142,7 +153,7 @@ pub fn execute_prune(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(LockError::Io(error).into()),
     };
-    if lock_digest(&bytes) != confirmation.digest {
+    if lock_bytes_digest(&bytes) != confirmation.lock_digest {
         return Err(PruneError::LockChanged);
     }
 
@@ -152,6 +163,17 @@ pub fn execute_prune(
         .iter()
         .map(|name| name.trim().to_lowercase())
         .collect();
+
+    // The veto that binds the write to what the user saw: a file that went
+    // missing since the dry run made its record a candidate now, and the user
+    // never approved that removal. Presence coming back is the other
+    // direction and is handled below by keeping the record.
+    let unseen = candidates_for(&lock.entries, &facts)
+        .into_iter()
+        .any(|candidate| !confirmed.contains(&candidate.filename.trim().to_lowercase()));
+    if unseen {
+        return Err(PruneError::LockChanged);
+    }
 
     let before = lock.entries.len();
     let mut kept: Vec<LockEntry> = Vec::with_capacity(before);
@@ -171,6 +193,20 @@ pub fn execute_prune(
     }
 
     if !removed.is_empty() {
+        // The scan above takes time; another writer may have touched the lock
+        // while it ran. Compare once more, immediately before the write, and
+        // abort with nothing removed rather than overwrite that change. A lock
+        // that vanished altogether is a change too.
+        let latest = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(PruneError::LockChanged)
+            }
+            Err(error) => return Err(LockError::Io(error).into()),
+        };
+        if lock_bytes_digest(&latest) != confirmation.lock_digest {
+            return Err(PruneError::LockChanged);
+        }
         write_lock(
             &path,
             &LockFile {
@@ -188,24 +224,40 @@ pub fn execute_prune(
 }
 
 /// The scan the whole slice shares: the instance root is the Minecraft root
-/// here, the same shape `scan_instance` uses.
+/// here, the same shape `scan_instance` uses. Recursive on purpose (F-131): a
+/// jar under `mods/<sub>/` is present, so its record is not a prune candidate.
 fn scan_facts(instance_root: &Path) -> Vec<LocalContentFact> {
-    scan_mods(&Instance {
+    scan_mods_recursive(&Instance {
         root: instance_root.to_path_buf(),
         minecraft_root: instance_root.to_path_buf(),
     })
 }
 
-/// The digest a confirm carries: the exact bytes the plan read.
-pub(crate) fn lock_digest(bytes: &[u8]) -> String {
+/// The token a confirm carries: the exact lock bytes plus the names the user
+/// previewed. Two plans that would remove different records never share it.
+fn plan_digest(bytes: &[u8], candidates: &[PruneCandidate]) -> String {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(bytes);
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    for candidate in candidates {
+        // The separator keeps ("a.jar", "b.jar") distinct from one name that
+        // happens to spell both.
+        hasher.update([0u8]);
+        hasher.update(candidate.filename.trim().to_lowercase().as_bytes());
+    }
+    hex(&hasher.finalize())
+}
+
+/// The lock bytes alone, the token that says "the lock did not move".
+fn lock_bytes_digest(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    hex(&hasher.finalize())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// A recordable entry: the same files the update check and the planner judge.

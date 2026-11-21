@@ -1038,7 +1038,9 @@ pub struct PrunePlanRequest {
     pub instance_root: String,
 }
 
-/// The mandatory dry run of F-130. `digest` is the confirming token.
+/// The mandatory dry run of F-130. `digest` is the confirming token; it covers
+/// the lock's bytes and the candidate names, so a plan that would remove a
+/// different set of records cannot reuse it.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

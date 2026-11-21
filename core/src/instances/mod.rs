@@ -161,6 +161,50 @@ pub fn iter_local_mod_scan_files(folder: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// How deep the cleanup scan follows folders. A mod folder is normally flat;
+/// the bound is what keeps a self-referencing tree from hanging the scan.
+const RECURSIVE_SCAN_MAX_DEPTH: usize = 8;
+
+/// Recursive scan files, for the cleanup path only (F-131).
+///
+/// The content listing stays non-recursive (F-101): a jar filed in a subfolder
+/// is not a top-level mod. But "is the file the lock records still here?" is a
+/// different question, and moving a jar into `mods/<sub>/` does not make it
+/// absent. Symlinks and junctions are never followed, so a linked tree can
+/// neither hide a file nor loop the walk.
+fn iter_local_mod_scan_files_recursive(folder: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut stack: Vec<(PathBuf, usize)> = vec![(folder.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                if depth < RECURSIVE_SCAN_MAX_DEPTH {
+                    stack.push((path, depth + 1));
+                }
+            } else if kind.is_file() || (kind.is_symlink() && path.is_file()) {
+                // A linked file still satisfies a record (the non-recursive
+                // scan followed files too); a linked folder is never walked.
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) => name,
+                    None => continue,
+                };
+                if scan_accepted(name) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out.sort_by_key(|p| p.to_string_lossy().to_lowercase());
+    out
+}
+
 fn has_launcher_metadata(dir: &Path) -> bool {
     ["mmc-pack.json", "instance.cfg", "modrinth.index.json"]
         .iter()
@@ -222,7 +266,21 @@ fn hex_of(bytes: impl AsRef<[u8]>) -> String {
 /// Read-only mod scan: facts only, no writes, no moves.
 pub fn scan_mods(instance: &Instance) -> Vec<LocalContentFact> {
     let folder = instance.minecraft_root.join("mods");
-    iter_local_mod_scan_files(&folder)
+    let files = iter_local_mod_scan_files(&folder);
+    facts_for_files(&folder, files)
+}
+
+/// Recursive counterpart of [`scan_mods`] for the cleanup path only (F-131):
+/// a lock record must not look absent because its jar sits in a subfolder,
+/// while the content listing keeps the non-recursive shape F-101 specifies.
+pub fn scan_mods_recursive(instance: &Instance) -> Vec<LocalContentFact> {
+    let folder = instance.minecraft_root.join("mods");
+    let files = iter_local_mod_scan_files_recursive(&folder);
+    facts_for_files(&folder, files)
+}
+
+fn facts_for_files(folder: &Path, files: Vec<PathBuf>) -> Vec<LocalContentFact> {
+    files
         .into_iter()
         .map(|p| {
             let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -232,7 +290,7 @@ pub fn scan_mods(instance: &Instance) -> Vec<LocalContentFact> {
                 .unwrap_or("")
                 .to_string();
             let rel_path = p
-                .strip_prefix(&folder)
+                .strip_prefix(folder)
                 .map(relative_display)
                 .unwrap_or_else(|_| filename.clone());
             let mut fact = LocalContentFact::new(

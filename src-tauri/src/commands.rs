@@ -1569,6 +1569,8 @@ pub(crate) mod operations_tests;
 #[cfg(test)]
 pub(crate) mod pack_tests;
 #[cfg(test)]
+pub(crate) mod target_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
 pub(crate) mod updates_tests;

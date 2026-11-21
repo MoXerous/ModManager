@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { TFunction } from 'i18next';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 
 import type { IpcError } from '../../bindings/IpcError';
 import type { PrunePlanDto } from '../../bindings/PrunePlanDto';
@@ -136,12 +136,26 @@ function CommonTarget({ plan }: { plan: TargetPlanDto }) {
           })}
         </p>
       )}
-      {common.skipped.length > 0 && (
+      {common.commonVersions.length > 0 && (
         <p className="mt-0.5">
-          {t('details.target.common.skipped', {
-            titles: common.skipped.map((skip) => skip.title).join(', '),
-          })}
+          <Trans
+            i18nKey="details.target.common.versions"
+            values={{ versions: common.commonVersions.join(', ') }}
+            components={{ token: <bdi dir="ltr" className="font-mono" /> }}
+          />
         </p>
+      )}
+      {common.skipped.length > 0 && (
+        <ul className="mt-0.5">
+          {common.skipped.map((skip) => (
+            <li key={skip.projectId}>
+              {t('details.target.common.skippedReason', {
+                title: skip.title,
+                reason: t(`details.target.common.skipReason.${skip.reason}`),
+              })}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -310,13 +324,18 @@ export function InstanceTargetPlanner({ root, gameVersion, loader, provider, onC
   const [error, setError] = useState<IpcError | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // `any` and `unknown` are sentinels, not loaders: a plan against them would
-  // have to guess, and core refuses rather than guessing.
+  // `any` and `unknown` are sentinels, not a Minecraft version or a loader: a
+  // plan against them would have to guess, and core refuses rather than
+  // guessing.
+  const targetGame = gameVersion.trim().toLowerCase();
+  const targetLoader = loader.trim().toLowerCase();
   const concrete =
-    gameVersion.trim() !== '' &&
-    loader.trim() !== '' &&
-    loader !== 'any' &&
-    loader !== 'unknown';
+    targetGame !== '' &&
+    targetGame !== 'any' &&
+    targetGame !== 'unknown' &&
+    targetLoader !== '' &&
+    targetLoader !== 'any' &&
+    targetLoader !== 'unknown';
 
   const request = () => {
     if (!concrete) {
@@ -370,7 +389,15 @@ export function InstanceTargetPlanner({ root, gameVersion, loader, provider, onC
           <Cleanup plan={plan} />
         </div>
       )}
-      <PruneSection root={root} onChanged={onChanged} />
+      <PruneSection
+        root={root}
+        onChanged={() => {
+          // The prune removed lock records: a plan (and its cleanup counts)
+          // computed from the old lock is stale, not just the scan behind it.
+          setPlan(null);
+          onChanged();
+        }}
+      />
     </div>
   );
 }

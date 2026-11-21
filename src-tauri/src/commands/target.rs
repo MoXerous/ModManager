@@ -76,7 +76,9 @@ pub async fn preview_lock_prune(req: PrunePlanRequest) -> Result<PrunePlanDto, I
 
 /// F-130: remove only the confirmed entries whose file is still absent. The
 /// plan is rebuilt here and must match `expected_digest`; a plan body from the
-/// webview is never trusted.
+/// webview is never trusted. The digest covers the lock's bytes AND the
+/// previewed candidate names, so a fresh plan that would remove a record the
+/// user never saw cannot pass.
 #[tauri::command]
 pub async fn execute_lock_prune(
     state: tauri::State<'_, AppState>,
@@ -85,18 +87,25 @@ pub async fn execute_lock_prune(
     let root = super::resolve_dir(&req.instance_root)?;
     // The lock is the app's own write: the watcher must not read it as staleness.
     state.note_own_write(&root);
-    tauri::async_runtime::spawn_blocking(move || {
-        let plan = mm_core::updates::prune::plan_prune(&root).map_err(prune_error)?;
-        if plan.digest() != req.expected_digest {
-            return Err(IpcError::new(
-                crate::dto::ErrorCode::UpdateContextChanged,
-                "the instance lock changed since the dry run",
-            ));
-        }
-        mm_core::updates::prune::execute_prune(&root, plan.confirm())
-            .map(Into::into)
-            .map_err(prune_error)
-    })
-    .await
-    .map_err(IpcError::internal)?
+    tauri::async_runtime::spawn_blocking(move || execute_lock_prune_at(&root, &req))
+        .await
+        .map_err(IpcError::internal)?
+}
+
+/// The body of [`execute_lock_prune`] with the folder already resolved, so the
+/// token check is testable without a WebView.
+pub(crate) fn execute_lock_prune_at(
+    root: &std::path::Path,
+    req: &ExecutePruneRequest,
+) -> Result<PruneReportDto, IpcError> {
+    let plan = mm_core::updates::prune::plan_prune(root).map_err(prune_error)?;
+    if plan.digest() != req.expected_digest {
+        return Err(IpcError::new(
+            crate::dto::ErrorCode::UpdateContextChanged,
+            "the instance lock changed since the dry run",
+        ));
+    }
+    mm_core::updates::prune::execute_prune(root, plan.confirm())
+        .map(Into::into)
+        .map_err(prune_error)
 }

@@ -36,7 +36,11 @@ impl Fixture {
     }
 
     fn write(&self, name: &str, bytes: &[u8]) {
-        std::fs::write(self.mods.join(name), bytes).expect("file");
+        let path = self.mods.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent dir");
+        }
+        std::fs::write(path, bytes).expect("file");
     }
 
     fn lock(&self, entries: Vec<LockEntry>) {
@@ -137,6 +141,43 @@ fn spec_f130_prune_keeps_an_entry_whose_file_reappeared() {
 }
 
 #[test]
+fn spec_f130_prune_with_no_candidates_writes_nothing() {
+    let fixture = Fixture::new();
+    fixture.write("a.jar", b"a");
+    fixture.lock(vec![entry("a.jar", "alpha")]);
+    let before = fixture.lock_bytes();
+
+    let plan = plan_prune(&fixture.root).expect("plan");
+    assert!(plan.is_empty());
+    let report = execute_prune(&fixture.root, plan.confirm()).expect("execute");
+
+    assert!(report.removed.is_empty());
+    assert_eq!(
+        fixture.lock_bytes(),
+        before,
+        "an empty prune must not rewrite the lock"
+    );
+}
+
+#[test]
+fn spec_f130_execute_refuses_a_record_the_dry_run_never_showed() {
+    // Between the preview and the confirm a file vanished. The fresh plan now
+    // has a candidate the user never saw; removing it would delete a record
+    // outside the reviewed set.
+    let fixture = Fixture::new();
+    fixture.write("a.jar", b"a");
+    fixture.write("b.jar", b"b");
+    fixture.lock(vec![entry("a.jar", "alpha"), entry("b.jar", "beta")]);
+    let plan = plan_prune(&fixture.root).expect("plan");
+    assert!(plan.candidates.is_empty(), "both files are still present");
+
+    std::fs::remove_file(fixture.mods.join("b.jar")).expect("remove b.jar");
+    let error = execute_prune(&fixture.root, plan.confirm()).expect_err("must refuse");
+    assert!(matches!(error, PruneError::LockChanged));
+    assert_eq!(fixture.entries().len(), 2, "nothing was removed");
+}
+
+#[test]
 fn spec_f130_prune_refuses_a_lock_that_moved_since_the_dry_run() {
     let fixture = Fixture::new();
     fixture.write("a.jar", b"a");
@@ -170,6 +211,19 @@ fn spec_f131_prune_never_names_an_unknown_present_file() {
     let report = execute_prune(&fixture.root, plan.confirm()).expect("execute");
     assert!(report.removed.is_empty());
     assert!(fixture.mods.join("hand-installed.jar").is_file());
+}
+
+#[test]
+fn spec_f131_prune_keeps_a_record_whose_jar_moved_into_a_subfolder() {
+    let fixture = Fixture::new();
+    fixture.write("sub/b.jar", b"b");
+    fixture.lock(vec![entry("b.jar", "beta")]);
+
+    let plan = plan_prune(&fixture.root).expect("plan");
+    assert!(
+        plan.candidates.is_empty(),
+        "a jar under mods/<sub>/ is still present"
+    );
 }
 
 #[test]

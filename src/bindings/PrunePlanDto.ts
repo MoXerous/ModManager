@@ -2,6 +2,8 @@
 import type { PruneCandidateDto } from "./PruneCandidateDto";
 
 /**
- * The mandatory dry run of F-130. `digest` is the confirming token.
+ * The mandatory dry run of F-130. `digest` is the confirming token; it covers
+ * the lock's bytes and the candidate names, so a plan that would remove a
+ * different set of records cannot reuse it.
  */
 export type PrunePlanDto = { candidates: Array<PruneCandidateDto>, dryRun: boolean, presentFiles: number, lockEntries: number, digest: string, };

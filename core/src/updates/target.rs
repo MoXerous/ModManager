@@ -33,7 +33,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 use crate::instances::lock::{read_lock, LockEntry, LockError, LOCK_FILE_NAME};
-use crate::instances::{scan_mods, Instance, LocalContentFact};
+use crate::instances::{scan_mods_recursive, Instance, LocalContentFact};
 use crate::providers::{Project, Provider, ProviderError, Version};
 use crate::resolver::cache::RunCache;
 use crate::resolver::graph::{
@@ -74,14 +74,21 @@ impl TargetRequest {
         }
     }
 
+    /// A concrete target is a real Minecraft version and a real loader. The
+    /// two sentinels the app itself uses for "no filter" and "could not
+    /// detect" are neither: a plan against them would have to guess.
     fn is_concrete(&self) -> bool {
-        !self.game_version.is_empty()
-            && !self.loader.is_empty()
-            && !self.loader.eq_ignore_ascii_case("any")
-            && !self
-                .loader
-                .eq_ignore_ascii_case(crate::db::instances::UNKNOWN)
+        !is_sentinel(&self.game_version) && !is_sentinel(&self.loader)
     }
+}
+
+/// `any` is the old app's "no filter", `unknown` this app's "could not
+/// detect"; an empty string is a value that was never filled.
+fn is_sentinel(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty()
+        || value.eq_ignore_ascii_case("any")
+        || value.eq_ignore_ascii_case(crate::db::instances::UNKNOWN)
 }
 
 /// The one label the row shows (F-125), plus the reason code for its tooltip.
@@ -301,7 +308,7 @@ pub async fn plan_targets_with_cache(
         }
     };
 
-    let facts = scan_mods(&Instance {
+    let facts = scan_mods_recursive(&Instance {
         root: instance_root.to_path_buf(),
         minecraft_root: instance_root.to_path_buf(),
     });
@@ -746,17 +753,22 @@ fn version_sort_key(version: &str) -> (u8, [u64; 4], String) {
 
 /// The lock entry a present file satisfies. Disabled spellings still count:
 /// `a.jar.disabled` and `disabled_mods/a.jar` are the same recorded file
-/// (F-067), and calling them missing would prune live metadata.
+/// (F-067), and a record written for one spelling must still be satisfied
+/// after a toggle changes it — calling that missing would prune live metadata.
 pub(crate) fn entry_is_present(entry: &LockEntry, facts: &[LocalContentFact]) -> bool {
     let recorded = entry.filename.trim().to_lowercase();
+    let recorded_base = base_name(&recorded);
     facts.iter().any(|fact| {
         let disk = fact.filename.trim().to_lowercase();
-        disk == recorded
-            || disk
-                .strip_suffix(".disabled")
-                .is_some_and(|base| base == recorded)
+        base_name(&disk) == recorded_base
             || (!entry.sha1.trim().is_empty() && fact.sha1.eq_ignore_ascii_case(entry.sha1.trim()))
     })
+}
+
+/// The name without a `.disabled` suffix: the same artifact on either side of
+/// a toggle.
+fn base_name(name: &str) -> &str {
+    name.strip_suffix(".disabled").unwrap_or(name)
 }
 
 /// Present files no lock entry claims. Order follows the scan (casefolded), so
