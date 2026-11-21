@@ -4,7 +4,7 @@
 
 **Goal:** إنتاج تدقيقٍ شامل يُعيد إثبات كل سلوك/بيانات/واجهة/أمان/أداء/تغليف/تبعية/اختبار في المشروع الجديد مقابل القديم عند `4f71f18`، وتسليم تقرير `findings` مرتّب بالخطورة بلا إصلاحات داخل الشريحة.
 
-**Architecture:** دفترٌ واحد `docs/spec/audit-ledger.json` يتغذّى من أربعة مسارات متوازية (`ws1..ws4.json`)، ثم مراجعةٌ عدائية، ثم مولّدٌ حتمي `scripts/build-audit-report.mjs` يُنتج `audit-findings.md`. لا تُلمس مصادر التطبيق ولا المشروع القديم. الفحصُ الآلي يتحقّق من اكتمال الدفتر وحداثة المخرَج فقط، لا من غيابFinding.
+**Architecture:** دفترٌ واحد `docs/spec/audit-ledger.json` يتغذّى من أربعة مسارات **تسلسلية** (`ws1..ws4.json`، قرار المستخدم 2026-11-21 تغليبًا لقاعدة SDD)، ثم مراجعةٌ عدائية، ثم مولّدٌ حتمي `scripts/build-audit-report.mjs` يُنتج `audit-findings.md`. لا تُلمس مصادر التطبيق ولا المشروع القديم. الفحصُ الآلي يتحقّق من اكتمال الدفتر وحداثة المخرَج فقط، لا من غيابFinding.
 
 **Tech Stack:** Node 22+ (ESM، `node:fs`/`node:assert`/`node:child_process`) · pnpm scripts · deepseek subagents · OpenCode embedded browser ·لا تبعيات جديدة.
 
@@ -388,10 +388,20 @@ Commit: `git add .opencode/analyses/audit/prompts/ws1-brief.md .opencode/analyse
 **Files:**
 - Create: `.opencode/analyses/audit/prompts/ws2-brief.md`
 - Create: `.opencode/analyses/audit/ws2.json`
+- Create/Delete: `preview-mock.html` (مؤقت، يُحذف قبل الالتزام)
 
 **Interfaces:**
 - Consumes: `audit-inventory.json` (ui=24، i18n=4، safety=10، performance=6) = 44 وحدة.
 - Produces: `ws2.json` + لقطات تحت `.opencode/analyses/audit/shots/`.
+
+- [ ] **Step 0: جهّز محفّح المتصفّح** (قرار المستخدم 2026-11-21):
+
+```bash
+cd E:\ModManager
+cp .opencode/analyses/browser-preview.html preview-mock.html
+# شغّل pnpm dev في الخلفية إن لم يكن المنفذ 1420 مستمعًا؛ ثم افتح http://localhost:1420/preview-mock.html
+```
+ملف `preview-mock.html` **مؤقت** ويُحذف قبل الالتزام؛ المحفّح الدائم هو `.opencode/analyses/browser-preview.html`. إن احتاج WS2 بياناتًا إضافية (مثل `validate_instance`) يُضاف إلى المحفّح الدائم أولًا ثم يُنسخ.
 
 - [ ] **Step 1: اكتب موجز الوكيل**:
 
@@ -428,9 +438,14 @@ node -e "const j=require('./.opencode/analyses/audit/ws2.json');if(j.units.lengt
 ```
 Expected: `ws2 ok: 44 browser: 28`.
 
-- [ ] **Step 4: اجمع**
+- [ ] **Step 4: احذف المحفّح المؤقت واجمع**
 
-Commit: `git add .opencode/analyses/audit/prompts/ws2-brief.md .opencode/analyses/audit/ws2.json .opencode/analyses/audit/shots && git commit -m "audit(ws2): verify UI in the embedded browser, plus safety and performance"`
+```bash
+rm -f preview-mock.html
+git add .opencode/analyses/audit/prompts/ws2-brief.md .opencode/analyses/audit/ws2.json .opencode/analyses/audit/shots
+git commit -m "audit(ws2): verify UI in the embedded browser, plus safety and performance"
+```
+Expected: `git status` نظيف، ولا `preview-mock.html` في الالتزام.
 
 ---
 
