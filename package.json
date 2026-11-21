@@ -11,6 +11,9 @@
         "i18n:check": "node scripts/check-i18n.mjs",
         "feature-parity": "node scripts/build-feature-parity.mjs",
         "feature-parity:check": "node scripts/build-feature-parity.mjs --check",
+        "audit:report": "node scripts/build-audit-report.mjs",
+        "audit:check": "node scripts/build-audit-report.mjs --check",
+        "audit:test": "node scripts/test-audit-report.mjs",
         "tauri": "tauri"
     },
     "dependencies": {
