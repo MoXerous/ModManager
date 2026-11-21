@@ -437,7 +437,7 @@ cp .opencode/analyses/browser-preview.html preview-mock.html
 - 7 وحدات performance (`B-1..B-7`) من docs/spec/performance-budgets.md: throttle التقدّم، التمرير الافتراضي، الإلغاء، الذاكرة، زمن الفحص، حجم الحزمة.
 
 ## إلزام المتصفّح
-لكل واجهة (24 + i18n): افتح http://localhost:1420/preview-mock.html في تبويب المتصفّح المدمج، ثم snapshot وconsole(level=error) وscreenshot.
+لكل واجهة (26 + i18n): افتح http://localhost:1420/preview-mock.html في تبويب المتصفّح المدمج، ثم snapshot وconsole(level=error) وscreenshot.
 - method=browser وevidence يجب أن يحتوي كلمة console ونتيجة الفحص (مثال: "console: 0 errors; raw keys: none").
 - احفظ اللقطة في .opencode/analyses/audit/shots/<id>.jpeg واذكر مسارها في evidence.
 - أي مفتاح خام أو خطأ console ⇒ undocumented-deviation بseverity high على الأقل.
