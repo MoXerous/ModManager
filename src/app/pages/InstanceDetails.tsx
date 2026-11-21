@@ -28,6 +28,7 @@ import { type ProviderId, PROVIDERS, getGameTarget } from '../gameTarget';
 import { afterRescan, isForInstance, markStale, type StalenessState } from '../instances/staleness';
 import { InstanceBackup } from './InstanceBackup';
 import { InstanceExport } from './InstanceExport';
+import { InstanceTargetPlanner } from './InstanceTargetPlanner';
 import { RemoveDialog } from './RemoveDialog';
 import { UpdateInstallDialog } from './UpdateInstallDialog';
 
@@ -505,6 +506,17 @@ export function InstanceDetails({ root, instanceName, gameVersion, loader, onCha
         )}
         {updates && <UpdateResults preview={updates} onInstall={() => setInstallOpen(true)} />}
       </div>
+
+      {/* The target planner answers the other question: what this instance
+          becomes at another Minecraft version. It is separate from the update
+          check because the two answer differently even for the same file. */}
+      <InstanceTargetPlanner
+        root={root}
+        gameVersion={targetVersion}
+        loader={targetLoader}
+        provider={provider}
+        onChanged={onChanged}
+      />
 
       {/* The pack leaves the app, so it gets its own review card rather than a
           menu item: the preview is the only place the user sees what will and

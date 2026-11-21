@@ -182,6 +182,9 @@ pub fn run() -> i32 {
             commands::updates::preview_update_install,
             commands::updates::execute_update_install,
             commands::updates::execute_update_download_only,
+            commands::target::plan_target_versions,
+            commands::target::preview_lock_prune,
+            commands::target::execute_lock_prune,
             commands::watch::unwatch_instance_content,
         ])
         .build(tauri::generate_context!());

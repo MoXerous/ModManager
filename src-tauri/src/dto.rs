@@ -769,6 +769,330 @@ impl From<mm_core::updates::UpdatePreview> for UpdatePreviewDto {
     }
 }
 
+// --- target planner (F-125..F-127, F-130..F-132) --------------------------
+
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TargetPlanRequest {
+    pub instance_root: String,
+    pub provider: String,
+    pub game_version: String,
+    pub loader: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TargetStatusDto {
+    UpToDate,
+    Download,
+    SyncOnly,
+    Incompatible,
+    OtherProvider,
+    ProviderError,
+}
+
+impl From<mm_core::updates::target::TargetStatus> for TargetStatusDto {
+    fn from(status: mm_core::updates::target::TargetStatus) -> Self {
+        use mm_core::updates::target::TargetStatus as Core;
+        match status {
+            Core::UpToDate => Self::UpToDate,
+            Core::Download => Self::Download,
+            Core::SyncOnly => Self::SyncOnly,
+            Core::Incompatible => Self::Incompatible,
+            Core::OtherProvider => Self::OtherProvider,
+            Core::Error => Self::ProviderError,
+        }
+    }
+}
+
+/// One row of the eight-column table. `reason` and the file names are payload
+/// behind the columns, not columns of their own.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TargetRowDto {
+    pub title: String,
+    pub current_version: String,
+    pub target_version: String,
+    pub game_version: String,
+    pub loader: String,
+    pub download: bool,
+    pub sync: bool,
+    pub status: TargetStatusDto,
+    pub reason_code: String,
+    pub reason_detail: String,
+    pub provider: String,
+    pub project_id: String,
+    pub slug: String,
+    pub current_filename: String,
+    pub target_filename: String,
+    pub target_url: Option<String>,
+    #[ts(type = "number | null")]
+    pub target_size: Option<u64>,
+    pub target_sha1: Option<String>,
+    pub target_sha512: Option<String>,
+    pub file_present: bool,
+}
+
+impl From<mm_core::updates::target::TargetRow> for TargetRowDto {
+    fn from(row: mm_core::updates::target::TargetRow) -> Self {
+        Self {
+            title: row.title,
+            current_version: row.current_version,
+            target_version: row.target_version,
+            game_version: row.game_version,
+            loader: row.loader,
+            download: row.download,
+            sync: row.sync,
+            status: row.status.into(),
+            reason_code: row.reason.code.to_string(),
+            reason_detail: row.reason.detail,
+            provider: row.provider,
+            project_id: row.project_id,
+            slug: row.slug,
+            current_filename: row.current_filename,
+            target_filename: row.target_filename,
+            target_url: row.target_url,
+            target_size: row.target_size,
+            target_sha1: row.target_sha1,
+            target_sha512: row.target_sha512,
+            file_present: row.file_present,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct KeptUnknownFileDto {
+    pub rel_path: String,
+    pub filename: String,
+    pub sha1: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CleanupReportDto {
+    pub kept_unknown: Vec<KeptUnknownFileDto>,
+    pub recognized_incompatible: Vec<String>,
+    pub present_files: usize,
+    pub eligible_files: usize,
+}
+
+impl From<mm_core::updates::target::CleanupReport> for CleanupReportDto {
+    fn from(report: mm_core::updates::target::CleanupReport) -> Self {
+        Self {
+            kept_unknown: report
+                .kept_unknown
+                .into_iter()
+                .map(|kept| KeptUnknownFileDto {
+                    rel_path: kept.rel_path,
+                    filename: kept.filename,
+                    sha1: kept.sha1,
+                    reason: kept.reason.to_string(),
+                })
+                .collect(),
+            recognized_incompatible: report.recognized_incompatible,
+            present_files: report.present_files,
+            eligible_files: report.eligible_files,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CommonTargetSkipDto {
+    pub project_id: String,
+    pub title: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BestUpgradeDto {
+    pub target: String,
+    pub supported: usize,
+    pub total: usize,
+    pub blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CommonTargetDto {
+    pub suggested: Option<String>,
+    pub common_versions: Vec<String>,
+    pub loader: String,
+    pub checked: usize,
+    pub skipped: Vec<CommonTargetSkipDto>,
+    pub best_upgrade: Option<BestUpgradeDto>,
+}
+
+impl From<mm_core::updates::target::CommonTarget> for CommonTargetDto {
+    fn from(common: mm_core::updates::target::CommonTarget) -> Self {
+        Self {
+            suggested: common.suggested,
+            common_versions: common.common_versions,
+            loader: common.loader,
+            checked: common.checked,
+            skipped: common
+                .skipped
+                .into_iter()
+                .map(|skip| CommonTargetSkipDto {
+                    project_id: skip.project_id,
+                    title: skip.title,
+                    reason: skip.reason.to_string(),
+                })
+                .collect(),
+            best_upgrade: common.best_upgrade.map(|best| BestUpgradeDto {
+                target: best.target,
+                supported: best.supported,
+                total: best.total,
+                blockers: best.blockers,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TargetWarningDto {
+    pub code: String,
+    pub project_id: Option<String>,
+}
+
+impl From<mm_core::updates::target::TargetWarning> for TargetWarningDto {
+    fn from(warning: mm_core::updates::target::TargetWarning) -> Self {
+        let project_id = match &warning {
+            mm_core::updates::target::TargetWarning::ProviderFailure { project_id } => {
+                Some(project_id.clone())
+            }
+            _ => None,
+        };
+        Self {
+            code: warning.code().to_string(),
+            project_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PruneCandidateDto {
+    pub filename: String,
+    pub provider: String,
+    pub project_id: String,
+    pub version_id: String,
+}
+
+impl From<mm_core::updates::prune::PruneCandidate> for PruneCandidateDto {
+    fn from(candidate: mm_core::updates::prune::PruneCandidate) -> Self {
+        Self {
+            filename: candidate.filename,
+            provider: candidate.provider,
+            project_id: candidate.project_id,
+            version_id: candidate.version_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TargetPlanDto {
+    pub game_version: String,
+    pub loader: String,
+    pub rows: Vec<TargetRowDto>,
+    pub common: Option<CommonTargetDto>,
+    pub cleanup: CleanupReportDto,
+    pub prune_candidates: Vec<PruneCandidateDto>,
+    pub warnings: Vec<TargetWarningDto>,
+}
+
+impl From<mm_core::updates::target::TargetPlan> for TargetPlanDto {
+    fn from(plan: mm_core::updates::target::TargetPlan) -> Self {
+        Self {
+            game_version: plan.game_version,
+            loader: plan.loader,
+            rows: plan.rows.into_iter().map(Into::into).collect(),
+            common: plan.common.map(Into::into),
+            cleanup: plan.cleanup.into(),
+            prune_candidates: plan.prune_candidates.into_iter().map(Into::into).collect(),
+            warnings: plan.warnings.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrunePlanRequest {
+    pub instance_root: String,
+}
+
+/// The mandatory dry run of F-130. `digest` is the confirming token.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrunePlanDto {
+    pub candidates: Vec<PruneCandidateDto>,
+    pub dry_run: bool,
+    pub present_files: usize,
+    pub lock_entries: usize,
+    pub digest: String,
+}
+
+impl From<mm_core::updates::prune::PrunePlan> for PrunePlanDto {
+    fn from(plan: mm_core::updates::prune::PrunePlan) -> Self {
+        let digest = plan.digest().to_string();
+        Self {
+            candidates: plan.candidates.into_iter().map(Into::into).collect(),
+            dry_run: plan.dry_run,
+            present_files: plan.present_files,
+            lock_entries: plan.lock_entries,
+            digest,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExecutePruneRequest {
+    pub instance_root: String,
+    /// The digest the dry run returned. A different one is a moved lock.
+    pub expected_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PruneReportDto {
+    pub removed: Vec<String>,
+    pub kept_present: Vec<String>,
+    pub lock_entries_before: usize,
+    pub lock_entries_after: usize,
+}
+
+impl From<mm_core::updates::prune::PruneReport> for PruneReportDto {
+    fn from(report: mm_core::updates::prune::PruneReport) -> Self {
+        Self {
+            removed: report.removed,
+            kept_present: report.kept_present,
+            lock_entries_before: report.lock_entries_before,
+            lock_entries_after: report.lock_entries_after,
+        }
+    }
+}
+
 // --- applying updates (F-121..F-124) -------------------------------------
 
 /// One line of the confirmation copy. The UI renders `key` from its own

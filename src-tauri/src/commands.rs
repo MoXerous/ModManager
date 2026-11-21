@@ -36,6 +36,7 @@ pub mod operations;
 /// F-168: the content watcher bridge.
 pub mod watch;
 
+pub mod target;
 /// F-121..F-124: plan, confirm and apply updates.
 pub mod updates;
 use mm_core::journal::{JournalError, OperationKind, OperationRecord};
