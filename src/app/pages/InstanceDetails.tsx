@@ -136,7 +136,16 @@ function UpdateResults({
                   </span>
                 )}
                 <span className={`shrink-0 ${statusClass(c.status)}`}>
-                  {t(`details.updates.status.${c.status}`)}
+                  {t(
+                    `details.updates.status.${
+                      c.status === 'available' ||
+                      c.status === 'upToDate' ||
+                      c.status === 'unidentified' ||
+                      c.status === 'unsupported'
+                        ? c.status
+                        : 'unidentified'
+                    }`,
+                  )}
                 </span>
               </li>
             ))}
