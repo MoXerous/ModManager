@@ -35,7 +35,7 @@ const INFRA_PATH = /^\.github\/|^packaging\/|^\.cargo\//;
  * وهذا الملفُ نفسُه مستثنًى: أمثلتُه في التعليقات تحمل أرقامًا شبيهةً بالمعرّفات،
  * فلو سُوحِ به لكان دليلًا على نفسه.
  */
-const SELF_REFERENTIAL = /^docs\/spec\/|^docs\/todo\.md$|^docs\/baseline|^docs\/superpowers\/|^scripts\/build-parity-matrix\.mjs$/;
+const SELF_REFERENTIAL = /^docs\/spec\/|^docs\/todo\.md$|^docs\/baseline|^docs\/superpowers\/|^scripts\/build-parity-matrix\.mjs$|^\.opencode\/analyses\/audit\/|^\.superpowers\//;
 
 /** دور الملف في إثبات الأثر. */
 function role(rel) {
