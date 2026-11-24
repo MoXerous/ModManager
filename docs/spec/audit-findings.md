@@ -6,9 +6,9 @@
 ## الملخّص
 
 - إجمالي الوحدات: **276**
-- مطابق: 171
+- مطابق: 170
 - انحراف موثّق: 73
-- انحراف غير موثّق (findings): **25**
+- انحراف غير موثّق (findings): **26**
 - غير قابل للتحقّق: 7
 
 ## Findings (مرتّبة بالخطورة)
@@ -25,7 +25,7 @@
 
 - القديم: `app/services/safe_archive.py::_member_collision_key`
 - الجديد: `core/src/safety/inspect.rs::collision_key`
-- method: `test` · reviewer: `deepseek`
+- method: `code` · reviewer: `deepseek`
 - الانحراف: The old collision key is `name.rstrip("/").casefold()`; the new key strips one trailing slash, then applies to_lowercase(), then NFC. Rust to_lowercase is not full Unicode casefold, so names whose folding differs from lowercasing (for example the German sharp s folding to "ss", or the "fi" ligature) no longer collide with their expanded form. The source records this as a deliberate shortcut, but feature-parity.json does not, and features.md F-045 is Keep, so the reduced Unicode coverage is an undocumented deviation.
 - الدليل: Read app/services/safe_archive.py:188-189 (`_member_collision_key`) and 124-127 (duplicate detection through it). Read core/src/safety/inspect.rs:78-86: the function documents 'lowercase-then-NFC because lowercasing can denormalize' and carries a `shortcut:` comment that Rust to_lowercase is not full Unicode casefold and differs for sharp-s and the fi ligature. Test spec_f044_rejects_casefold_and_nfc_and_slash_collisions proves the case-collision case still fires ('a.TXT' vs 'A.txt' -> Duplicate); the casefold-only cases are the documented gap.
 
@@ -84,6 +84,14 @@
 - method: `code` · reviewer: `deepseek`
 - الانحراف: The old plan carried a list of issues, each with a stable machine code (manifest_blocker, unsafe_destination, destination_collision, sha1_invalid, sha512_invalid, file_size_invalid, download_url_missing, download_url_rejected, reserved_destination, source_invalid, target_exists, staging_exists, insufficient_disk, ... roughly two dozen in this module) plus severity and path, and the preview rendered them. The new plan DTO has no issue list at all: it carries counts and skip totals, and every index/archive refusal is mapped to one IpcError code (invalidInput) with the variant's Display text as the message. The user still sees a clear sentence, but the named codes and the per-issue preview are gone.
 - الدليل: Read app/services/mrpack_installer.py:67-72 (MrpackInstallIssue holds severity, code, message, path) and 155-165 (the plan exposes blockers/warnings/is_installable), plus the code strings at 242-359 and 1549-1700. Read src-tauri/src/commands/pack.rs:83-90 (`fn pack_error(e: &PackError) -> IpcError { IpcError::invalid_input(e) }` with a comment saying one code covers every archive refusal) and 269-318 (plan_dto builds name/version/writes/counts/skip counts only). Read src-tauri/src/dto.rs:1645-1676: ModpackPlanDto has no issues field.
+
+### A-0085 — medium — behavior (F-085)
+
+- القديم: `app/services/local_mod_metadata.py::_read_fabric_metadata`
+- الجديد: `core/src/jar_reader/mod.rs::parse_fabric`
+- method: `test` · reviewer: `deepseek`
+- الانحراف: The new clean_string (core/src/jar_reader/mod.rs:107-129) strips an embedded `${...}` span out of a field value, while the old `_read_fabric_metadata` reader (app/services/local_mod_metadata.py:166-178) only blanked a value that was entirely a placeholder. A partly interpolated value therefore keeps different text in the new app. The four fields and their caps are otherwise the same; feature-parity.json does not record this change.
+- الدليل: Read app/services/local_mod_metadata.py:166-178: fabric.mod.json is parsed as JSON and id/name/version/description become the record, loader is [fabric], and the minecraft entry of `depends` (string or list) becomes game_versions through `_clean_versions` (235-244: drop empty, `*`, duplicates, cap 8). Read core/src/jar_reader/mod.rs:256-272: the same four fields plus `depends.minecraft` through OneOrMany and clean_versions (132-145: same empty/`*`/dedupe/cap-8 rules), with the 1 MiB cap at 82-105. Test spec_f085_reads_fabric_metadata and spec_f085_versions_dedupe_and_cap_8. The new clean_string (107-129) also strips an embedded `${...}` span where the old one only blanked a value that was entirely a placeholder; the four fields and their caps are otherwise the same.
 
 ### A-0086 — medium — behavior (F-086)
 
@@ -217,7 +225,7 @@
 
 | البُعد | الوحدات | مطابق | موثّق | findings | غير مُتحقَّق |
 |---|---|---|---|---|---|
-| behavior | 181 | 113 | 49 | 19 | 0 |
+| behavior | 181 | 112 | 49 | 20 | 0 |
 | cli | 6 | 5 | 1 | 0 | 0 |
 | data | 12 | 10 | 2 | 0 | 0 |
 | deps | 4 | 3 | 1 | 0 | 0 |
@@ -327,7 +335,7 @@
 | A-0082 | behavior | F-082 | match | info |
 | A-0083 | behavior | F-083 | documented-deviation | low |
 | A-0084 | behavior | F-084 | documented-deviation | low |
-| A-0085 | behavior | F-085 | match | info |
+| A-0085 | behavior | F-085 | undocumented-deviation | medium |
 | A-0086 | behavior | F-086 | undocumented-deviation | medium |
 | A-0087 | behavior | F-087 | match | info |
 | A-0088 | behavior | F-088 | match | info |
@@ -437,7 +445,7 @@
 | A-0192 | data | — | match | info |
 | A-0193 | data | — | match | info |
 | A-0194 | ui | screens.md §3 #1 SettingsDialog | match | info |
-| A-0195 | ui | screens.md §3 #2 ActiveProfileSelectDialog | documented-deviation | medium |
+| A-0195 | ui | screens.md §3 #2 ActiveProfileSelectDialog | documented-deviation | low |
 | A-0196 | ui | screens.md §3 #3 DataPackWorldTargetDialog | documented-deviation | low |
 | A-0197 | ui | screens.md §3 #4 ProfileWorldsDialog | documented-deviation | low |
 | A-0198 | ui | screens.md §3 #5 DownloadReportDialog | undocumented-deviation | medium |

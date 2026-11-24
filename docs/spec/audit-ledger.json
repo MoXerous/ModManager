@@ -583,13 +583,13 @@
       "spec_id": "F-045",
       "old_ref": "app/services/safe_archive.py::_member_collision_key",
       "new_ref": "core/src/safety/inspect.rs::collision_key",
-      "method": "test",
+      "method": "code",
       "verdict": "undocumented-deviation",
       "severity": "medium",
       "deviation": "The old collision key is `name.rstrip(\"/\").casefold()`; the new key strips one trailing slash, then applies to_lowercase(), then NFC. Rust to_lowercase is not full Unicode casefold, so names whose folding differs from lowercasing (for example the German sharp s folding to \"ss\", or the \"fi\" ligature) no longer collide with their expanded form. The source records this as a deliberate shortcut, but feature-parity.json does not, and features.md F-045 is Keep, so the reduced Unicode coverage is an undocumented deviation.",
       "evidence": "Read app/services/safe_archive.py:188-189 (`_member_collision_key`) and 124-127 (duplicate detection through it). Read core/src/safety/inspect.rs:78-86: the function documents 'lowercase-then-NFC because lowercasing can denormalize' and carries a `shortcut:` comment that Rust to_lowercase is not full Unicode casefold and differs for sharp-s and the fi ligature. Test spec_f044_rejects_casefold_and_nfc_and_slash_collisions proves the case-collision case still fires ('a.TXT' vs 'A.txt' -> Duplicate); the casefold-only cases are the documented gap.",
       "reviewer": "deepseek",
-      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low and method=code: the cited test proves only the case-collision half, while the sharp-s/fi-ligature gap is code-level. Severity kept medium because the generator rejects low for undocumented-deviation; method left unchanged to avoid rewriting graded evidence."
+      "reviewNote": "Adversarial review: deviation confirmed. Reviewer proposed low and method=code: the cited test proves only the case-collision half, while the sharp-s/fi-ligature gap is code-level. Severity kept medium because the generator rejects low for undocumented-deviation; method changed from test to code to match the code-level evidence, consistent with A-0056."
     },
     {
       "id": "A-0046",
@@ -1086,7 +1086,7 @@
       "method": "code",
       "verdict": "documented-deviation",
       "severity": "low",
-      "deviation": "features.md marks CurseForge zip import/export as Keep and `new entirely`, because the old app never had it. The new app does not have it either: the export path writes only Modrinth `.mrpack`, and there is no CurseForge `manifest.json`/`modLoaders` reader or writer anywhere in core, the Tauri commands or the CLI. Nothing from the old app is lost (the old app had no such feature), but the Keep capability is still absent.",
+      "deviation": "features.md marks CurseForge zip import/export as Keep and `new entirely`, because the old app never had it. The new app does not have it either: the export path writes only Modrinth `.mrpack`, and there is no CurseForge `manifest.json`/`modLoaders` reader or writer anywhere in core, the Tauri commands or the CLI. Nothing from the old app is lost (the old app had no such feature); the absence is a documented scope decision, not an undocumented regression.",
       "evidence": "Read app/services/mrpack_service.py:350-437: the only exporter builds a Modrinth index and a zip containing just `modrinth.index.json`. Read core/src/modpack/export.rs:60-70, where the loader table comment says `(CurseForge arrives with its own zip format in F-083)`, and 851-892 (index_json/write_export_zip are Modrinth-only). Grepped core/src, src-tauri/src, cli/src and src for `curseforge` together with `zip|manifest.json|modLoaders`: the only hits are provider browsing, the F-015 file-page URL and an export test that reports a CurseForge lock entry as skipped (src-tauri/src/commands/export_tests.rs:428), not an archive importer/exporter.",
       "reviewer": "deepseek",
       "reviewNote": "Reclassified: decision-sheet.md:31 C-5 and :42 make CurseForge explicitly M3 with a user-supplied key and v1 Modrinth-only; features.md:140 marks F-083 'new entirely'. No old behavior was lost, so 'undocumented' was wrong."
@@ -1111,11 +1111,12 @@
       "old_ref": "app/services/local_mod_metadata.py::_read_fabric_metadata",
       "new_ref": "core/src/jar_reader/mod.rs::parse_fabric",
       "method": "test",
-      "verdict": "match",
-      "severity": "info",
-      "deviation": null,
+      "verdict": "undocumented-deviation",
+      "severity": "medium",
+      "deviation": "The new clean_string (core/src/jar_reader/mod.rs:107-129) strips an embedded `${...}` span out of a field value, while the old `_read_fabric_metadata` reader (app/services/local_mod_metadata.py:166-178) only blanked a value that was entirely a placeholder. A partly interpolated value therefore keeps different text in the new app. The four fields and their caps are otherwise the same; feature-parity.json does not record this change.",
       "evidence": "Read app/services/local_mod_metadata.py:166-178: fabric.mod.json is parsed as JSON and id/name/version/description become the record, loader is [fabric], and the minecraft entry of `depends` (string or list) becomes game_versions through `_clean_versions` (235-244: drop empty, `*`, duplicates, cap 8). Read core/src/jar_reader/mod.rs:256-272: the same four fields plus `depends.minecraft` through OneOrMany and clean_versions (132-145: same empty/`*`/dedupe/cap-8 rules), with the 1 MiB cap at 82-105. Test spec_f085_reads_fabric_metadata and spec_f085_versions_dedupe_and_cap_8. The new clean_string (107-129) also strips an embedded `${...}` span where the old one only blanked a value that was entirely a placeholder; the four fields and their caps are otherwise the same.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "False negative accepted: an embedded placeholder span is now stripped from a value the old reader kept (it blanked only wholly-placeholder values), the same class as A-0067/A-0086. Reviewer proposed low; severity kept medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0086",
@@ -1679,7 +1680,7 @@
       "method": "code",
       "verdict": "documented-deviation",
       "severity": "low",
-      "deviation": "The portable installed_mods.json manifest has no writer in the new app. Installs are recorded in the SQLite installed_mods table and in instance.lock.json, and the only code that names installed_mods.json is the backup group name and the read-only legacy scanner, so a profile folder no longer carries the machine-readable manifest the old app wrote beside profile.json.",
+      "deviation": "The portable installed_mods.json manifest has no writer in the new app. Installs are recorded in the SQLite installed_mods table and in instance.lock.json, and the only code that names installed_mods.json is the backup group name and the read-only legacy scanner, so a profile folder no longer carries the old JSON manifest beside profile.json. The replacement is documented: docs/adr/0007-profile-backup-and-restore.md:68 names instance.lock.json, and :70 treats the old file as an opaque legacy block (F-181).",
       "evidence": "Read app/services/installed_mods_manifest.py:14-18 (INSTALLED_MODS_FILENAME and the managed/external status values) and 137-152 (write_installed_mods_manifest writes the JSON file under the profile root), with app/services/profile_materialization.py:63-64 writing it on every create. Read core/src/instances/record.rs:1-53: recording an install writes the instance lock and the installed_mods table, and record_install is the entry point. Grepped src, core, src-tauri and cli for installed_mods.json: the hits are core/src/instances/backup/manifest.rs:58 (a backup group name), core/src/legacy/json.rs:1-15 and 145 (the read-only old-file reader) and src-tauri/src/commands/legacy_tests.rs fixtures; there is no writer.",
       "reviewer": "deepseek",
       "reviewNote": "Reclassified: docs/adr/0007-profile-backup-and-restore.md:68 explicitly names instance.lock.json as the replacement for installed_mods.json, and :70 treats the old file as an opaque legacy block (F-181). Claim of no machine-readable manifest was overstated."
@@ -2552,11 +2553,11 @@
       "new_ref": "src/app/pages/InstancesPage.tsx:149",
       "method": "browser",
       "verdict": "documented-deviation",
-      "severity": "medium",
-      "deviation": "The old app kept one active profile that every launch/install action read. The new app has no active-profile state at all: instances are independent rows and no screen or command selects an active one. No R-1..R-11 decision documents this removal.",
+      "severity": "low",
+      "deviation": "The old app kept one active profile that every launch/install action read. The new app has no active-profile state at all: instances are independent rows and no screen or command selects an active one. lessons.md:121-124 ('the rule for us') documents the replacement: an id in every mutation request instead of implicit active-profile context.",
       "evidence": "console: 0 errors; command palette searched for «ملف نشط» returned «لا شيء يطابق هذا البحث»; the palette lists only the six nav destinations; the instances page shows per-instance actions with no active marker; screenshot .opencode/analyses/audit/shots/A-0195.jpeg",
       "reviewer": "browser",
-      "reviewNote": "Reclassified: lessons.md:121-124 ('the rule for us') explicitly replaces the implicit active-profile context with an id in every mutation request. The deviation is real; the removal is documented outside R-1..R-11."
+      "reviewNote": "Reclassified: lessons.md:121-124 ('the rule for us') explicitly replaces the implicit active-profile context with an id in every mutation request. The deviation is real; the removal is documented outside R-1..R-11. Severity lowered to low for consistency with the other documented-deviation units A-0083/A-0128."
     },
     {
       "id": "A-0196",
