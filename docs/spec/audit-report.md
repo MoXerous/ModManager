@@ -1,6 +1,6 @@
 # التقرير الختامي للتدقيق الشامل — القديم ↔ الجديد
 
-> BASE: `4f71f18` · HEAD (طرف التوثيق): `c90c743` · الدفتر: 276 وحدة.
+> BASE: `4f71f18` · HEAD: راجِع سجلّ git لهذا الفرع (إسناد بيانات التدقيق في `headCommit` أدناه) · الدفتر: 276 وحدة.
 
 > المصادر: `docs/spec/audit-ledger.json` (الدفتر)، `docs/spec/audit-findings.md` (مولَّد حتمي)،
 > `.opencode/analyses/audit/audit-review.md` (المراجعة العدائية، 23 حقل `reviewNote`)،
