@@ -1,6 +1,6 @@
 # تقرير التدقيق الشامل — القديم ↔ الجديد
 
-> BASE: `4f71f18736c95a1eeb877fe8363f11871118c618` · HEAD: `7ebc828f0f6ff5640f862a31094c8be4f6f34d70`
+> BASE: `4f71f18736c95a1eeb877fe8363f11871118c618` · HEAD: `2fdfcdcc97dec6a7d652aa3fd38dbcb6fb9d0e9d`
 > مُولَّد من `docs/spec/audit-ledger.json` — لا تُعدِّله يدويًّا.
 
 ## الملخّص

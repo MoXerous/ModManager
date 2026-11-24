@@ -74,7 +74,8 @@ jobs:
       - name: Feature parity matrix is up to date and fully reviewed
         run: pnpm feature-parity:check
 
-      - run: pnpm audit:check
+      - name: Audit findings up to date
+        run: pnpm audit:check
 
   # M1's gate (foundations.md §10.2): install a real mod set from the command
   # line, on both systems, with every hash verified. Nothing else here proves
