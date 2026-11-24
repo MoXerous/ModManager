@@ -53,3 +53,5 @@ C*UsersLOQ/
 .opencode/analyses/audit/*
 !.opencode/analyses/audit/ws*.json
 !.opencode/analyses/audit/prompts/
+!.opencode/analyses/audit/shots/
+!.opencode/analyses/audit/defects.md
