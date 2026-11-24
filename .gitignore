@@ -55,3 +55,7 @@ C*UsersLOQ/
 !.opencode/analyses/audit/prompts/
 !.opencode/analyses/audit/shots/
 !.opencode/analyses/audit/defects.md
+
+# SDD controller scratch (task briefs, review packages, progress ledger)
+.superpowers/
+
