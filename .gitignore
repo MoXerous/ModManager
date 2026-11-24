@@ -45,4 +45,11 @@ docs.zip
 C*UsersLOQ/
 
 # Agent session data, not part of the project.
-.opencode/
+# Exception: the parity audit workstream outputs are versioned evidence.
+.opencode/*
+!.opencode/analyses/
+.opencode/analyses/*
+!.opencode/analyses/audit/
+.opencode/analyses/audit/*
+!.opencode/analyses/audit/ws*.json
+!.opencode/analyses/audit/prompts/
