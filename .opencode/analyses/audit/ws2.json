@@ -86,9 +86,9 @@
       "old_ref": "D:\\latest_project\\app\\ui\\main_window.py:1771",
       "new_ref": "src/app/pages/DownloadsPage.tsx:59",
       "method": "browser",
-      "verdict": "match",
-      "severity": "info",
-      "deviation": "Same purpose, now a tab of the Downloads page rather than a dialog. The old header had nine columns (Time, Status, Project, Version, MC, Loader, File, Destination, Message); the new table shows five visible columns — Project (with the file name under the title), Version, Target (MC and Loader merged), Status, Time — and the other two data survive only as hover tooltips: Destination is the title of the file name (DownloadsPage.tsx:435) and Message the title of the status (DownloadsPage.tsx:460). Statuses are localised (مُثبَّت / موجود مسبقًا / فشل) and the search filters by project, file or slug.",
+      "verdict": "documented-deviation",
+      "severity": "low",
+      "deviation": "Same purpose, now a tab of the Downloads page rather than a dialog (screens.md §6 lists the three downloads tabs collapsing to two, and §6-2 counts 3→2). The old header had nine columns (Time, Status, Project, Version, MC, Loader, File, Destination, Message); the new table shows five visible columns — Project (with the file name under the title), Version, Target (MC and Loader merged), Status, Time — and the other two data survive only as hover tooltips: Destination is the title of the file name (DownloadsPage.tsx:435) and Message the title of the status (DownloadsPage.tsx:460). Those two are hover-only `title` attributes, so keyboard and touch users cannot reach them: all nine old data points survive, but two of them are inaccessible without a pointer. Statuses are localised (مُثبَّت / موجود مسبقًا / فشل) and the search filters by project, file or slug.",
       "evidence": "console: 0 errors; السجلّ tab listed Sodium مُثبَّت, Lithium موجود مسبقًا and JEI فشل with the five visible columns المشروع / الإصدار / الهدف / الحالة / الوقت; the destination path and the failure message are not columns — they are the title attributes at DownloadsPage.tsx:435 and :460; screenshot .opencode/analyses/audit/shots/A-0200.jpeg",
       "reviewer": "browser"
     },
@@ -125,9 +125,9 @@
       "old_ref": "D:\\latest_project\\app\\ui\\main_window.py:2502",
       "new_ref": "src/app/pages/InstanceDetails.tsx:197",
       "method": "browser",
-      "verdict": "documented-deviation",
-      "severity": "low",
-      "deviation": "screens.md §6 #2 and F-097/F-098 document the reduction to one installed-content table with one derived class label, so the old 13-column grid becomes a compact list. The cost those decisions do not spell out is six old columns with no new surface: Version, Project ID, Game versions, Loaders, Matched file and Message — the first two are absent from the rendered row (projectId travels in LocalFactDto but nothing displays it) and the last four are not in the DTO at all. What each row does show: resource type, file name, relative path, the class label with its reason as a tooltip, duplicate identity keys, the hash-mismatch badge and the size.",
+      "verdict": "undocumented-deviation",
+      "severity": "medium",
+      "deviation": "F-129 «مسح المودات المحلية + استيراد — جدول 13 عموداً» is Keep in both docs/spec/features.md:208 and docs/spec/feature-parity.md:198, so the 13-column table is a kept behavior, not a permitted reduction. screens.md §6 #2 is only a counts table (pages/dialogs/tabs), and F-097/F-098 cover the classification axes, not column removal; no Defer or Drop decision removes a column either. Yet the old 13-column grid becomes a compact list, and six old columns have no new surface: Version, Project ID, Game versions, Loaders, Matched file and Message — the first two are absent from the rendered row (projectId travels in LocalFactDto but nothing displays it) and the last four are not in the DTO at all. That loss is undocumented. What each row does show: resource type, file name, relative path, the class label with its reason as a tooltip, duplicate identity keys, the hash-mismatch badge and the size.",
       "evidence": "console: 0 errors; «المحتوى المثبَّت» 3 ملفات listed sodium.jar مُدار 793.3 KB, lithium.jar معطّل 392.7 KB with path disabled_mods/lithium.jar, sodium-extra.jar خارجي 196.3 KB carrying sha1:0f1e2d, and the banner «ملفان أو أكثر بالبيانات نفسها (بصمة SHA-1 واحدة): sha1:0f1e2d»; the row markup (InstanceDetails.tsx:637-701) renders no version, project id, game versions, loaders, matched file or message; screenshot .opencode/analyses/audit/shots/A-0203.jpeg",
       "reviewer": "browser"
     },
@@ -166,7 +166,7 @@
       "method": "browser",
       "verdict": "undocumented-deviation",
       "severity": "medium",
-      "deviation": "Create-profile becomes create-instance with the same fields (name, folder, Minecraft version, loader) and the same preview-before-create step, but the old dialog's second mode — «Edit profile» (main_window.py:3036; name, version, loader/platform, folder, notes, entered from ProfileManagerDialog's «Edit» at :4230) — has no equivalent. No command updates an existing instance: generate_handler! (src-tauri/src/lib.rs:127-190) has plan_create_instance / execute_create_instance / link_instance and nothing else, and core/src/db/instances.rs exposes insert and mark_scanned only. The «ربط مجلد قائم» mode takes name and folder only (LinkInstanceRequest), so even a linked instance's detected version/loader cannot be corrected. Medium, not high: creation and linking are complete; only the edit-existing branch is lost.",
+      "deviation": "Create-profile becomes create-instance with the same fields (name, folder, Minecraft version, loader) and the same preview-before-create step, but the old dialog's second mode — «Edit profile» (main_window.py:3036; name, version, loader/platform, folder, notes, entered from ProfileManagerDialog's «Edit» at :4230) — has no equivalent. No command updates an existing instance: generate_handler! (src-tauri/src/lib.rs:127-190) has plan_create_instance / execute_create_instance / link_instance and nothing else, and core/src/db/instances.rs has no update/delete mutator besides insert and mark_scanned (list/get/find_by_path are read-only). The «ربط مجلد قائم» mode takes name and folder only (LinkInstanceRequest), so even a linked instance's detected version/loader cannot be corrected. Medium, not high: creation and linking are complete; only the edit-existing branch is lost.",
       "evidence": "console: 0 errors; the dialog opened with «إنشاء جديد» selected and showed الاسم, المجلد with استعراض, إصدار ماينكرافت, اللودر and the buttons «معاينة» / «إلغاء»; the instances page offers no edit action; grep over src-tauri/src/lib.rs:127-190 and core/src/db/instances.rs finds no update/rename command; screenshot .opencode/analyses/audit/shots/A-0206.jpeg",
       "reviewer": "browser"
     },
@@ -283,7 +283,7 @@
       "method": "browser",
       "verdict": "undocumented-deviation",
       "severity": "high",
-      "deviation": "Manage-profiles becomes the instances page, but with most of its actions gone. The old dialog offered New / Edit / Rename / Duplicate / Remove / Import / Export (main_window.py:4226-4276, plus Instance, Health Check, Repair Metadata, Export zip, Import folder, Import zip). The new page has «مثيل جديد» (plan/execute create, with a «ربط مجلد قائم» mode that covers Import folder), open-folder, content and hide only: generate_handler! (src-tauri/src/lib.rs:127-190) has no rename, duplicate, delete or JSON/zip import-export command for an instance, core/src/db/instances.rs has only insert and mark_scanned, and core/src/instances has plan_create / execute_create / link_instance. Creating and linking work; managing an existing instance does not. The page-instead-of-dialog shape is documented (R-4); the missing actions are not.",
+      "deviation": "Manage-profiles becomes the instances page, but with most of its actions gone. The old dialog offered New / Edit / Rename / Duplicate / Remove / Import / Export (main_window.py:4226-4276, plus Instance, Health Check, Repair Metadata, Export zip, Import folder, Import zip). The new page has «مثيل جديد» (plan/execute create, with a «ربط مجلد قائم» mode that covers Import folder), open-folder, content and hide only: generate_handler! (src-tauri/src/lib.rs:127-190) has no rename, duplicate, delete or JSON/zip import-export command for an instance, core/src/db/instances.rs has no update/delete mutator besides insert and mark_scanned (list/get/find_by_path are read-only), and core/src/instances has plan_create / execute_create / link_instance. Creating and linking work; managing an existing instance does not. The page-instead-of-dialog shape is documented (R-4); the missing actions are not.",
       "evidence": "console: 0 errors; «المثيلات» rendered «مثيل واحد», buttons مثيل جديد / تحديث, search «ابحث في المثيلات», filters الكل 1 / يحتاج انتباهًا 0, and the card «نسخة تجريبية · 1.21.1 · fabric» with افتح المجلد / المحتوى (and إخفاء once expanded) — no rename, duplicate, remove or import/export; grep of src-tauri/src/lib.rs:127-190 and core/src/{instances,db/instances.rs} confirms those commands do not exist; screenshot .opencode/analyses/audit/shots/A-0215.jpeg",
       "reviewer": "browser"
     },
@@ -492,7 +492,7 @@
       "verdict": "match",
       "severity": "info",
       "deviation": "Two separate sets, never one: PRESENT is what the scan found on disk, ELIGIBLE is the lock entries that have a file. A file present but absent from the lock is UNKNOWN and always kept, which is the data-loss bug lessons.md §4.2 (docs/spec/lessons.md:81-94) records: the old prune compared against import_matches (the projects eligible for import) instead of present_project_ids (what the folder holds).",
-      "evidence": "target.rs:7-14 states the two-set rule and that UNKNOWN is always kept; present_files and eligible_files are separate fields at 194-197; the split is computed at 316-320 and 417-418; entry_is_present at 758 matches lock entries to facts and counts both disabled spellings. Old side: present_project_ids (main_window.py:2650) is passed as local_present_project_ids (main_window.py:7207) and kept apart from the importable matches.",
+      "evidence": "target.rs:7-14 states the two-set rule and that UNKNOWN is always kept; present_files and eligible_files are separate fields at 194-197; the split is computed at 316-320 and 417-418; entry_is_present at 758 matches lock entries to facts and counts both disabled spellings. Old side: the dialog's present_project_ids() (main_window.py:2650) is passed as local_present_project_ids at main_window.py:7181 (:7207 is only the fallback assignment that unions in recognised ids) and kept apart from the importable matches.",
       "reviewer": "deepseek"
     },
     {
@@ -524,7 +524,7 @@
     {
       "id": "A-0234",
       "dimension": "performance",
-      "spec_id": "B-1 cold start ≤ 1.0 s",
+      "spec_id": "B-1 warm start ≤ 1.0 s",
       "old_ref": "D:\\latest_project\\docs\\baseline.md:51",
       "new_ref": "core/src/db/mod.rs:198",
       "method": "code",
@@ -537,7 +537,7 @@
     {
       "id": "A-0235",
       "dimension": "performance",
-      "spec_id": "B-2 warm start ≤ 3.0 s",
+      "spec_id": "B-2 cold start ≤ 3.0 s",
       "old_ref": "D:\\latest_project\\docs\\baseline.md:48",
       "new_ref": "src/app/preferences.ts:80",
       "method": "code",
