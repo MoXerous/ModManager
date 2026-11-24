@@ -52,7 +52,7 @@
 {
   "id": "A-0001",                 // معرّف الدفتر
   "dimension": "behavior",         // behavior | data | ui | safety | performance | packaging | deps | cli | lessons | tests
-  "spec_id": "F-001",              // اختياري: يربط بوحدة مواصفة موجودة
+  "spec_id": "F-001",              // اختياري: معرّف F-NNN أو مرجع قسم وصفي (مثل "screens.md §3") أو null
   "old_ref": "app/providers/modrinth_client.py::search_projects:282-301",  // @ BASE
   "new_ref": "core/src/providers/modrinth.rs::search_projects",            // @ HEAD
   "method": "code|test|browser|run|registry",

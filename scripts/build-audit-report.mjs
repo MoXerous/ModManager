@@ -50,7 +50,7 @@ ledger.units.forEach((u, i) => {
   if (!METHODS.includes(u.method)) fail(`${at}.method invalid: ${u.method}`);
   if (!VERDICTS.includes(u.verdict)) fail(`${at}.verdict invalid: ${u.verdict}`);
   if (!SEVERITIES.includes(u.severity)) fail(`${at}.severity invalid: ${u.severity}`);
-  if (u.spec_id != null && !/^F-\d{3}$/.test(u.spec_id)) fail(`${at}.spec_id must match F-NNN`);
+  if (u.spec_id != null && (typeof u.spec_id !== "string" || !u.spec_id.trim())) fail(`${at}.spec_id must be a non-empty string or null`);
   if (u.method === "browser" && !/console/i.test(u.evidence)) fail(`${at}: browser evidence must mention console`);
   if (u.method === "registry" && !/license|ترخيص/i.test(u.evidence)) fail(`${at}: registry evidence must mention the license`);
   if (u.verdict === "undocumented-deviation" && SEV_ORDER[u.severity] > 2) {

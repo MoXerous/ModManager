@@ -61,7 +61,18 @@ try {
   assert.notEqual(r5.status, 0);
   assert.match(r5.stderr, /stale/);
 
-  console.log("audit-report tests: 5 passed");
+  // 6) spec_id وصفي مقبول
+  writeLedger([unit({ spec_id: "screens.md §3 #1 SettingsDialog" })]);
+  const r6 = run();
+  assert.equal(r6.status, 0);
+
+  // 7) spec_id غير نصي يُرفض
+  writeLedger([unit({ spec_id: 42 })]);
+  const r7 = run();
+  assert.notEqual(r7.status, 0);
+  assert.match(r7.stderr, /spec_id must be a non-empty string or null/);
+
+  console.log("audit-report tests: 7 passed");
 } finally {
   rmSync(TMP, { recursive: true, force: true });
 }
