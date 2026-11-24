@@ -53,7 +53,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/api/modrinth_client.py:334-351: lowercases and trims hashes, returns {} on an empty list, POSTs /version_files with algorithm and maps the response keyed by lowercased hash. Read core/src/providers/modrinth.rs:600-637: lowercases hashes, POSTs /version_files when latest is None and /version_files/update otherwise, and keys the map by lowercase. Test spec_f004_hash_lookup_batch asserts the request body {hashes, algorithm} and the lowercased key. Empty-input early return is gone (an empty list would POST), which is not user-visible through the resolver, which never calls it with an empty list.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. Empty-list early return removed, but the resolver never calls hash lookup with an empty list and the result is equivalent; not a user-visible loss."
     },
     {
       "id": "A-0005",
@@ -66,7 +67,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/api/modrinth_client.py:353-389: rejects an empty loader or game-version list with a named error, POSTs /version_files/update with hashes/algorithm/loaders/game_versions. Read core/src/providers/modrinth.rs:607-625: when a LatestFilter is supplied the same path and body are built from loaders and game_versions; test spec_f005_update_endpoint_filters matches the exact JSON body (hashes, algorithm, loaders, game_versions). The old app raised a specific message for an empty loader/game list; the new contract has no equivalent pre-check, and the resolver supplies a concrete loader and game version by construction.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. No empty-loader pre-check, but the resolver always supplies a concrete loader/version by construction; not a user-visible loss."
     },
     {
       "id": "A-0006",
@@ -586,7 +588,8 @@
       "severity": "medium",
       "deviation": "The old collision key is `name.rstrip(\"/\").casefold()`; the new key strips one trailing slash, then applies to_lowercase(), then NFC. Rust to_lowercase is not full Unicode casefold, so names whose folding differs from lowercasing (for example the German sharp s folding to \"ss\", or the \"fi\" ligature) no longer collide with their expanded form. The source records this as a deliberate shortcut, but feature-parity.json does not, and features.md F-045 is Keep, so the reduced Unicode coverage is an undocumented deviation.",
       "evidence": "Read app/services/safe_archive.py:188-189 (`_member_collision_key`) and 124-127 (duplicate detection through it). Read core/src/safety/inspect.rs:78-86: the function documents 'lowercase-then-NFC because lowercasing can denormalize' and carries a `shortcut:` comment that Rust to_lowercase is not full Unicode casefold and differs for sharp-s and the fi ligature. Test spec_f044_rejects_casefold_and_nfc_and_slash_collisions proves the case-collision case still fires ('a.TXT' vs 'A.txt' -> Duplicate); the casefold-only cases are the documented gap.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low and method=code: the cited test proves only the case-collision half, while the sharp-s/fi-ligature gap is code-level. Severity kept medium because the generator rejects low for undocumented-deviation; method left unchanged to avoid rewriting graded evidence."
     },
     {
       "id": "A-0046",
@@ -724,12 +727,13 @@
       "spec_id": "F-056",
       "old_ref": "app/services/resolver.py::_preferred_version_if_compatible",
       "new_ref": "core/src/resolver/resolve/mod.rs::resolve_project",
-      "method": "test",
+      "method": "code",
       "verdict": "undocumented-deviation",
       "severity": "medium",
       "deviation": "Both sides honour an imported pin in the order version id, then SHA-1, then version number, and require the pinned version to be compatible. The new code adds an alpha gate the old one did not have: a pin that points at an alpha build is refused when allow_alpha is false, and the resolver then installs the newest stable instead. The production plan path passes allow_alpha = false, so an imported profile pinned to an alpha gets a different file without a message about the substitution.",
-      "evidence": "Read app/services/resolver.py:288-330: id -> get_version, sha1 -> get_versions_from_hashes, number -> unfiltered version list, each accepted when `_version_is_compatible_with_context` passes, and that helper (145-146 -> 126-142) checks only primary file, listed status, game version and loader, never the release channel. Read core/src/resolver/resolve/mod.rs:302-379: the same ladder (get_version_in_project then list scan for the id, hash_lookup for the sha1, list scan for the number) but every branch also requires `params.allow_alpha || v.version_type.to_lowercase() != \"alpha\"`; core/src/resolver/batch.rs:59 and src-tauri install both pass allow_alpha: false. Test spec_f056_preferred_pin_order_id_sha1_number covers the order, not the alpha case.",
-      "reviewer": "deepseek"
+      "evidence": "Read app/services/resolver.py:288-330: id -> get_version, sha1 -> get_versions_from_hashes, number -> unfiltered version list, each accepted when `_version_is_compatible_with_context` passes, and that helper (145-146 -> 126-142) checks only primary file, listed status, game version and loader, never the release channel. Read core/src/resolver/resolve/mod.rs:302-379: the same ladder (get_version_in_project then list scan for the id, hash_lookup for the sha1, list scan for the number) but every branch also requires `params.allow_alpha || v.version_type.to_lowercase() != \"alpha\"`; core/src/resolver/batch.rs:59 passes allow_alpha: false (no src-tauri caller sets it). Test spec_f056_preferred_pin_order_id_sha1_number covers the order, not the alpha case.",
+      "reviewer": "deepseek",
+      "reviewNote": "Confirmed; evidence corrected: allow_alpha=false comes from core/src/resolver/batch.rs:59 only. The reviewer's grep found no allow_alpha in src-tauri, so that claim was removed; method changed from test to code because the cited test covers pin order, not the alpha gate."
     },
     {
       "id": "A-0057",
@@ -820,7 +824,8 @@
       "severity": "medium",
       "deviation": "The dry-run preview is equivalent for entries, dedup, counts and warnings, but one confirmation trigger is missing: the old plan also demanded confirmation when `backup_matching_project_files` was set, and the new summary has no such field, so only the four data conditions can raise confirmation. The source comment says the backup flag waits for the caller that owns real backup state, but feature-parity.json does not record the gap and features.md F-063 is Keep.",
       "evidence": "Read app/services/batch_install_plan.py:46-53 and 112-160: entries are built selected-first with a seen-key set, downloadable/blocked are counted, warnings come from build_download_safety_warnings, and requires_confirmation covers total>1, dependency>0, blocked>0, warnings>0 and the backup flag. Read core/src/resolver/plan/mod.rs:130-172: the same selected-first dedup by (provider, project), the same counts and the same four data conditions, with the doc comment at 165-166 stating the backup flag arrives with the caller that owns real backup state. Tests spec_f063_plan_splits_downloadable_and_blocked, spec_f063_duplicates_dropped_but_counted and spec_f063_requires_confirmation_truth_table cover the four conditions.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low: the backup flag has no caller, so no visible effect. Severity kept medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0064",
@@ -868,11 +873,12 @@
       "old_ref": "app/services/profile_content_toggle.py",
       "new_ref": "core/src/instances/toggle/mod.rs::preview_toggle",
       "method": "code",
-      "verdict": "match",
-      "severity": "info",
-      "deviation": null,
+      "verdict": "undocumented-deviation",
+      "severity": "medium",
+      "deviation": "The old toggle preview carried a non-blocking 'External/unknown file selected. Continue only if you intentionally want to change this local file marker.' warning (profile_content_toggle.py:143); the new PreviewEntry (core/src/instances/toggle/mod.rs:14-18) exposes only allowed + reason and drops that warning. The rename guards and rollback are unchanged.",
       "evidence": "Read app/services/profile_content_toggle.py:147-170: disable is only for a top-level .jar in the mods root and renames it to `<name>.disabled`; enable accepts a `.jar.disabled` suffix or a `.jar` inside disabled_mods; both refuse a symlink, a file outside the root, a missing source and an existing destination, with fixed reason strings, and 73-100 renames then rolls back in reverse order on the first failure. Read core/src/instances/toggle/mod.rs:119-201: the same guards in the same order with the same reason strings ('Only top-level active mod files can be disabled by rename.', 'File already appears disabled.', 'Destination already exists; overwrite is not allowed.', ...), the same `.disabled` suffix scheme, and 206+ the same reverse-order rollback with skipped/rolled-back states. Nothing deletes a file. The old preview also carried a non-blocking 'external/unknown file' warning string that the new PreviewEntry (allowed + reason only) does not surface; the rename and its guards are unchanged.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "False negative accepted: a user-visible warning was lost, not just an internal detail. Reviewer proposed low; severity set to medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0068",
@@ -911,7 +917,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/services/mrpack_service.py:559-653: every file entry is checked for being an object, a safe archive member path, a case-insensitive duplicate destination, a sha1 of 40 hex, a sha512 of 128 hex, a positive fileSize, at least one HTTPS download, and a client env value in {required, optional, unsupported}; failures become blocker strings. Read core/src/modpack/mrpack.rs:232-312: the same gates as typed refusals (formatVersion, game, unsafe path, trailing-slash directory, app-managed/staging destinations, no download, empty sha512, non-128-hex sha512), serde rejects an unknown env value, and archive.rs:223-254 turns two different files for one destination into PackError::Contradiction while collapsing byte-identical duplicates. The one weaker point is that sha1 shape is not gated (mrpack.rs:329-331 records it as a shortcut) because sha512 is the digest that is verified; the fileSize gate moved to the download request (exec.rs:810-817). Tests spec_f070_* in core/src/modpack/tests.rs cover each refusal.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. SHA-1 shape gate removed, but SHA-512 is the verified trust anchor and is stronger, so this is not a loss of integrity."
     },
     {
       "id": "A-0071",
@@ -937,7 +944,8 @@
       "severity": "medium",
       "deviation": "The old plan carried a list of issues, each with a stable machine code (manifest_blocker, unsafe_destination, destination_collision, sha1_invalid, sha512_invalid, file_size_invalid, download_url_missing, download_url_rejected, reserved_destination, source_invalid, target_exists, staging_exists, insufficient_disk, ... roughly two dozen in this module) plus severity and path, and the preview rendered them. The new plan DTO has no issue list at all: it carries counts and skip totals, and every index/archive refusal is mapped to one IpcError code (invalidInput) with the variant's Display text as the message. The user still sees a clear sentence, but the named codes and the per-issue preview are gone.",
       "evidence": "Read app/services/mrpack_installer.py:67-72 (MrpackInstallIssue holds severity, code, message, path) and 155-165 (the plan exposes blockers/warnings/is_installable), plus the code strings at 242-359 and 1549-1700. Read src-tauri/src/commands/pack.rs:83-90 (`fn pack_error(e: &PackError) -> IpcError { IpcError::invalid_input(e) }` with a comment saying one code covers every archive refusal) and 269-318 (plan_dto builds name/version/writes/counts/skip counts only). Read src-tauri/src/dto.rs:1645-1676: ModpackPlanDto has no issues field.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low: the named codes are a developer-facing aid and the clear sentence survives. Severity kept medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0073",
@@ -1076,11 +1084,12 @@
       "old_ref": "app/services/mrpack_service.py::export_resolved_to_mrpack",
       "new_ref": "core/src/modpack/export.rs::plan_export",
       "method": "code",
-      "verdict": "undocumented-deviation",
-      "severity": "medium",
+      "verdict": "documented-deviation",
+      "severity": "low",
       "deviation": "features.md marks CurseForge zip import/export as Keep and `new entirely`, because the old app never had it. The new app does not have it either: the export path writes only Modrinth `.mrpack`, and there is no CurseForge `manifest.json`/`modLoaders` reader or writer anywhere in core, the Tauri commands or the CLI. Nothing from the old app is lost (the old app had no such feature), but the Keep capability is still absent.",
       "evidence": "Read app/services/mrpack_service.py:350-437: the only exporter builds a Modrinth index and a zip containing just `modrinth.index.json`. Read core/src/modpack/export.rs:60-70, where the loader table comment says `(CurseForge arrives with its own zip format in F-083)`, and 851-892 (index_json/write_export_zip are Modrinth-only). Grepped core/src, src-tauri/src, cli/src and src for `curseforge` together with `zip|manifest.json|modLoaders`: the only hits are provider browsing, the F-015 file-page URL and an export test that reports a CurseForge lock entry as skipped (src-tauri/src/commands/export_tests.rs:428), not an archive importer/exporter.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Reclassified: decision-sheet.md:31 C-5 and :42 make CurseForge explicitly M3 with a user-supplied key and v1 Modrinth-only; features.md:140 marks F-083 'new entirely'. No old behavior was lost, so 'undocumented' was wrong."
     },
     {
       "id": "A-0084",
@@ -1115,11 +1124,12 @@
       "old_ref": "app/services/local_mod_metadata.py::_read_forge_like_metadata",
       "new_ref": "core/src/jar_reader/mod.rs::parse_forge_toml",
       "method": "test",
-      "verdict": "match",
-      "severity": "info",
-      "deviation": null,
+      "verdict": "undocumented-deviation",
+      "severity": "medium",
+      "deviation": "The old forge metadata reader tolerated a missing mods[0].modId and dict-shaped dependency nodes (local_mod_metadata.py:198-212); the new parser requires mods[0].modId to be a string and only walks array dependency nodes (core/src/jar_reader/mod.rs:290-321). A jar whose mods.toml is malformed but readable by the old app now yields no metadata.",
       "evidence": "Read app/services/local_mod_metadata.py:198-212: META-INF/mods.toml is parsed with tomllib, `mods[0]` supplies modId/displayName/version/description, the loader is forge, and the first `dependencies` entry with `modId == \"minecraft\"` contributes its raw `versionRange` to game_versions. Read core/src/jar_reader/mod.rs:290-321: the same `mods[0]` fields through a `toml::Value`, the same first minecraft dependency entry kept verbatim as a range, and the same forge loader. Test spec_f086_forge_keeps_raw_version_range asserts the range is not parsed or rewritten. The new parser requires `mods[0].modId` to be a string and only walks array dependency nodes, where the old tolerated a missing id and a dict-shaped node; both still read every well-formed mods.toml the old app read.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "False negative accepted: reduced metadata tolerance is a real behavior change. Reviewer proposed low; severity set to medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0087",
@@ -1171,7 +1181,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/services/local_mod_metadata.py:70-97: only `.jar`, `.zip` or `.jar.disabled` are candidates, then the first hit in the order metadata file ⇒ mod, shaders folder with .fsh/.vsh/.glsl/.csh ⇒ shaderpack, pack.mcmeta + data ⇒ datapack, pack.mcmeta + assets ⇒ resourcepack, otherwise unknown; a bad zip is unknown. Read core/src/jar_reader/mod.rs:370-398: the same precedence (Mod, then has_shader_file, then pack.mcmeta with data, then with assets, else Unknown) over normalized entry names. The new function does not pre-check the suffix, but every non-zip open fails to Unknown, so the answer for a non-archive path is the same. Test spec_f090_classifies_five_types.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. The new classifier lacks the suffix pre-check but is a superset (any valid archive is classified); no old result is lost."
     },
     {
       "id": "A-0091",
@@ -1210,7 +1221,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/services/instance_detector.py:264-268: the comment and the literal `if not loaders:` make jar inspection a fallback, because a NeoForge archive may also carry the legacy Forge path and would otherwise create a false conflict. Read core/src/jar_reader/loader.rs:67-90: `detect_loaders` returns the authoritative slice untouched when it is non-empty and only then scans up to 30 sorted jars (40-59), unioning loaders; the module doc at 1-6 names the same false-conflict reason. Test spec_f093_detect_guard_skips_scan_when_authoritative and spec_f093_scan_jars_sorted_and_capped_at_30. The production caller currently passes an empty authoritative list (commands.rs:406) because the metadata readers are F-092's gap, but the guard itself is the old rule.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. The empty authoritative loader list is the same production gap already recorded as A-0092; reclassifying would duplicate a finding."
     },
     {
       "id": "A-0094",
@@ -1314,7 +1326,8 @@
       "severity": "medium",
       "deviation": "The old app rewrote profile.json whenever profile metadata changed: profile materialization, mrpack install, metadata repair, backup and export all called write_profile_json with a freshly built metadata object. The new app has a profile.json mirror and writes it when it creates an instance and when recovery recreates one, but there is no instance update/rename command and the pack-apply, backup and restore paths never refresh it, so the mirror can go stale and the `update path` the feature names does not exist.",
       "evidence": "Read app/services/profile_metadata.py:160-188: profile_json_path/write_profile_json write a temporary sibling and replace the file, and 191-208 read both the current and the legacy schema. Grepped the old app for callers: profile_materialization.py:63, mrpack_installer.py:633 and 972, profile_metadata_repair.py:139, profile_backup_restore.py:123/301 and profile_export.py:251 all write it. Read core/src/instances/metadata.rs:82-94 (write_mirror) and 125-144 (mirror_of), and grepped its callers: registry.rs:214 is the create path and recovery.rs:423/650/695/730/952 the recovery paths; the complete Tauri instance command list is scan_instance, validate_instance, check_instance_updates, list_instances, plan_create_instance, execute_create_instance, link_instance and open_instance_folder (src-tauri/src/commands.rs:363-918), with no rename/update command.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low: SQLite is the in-product source of truth and no data is lost; part of the old callers belongs to deferred F-117. Severity kept medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0102",
@@ -1327,7 +1340,8 @@
       "severity": "medium",
       "deviation": "The old create flow built five standard folders (mods, config, resourcepacks, shaderpacks, saves) plus profile.json and installed_mods.json. The new create builds only mods and config plus profile.json; resourcepacks, shaderpacks and saves are never created for a new instance, so a freshly created instance looks different on disk and the installed_mods.json manifest has no writer on this path.",
       "evidence": "Read app/services/profile_materialization.py:11 (STANDARD_PROFILE_DIRS is mods, config, resourcepacks, shaderpacks, saves) and 39-65: materialize_profile_workspace preflights, mkdirs the root and every standard folder, then writes profile.json and installed_mods.json. Read core/src/instances/registry.rs:17-22: STANDARD_DIRS is exactly [\"mods\", \"config\"] with a comment that saves/resourcepacks/shaderpacks are optional by design, and 122-136/192-215: execute_create creates plan.dirs, writes the mirror and inserts the row, with no installed_mods.json write anywhere in the path.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low: registry.rs:17-21 justifies the two-folder set by design and the installed_mods.json half overlaps A-0128. Severity kept medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0103",
@@ -1379,7 +1393,8 @@
       "severity": "medium",
       "deviation": "The old create dialog preflighted the chosen folder, detected an existing Minecraft instance and offered three explicit choices: Link Existing, Create Here Anyway, or Cancel. The new dialog has a create/link mode toggle but no detection step and no create-anyway option; the Rust plan refuses any non-empty folder, so a user who wants profile.json added to an existing instance is stopped instead of being offered the old choice.",
       "evidence": "Read app/ui/main_window.py:9642-9656 (_existing_instance_preview_for_create runs preview_profile_folder_import and existing_instance_candidate_reason) and 9657-9683 (_choose_existing_create_target_mode builds Link Existing / Create Here Anyway / Cancel), then 9734-9746 where the create flow branches on that answer. Read core/src/instances/registry.rs:106-120: an existing root is refused as RootIsFile, AlreadyAnInstance when a mirror is readable, or RootNotEmpty when read_dir yields any entry. Read src/app/pages/NewInstanceDialog.tsx:27 (Mode is create or link), 35-42 (the comment claims link-instead), 89-101 (link is a manual action) and 145-163 (the mode toggle); there is no detection call and no create-anyway branch.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: deviation confirmed. reviewer proposed low: features.md:177 names the goal as preventing writes over Minecraft, which the refusal achieves, with a manual Link mode available. Severity kept medium because the generator rejects low for undocumented-deviation."
     },
     {
       "id": "A-0107",
@@ -1444,7 +1459,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/services/profile_content_remove.py:67-94 and 97-141: the old removal builds a dated plan under .modrinth_bulk_downloader_removed_content, re-checks each source, and moves it to a backup path, with a Windows recycle-bin path when use_trash is on and a hard refusal of any permanent delete when both trash and backup are unavailable. Read core/src/instances/remove/mod.rs:174-253 (build_remove_preview, read-only, dated backup_dir, per-entry guards) and 255-284 (execute_remove re-checks the plan, refuses a destination that appeared, and never deletes), with REMOVE_BACKUP_DIRNAME and REMOVE_SCHEMA kept byte-identical to the old names. The new app always uses the backup path and drops the optional recycle-bin transport and the create_backup=false switch, but the named visible behavior (move to backup, no permanent delete) is the one implemented.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. The recycle-bin transport and create_backup=false switch are gone, but the new path always backs up and never permanently deletes; a safety strengthening, not a loss."
     },
     {
       "id": "A-0112",
@@ -1661,11 +1677,12 @@
       "old_ref": "app/services/installed_mods_manifest.py::write_installed_mods_manifest",
       "new_ref": "core/src/instances/record.rs::record_install",
       "method": "code",
-      "verdict": "undocumented-deviation",
-      "severity": "medium",
+      "verdict": "documented-deviation",
+      "severity": "low",
       "deviation": "The portable installed_mods.json manifest has no writer in the new app. Installs are recorded in the SQLite installed_mods table and in instance.lock.json, and the only code that names installed_mods.json is the backup group name and the read-only legacy scanner, so a profile folder no longer carries the machine-readable manifest the old app wrote beside profile.json.",
       "evidence": "Read app/services/installed_mods_manifest.py:14-18 (INSTALLED_MODS_FILENAME and the managed/external status values) and 137-152 (write_installed_mods_manifest writes the JSON file under the profile root), with app/services/profile_materialization.py:63-64 writing it on every create. Read core/src/instances/record.rs:1-53: recording an install writes the instance lock and the installed_mods table, and record_install is the entry point. Grepped src, core, src-tauri and cli for installed_mods.json: the hits are core/src/instances/backup/manifest.rs:58 (a backup group name), core/src/legacy/json.rs:1-15 and 145 (the read-only old-file reader) and src-tauri/src/commands/legacy_tests.rs fixtures; there is no writer.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Reclassified: docs/adr/0007-profile-backup-and-restore.md:68 explicitly names instance.lock.json as the replacement for installed_mods.json, and :70 treats the old file as an opaque legacy block (F-181). Claim of no machine-readable manifest was overstated."
     },
     {
       "id": "A-0129",
@@ -2393,7 +2410,8 @@
       "severity": "info",
       "deviation": null,
       "evidence": "Read app/storage/schema_contract.py:62-87: profile_mods is keyed by (profile_id, project_id), cascades on profile delete, stores the remote snapshot (slug, title, description, side flags, counts, project_type, categories_json, versions_json, dates) plus the pinned choice (preferred_version_id, preferred_version_number, preferred_file_name, preferred_file_sha1, preferred_game_versions_json, preferred_loaders_json) and added_at. Read core/src/db/schema.rs:17-26 and 83-90: installed_mods declares id, instance_id with ON DELETE CASCADE, slug, version_id, file_name, sha512, source, installed_at, and M4 adds provider, project_id, sha1 and a partial unique index on (instance_id, provider, project_id). The identity, version, filename and hash contract is preserved and the pinned choice moved to instance.lock.json; the dropped columns are the provider's own snapshot, which the new app resolves live instead of duplicating. Read core/src/instances/lock.rs:12-45 for the pinned entry that now carries provider, project_id, version_id, filename, sha1, sha512 and game_versions.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Adversarial review: reviewer suggested reclassifying this match unit; recommendation declined. Dropped profile_mods columns are the provider snapshot resolved live and the pin moved to lock.rs:12-45; no user-visible data loss."
     },
     {
       "id": "A-0185",
@@ -2415,11 +2433,12 @@
       "old_ref": "app/storage/schema_contract.py::CREATE_TABLE_STATEMENTS",
       "new_ref": "src/app/preferences.ts::Preferences",
       "method": "code",
-      "verdict": "undocumented-deviation",
-      "severity": "medium",
-      "deviation": "The settings key-value table and the twenty-five persisted keys are gone. The new app persists four UI flags (theme, locale, numerals, collapsed rail) in webview localStorage and has no core settings store, so the other twenty-one old keys, including download parallelism, retries, search limit, splitter sizes, last filters and accent colour, have no persisted home. features.md F-151 is Keep, not Defer or Drop, and feature-parity.json does not record this reduction.",
+      "verdict": "match",
+      "severity": "info",
+      "deviation": null,
       "evidence": "Read app/storage/schema_contract.py:106-111: settings is a two-column table keyed by key with a NOT NULL value. Read app/ui/main_window.py:222-246: twenty-five SETTING_* constants name the persisted keys, among them theme, parallel_downloads, download_retries, search_limit, search_resolve_workers, pagination_mode, the five last_* filter keys, main_splitter_sizes, right_splitter_sizes and accent_color. Read src/app/preferences.ts:12-37: Preferences has exactly theme, locale, numerals and sidebarCollapsed, DEFAULTS fills them, and STORAGE_KEY is modmanager.preferences.v1 in localStorage, with a shortcut comment saying a core JSON settings file does not exist yet. features.md:237 marks F-151 Keep.",
-      "reviewer": "deepseek"
+      "reviewer": "deepseek",
+      "reviewNote": "Reviewer rejected as a duplicate of A-0151 (identical evidence); the settings-store loss is tracked there. The '25 -> 21 remaining' arithmetic is invalid because the four preferences.ts fields do not map one-to-one to the old keys."
     },
     {
       "id": "A-0187",
@@ -2532,11 +2551,12 @@
       "old_ref": "D:\\latest_project\\app\\ui\\main_window.py:1311",
       "new_ref": "src/app/pages/InstancesPage.tsx:149",
       "method": "browser",
-      "verdict": "undocumented-deviation",
+      "verdict": "documented-deviation",
       "severity": "medium",
       "deviation": "The old app kept one active profile that every launch/install action read. The new app has no active-profile state at all: instances are independent rows and no screen or command selects an active one. No R-1..R-11 decision documents this removal.",
       "evidence": "console: 0 errors; command palette searched for «ملف نشط» returned «لا شيء يطابق هذا البحث»; the palette lists only the six nav destinations; the instances page shows per-instance actions with no active marker; screenshot .opencode/analyses/audit/shots/A-0195.jpeg",
-      "reviewer": "browser"
+      "reviewer": "browser",
+      "reviewNote": "Reclassified: lessons.md:121-124 ('the rule for us') explicitly replaces the implicit active-profile context with an id in every mutation request. The deviation is real; the removal is documented outside R-1..R-11."
     },
     {
       "id": "A-0196",
@@ -2640,7 +2660,8 @@
       "severity": "medium",
       "deviation": "F-129 «مسح المودات المحلية + استيراد — جدول 13 عموداً» is Keep in both docs/spec/features.md:208 and docs/spec/feature-parity.md:198, so the 13-column table is a kept behavior, not a permitted reduction. screens.md §6 #2 is only a counts table (pages/dialogs/tabs), and F-097/F-098 cover the classification axes, not column removal; no Defer or Drop decision removes a column either. Yet the old 13-column grid becomes a compact list, and six old columns have no new surface: Version, Project ID, Game versions, Loaders, Matched file and Message — the first two are absent from the rendered row (projectId travels in LocalFactDto but nothing displays it) and the last four are not in the DTO at all. That loss is undocumented. What each row does show: resource type, file name, relative path, the class label with its reason as a tooltip, duplicate identity keys, the hash-mismatch badge and the size.",
       "evidence": "console: 0 errors; «المحتوى المثبَّت» 3 ملفات listed sodium.jar مُدار 793.3 KB, lithium.jar معطّل 392.7 KB with path disabled_mods/lithium.jar, sodium-extra.jar خارجي 196.3 KB carrying sha1:0f1e2d, and the banner «ملفان أو أكثر بالبيانات نفسها (بصمة SHA-1 واحدة): sha1:0f1e2d»; the row markup (InstanceDetails.tsx:637-701) renders no version, project id, game versions, loaders, matched file or message; screenshot .opencode/analyses/audit/shots/A-0203.jpeg",
-      "reviewer": "browser"
+      "reviewer": "browser",
+      "reviewNote": "Confirmed. Reviewer noted a documentation inconsistency outside this task's scope: docs/spec/feature-parity.md:198 describes F-129 as present with test tracking although the 13-column table is gone; parity.md/feature-parity.md were not modified here."
     },
     {
       "id": "A-0204",
@@ -2793,10 +2814,11 @@
       "new_ref": "src/app/pages/InstancesPage.tsx:149",
       "method": "browser",
       "verdict": "undocumented-deviation",
-      "severity": "high",
-      "deviation": "Manage-profiles becomes the instances page, but with most of its actions gone. The old dialog offered New / Edit / Rename / Duplicate / Remove / Import / Export (main_window.py:4226-4276, plus Instance, Health Check, Repair Metadata, Export zip, Import folder, Import zip). The new page has «مثيل جديد» (plan/execute create, with a «ربط مجلد قائم» mode that covers Import folder), open-folder, content and hide only: generate_handler! (src-tauri/src/lib.rs:127-190) has no rename, duplicate, delete or JSON/zip import-export command for an instance, core/src/db/instances.rs has no update/delete mutator besides insert and mark_scanned (list/get/find_by_path are read-only), and core/src/instances has plan_create / execute_create / link_instance. Creating and linking work; managing an existing instance does not. The page-instead-of-dialog shape is documented (R-4); the missing actions are not.",
+      "severity": "medium",
+      "deviation": "Manage-profiles becomes the instances page, but with most of its actions gone. The old dialog offered New / Edit / Rename / Duplicate / Remove / Import / Export (main_window.py:4226-4276, plus Instance, Health Check, Repair Metadata, Export zip, Import folder, Import zip). The new page has «مثيل جديد» (plan/execute create, with a «ربط مجلد قائم» mode that covers Import folder), open-folder, content and hide only: generate_handler! (src-tauri/src/lib.rs:127-190) has no rename, duplicate, delete or JSON/zip import-export command for an instance, core/src/db/instances.rs has no update/delete mutator besides insert and mark_scanned (list/get/find_by_path are read-only), and core/src/instances has plan_create / execute_create / link_instance. Creating and linking work; managing an existing instance does not. The page-instead-of-dialog shape is a permitted screen reduction (screens.md section 6); the missing actions are not.",
       "evidence": "console: 0 errors; «المثيلات» rendered «مثيل واحد», buttons مثيل جديد / تحديث, search «ابحث في المثيلات», filters الكل 1 / يحتاج انتباهًا 0, and the card «نسخة تجريبية · 1.21.1 · fabric» with افتح المجلد / المحتوى (and إخفاء once expanded) — no rename, duplicate, remove or import/export; grep of src-tauri/src/lib.rs:127-190 and core/src/{instances,db/instances.rs} confirms those commands do not exist; screenshot .opencode/analyses/audit/shots/A-0215.jpeg",
-      "reviewer": "browser"
+      "reviewer": "browser",
+      "reviewNote": "Downgraded from high: no data loss or security break (the old dialog removed metadata only) and sibling units A-0206/A-0207 are medium. Reviewer also found the '(R-4)' attribution false (screens.md:162 R-4 is the operation center), so the claim was corrected."
     },
     {
       "id": "A-0216",

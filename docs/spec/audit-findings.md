@@ -6,20 +6,12 @@
 ## الملخّص
 
 - إجمالي الوحدات: **276**
-- مطابق: 172
-- انحراف موثّق: 70
-- انحراف غير موثّق (findings): **27**
+- مطابق: 171
+- انحراف موثّق: 73
+- انحراف غير موثّق (findings): **25**
 - غير قابل للتحقّق: 7
 
 ## Findings (مرتّبة بالخطورة)
-
-### A-0215 — high — ui (screens.md §3 #22 ProfileManagerDialog)
-
-- القديم: `D:\latest_project\app\ui\main_window.py:4226`
-- الجديد: `src/app/pages/InstancesPage.tsx:149`
-- method: `browser` · reviewer: `browser`
-- الانحراف: Manage-profiles becomes the instances page, but with most of its actions gone. The old dialog offered New / Edit / Rename / Duplicate / Remove / Import / Export (main_window.py:4226-4276, plus Instance, Health Check, Repair Metadata, Export zip, Import folder, Import zip). The new page has «مثيل جديد» (plan/execute create, with a «ربط مجلد قائم» mode that covers Import folder), open-folder, content and hide only: generate_handler! (src-tauri/src/lib.rs:127-190) has no rename, duplicate, delete or JSON/zip import-export command for an instance, core/src/db/instances.rs has no update/delete mutator besides insert and mark_scanned (list/get/find_by_path are read-only), and core/src/instances has plan_create / execute_create / link_instance. Creating and linking work; managing an existing instance does not. The page-instead-of-dialog shape is documented (R-4); the missing actions are not.
-- الدليل: console: 0 errors; «المثيلات» rendered «مثيل واحد», buttons مثيل جديد / تحديث, search «ابحث في المثيلات», filters الكل 1 / يحتاج انتباهًا 0, and the card «نسخة تجريبية · 1.21.1 · fabric» with افتح المجلد / المحتوى (and إخفاء once expanded) — no rename, duplicate, remove or import/export; grep of src-tauri/src/lib.rs:127-190 and core/src/{instances,db/instances.rs} confirms those commands do not exist; screenshot .opencode/analyses/audit/shots/A-0215.jpeg
 
 ### A-0001 — medium — behavior (F-001)
 
@@ -57,9 +49,9 @@
 
 - القديم: `app/services/resolver.py::_preferred_version_if_compatible`
 - الجديد: `core/src/resolver/resolve/mod.rs::resolve_project`
-- method: `test` · reviewer: `deepseek`
+- method: `code` · reviewer: `deepseek`
 - الانحراف: Both sides honour an imported pin in the order version id, then SHA-1, then version number, and require the pinned version to be compatible. The new code adds an alpha gate the old one did not have: a pin that points at an alpha build is refused when allow_alpha is false, and the resolver then installs the newest stable instead. The production plan path passes allow_alpha = false, so an imported profile pinned to an alpha gets a different file without a message about the substitution.
-- الدليل: Read app/services/resolver.py:288-330: id -> get_version, sha1 -> get_versions_from_hashes, number -> unfiltered version list, each accepted when `_version_is_compatible_with_context` passes, and that helper (145-146 -> 126-142) checks only primary file, listed status, game version and loader, never the release channel. Read core/src/resolver/resolve/mod.rs:302-379: the same ladder (get_version_in_project then list scan for the id, hash_lookup for the sha1, list scan for the number) but every branch also requires `params.allow_alpha || v.version_type.to_lowercase() != "alpha"`; core/src/resolver/batch.rs:59 and src-tauri install both pass allow_alpha: false. Test spec_f056_preferred_pin_order_id_sha1_number covers the order, not the alpha case.
+- الدليل: Read app/services/resolver.py:288-330: id -> get_version, sha1 -> get_versions_from_hashes, number -> unfiltered version list, each accepted when `_version_is_compatible_with_context` passes, and that helper (145-146 -> 126-142) checks only primary file, listed status, game version and loader, never the release channel. Read core/src/resolver/resolve/mod.rs:302-379: the same ladder (get_version_in_project then list scan for the id, hash_lookup for the sha1, list scan for the number) but every branch also requires `params.allow_alpha || v.version_type.to_lowercase() != "alpha"`; core/src/resolver/batch.rs:59 passes allow_alpha: false (no src-tauri caller sets it). Test spec_f056_preferred_pin_order_id_sha1_number covers the order, not the alpha case.
 
 ### A-0062 — medium — behavior (F-062)
 
@@ -77,6 +69,14 @@
 - الانحراف: The dry-run preview is equivalent for entries, dedup, counts and warnings, but one confirmation trigger is missing: the old plan also demanded confirmation when `backup_matching_project_files` was set, and the new summary has no such field, so only the four data conditions can raise confirmation. The source comment says the backup flag waits for the caller that owns real backup state, but feature-parity.json does not record the gap and features.md F-063 is Keep.
 - الدليل: Read app/services/batch_install_plan.py:46-53 and 112-160: entries are built selected-first with a seen-key set, downloadable/blocked are counted, warnings come from build_download_safety_warnings, and requires_confirmation covers total>1, dependency>0, blocked>0, warnings>0 and the backup flag. Read core/src/resolver/plan/mod.rs:130-172: the same selected-first dedup by (provider, project), the same counts and the same four data conditions, with the doc comment at 165-166 stating the backup flag arrives with the caller that owns real backup state. Tests spec_f063_plan_splits_downloadable_and_blocked, spec_f063_duplicates_dropped_but_counted and spec_f063_requires_confirmation_truth_table cover the four conditions.
 
+### A-0067 — medium — behavior (F-067)
+
+- القديم: `app/services/profile_content_toggle.py`
+- الجديد: `core/src/instances/toggle/mod.rs::preview_toggle`
+- method: `code` · reviewer: `deepseek`
+- الانحراف: The old toggle preview carried a non-blocking 'External/unknown file selected. Continue only if you intentionally want to change this local file marker.' warning (profile_content_toggle.py:143); the new PreviewEntry (core/src/instances/toggle/mod.rs:14-18) exposes only allowed + reason and drops that warning. The rename guards and rollback are unchanged.
+- الدليل: Read app/services/profile_content_toggle.py:147-170: disable is only for a top-level .jar in the mods root and renames it to `<name>.disabled`; enable accepts a `.jar.disabled` suffix or a `.jar` inside disabled_mods; both refuse a symlink, a file outside the root, a missing source and an existing destination, with fixed reason strings, and 73-100 renames then rolls back in reverse order on the first failure. Read core/src/instances/toggle/mod.rs:119-201: the same guards in the same order with the same reason strings ('Only top-level active mod files can be disabled by rename.', 'File already appears disabled.', 'Destination already exists; overwrite is not allowed.', ...), the same `.disabled` suffix scheme, and 206+ the same reverse-order rollback with skipped/rolled-back states. Nothing deletes a file. The old preview also carried a non-blocking 'external/unknown file' warning string that the new PreviewEntry (allowed + reason only) does not surface; the rename and its guards are unchanged.
+
 ### A-0072 — medium — behavior (F-072)
 
 - القديم: `app/services/mrpack_installer.py::MrpackInstallIssue`
@@ -85,13 +85,13 @@
 - الانحراف: The old plan carried a list of issues, each with a stable machine code (manifest_blocker, unsafe_destination, destination_collision, sha1_invalid, sha512_invalid, file_size_invalid, download_url_missing, download_url_rejected, reserved_destination, source_invalid, target_exists, staging_exists, insufficient_disk, ... roughly two dozen in this module) plus severity and path, and the preview rendered them. The new plan DTO has no issue list at all: it carries counts and skip totals, and every index/archive refusal is mapped to one IpcError code (invalidInput) with the variant's Display text as the message. The user still sees a clear sentence, but the named codes and the per-issue preview are gone.
 - الدليل: Read app/services/mrpack_installer.py:67-72 (MrpackInstallIssue holds severity, code, message, path) and 155-165 (the plan exposes blockers/warnings/is_installable), plus the code strings at 242-359 and 1549-1700. Read src-tauri/src/commands/pack.rs:83-90 (`fn pack_error(e: &PackError) -> IpcError { IpcError::invalid_input(e) }` with a comment saying one code covers every archive refusal) and 269-318 (plan_dto builds name/version/writes/counts/skip counts only). Read src-tauri/src/dto.rs:1645-1676: ModpackPlanDto has no issues field.
 
-### A-0083 — medium — behavior (F-083)
+### A-0086 — medium — behavior (F-086)
 
-- القديم: `app/services/mrpack_service.py::export_resolved_to_mrpack`
-- الجديد: `core/src/modpack/export.rs::plan_export`
-- method: `code` · reviewer: `deepseek`
-- الانحراف: features.md marks CurseForge zip import/export as Keep and `new entirely`, because the old app never had it. The new app does not have it either: the export path writes only Modrinth `.mrpack`, and there is no CurseForge `manifest.json`/`modLoaders` reader or writer anywhere in core, the Tauri commands or the CLI. Nothing from the old app is lost (the old app had no such feature), but the Keep capability is still absent.
-- الدليل: Read app/services/mrpack_service.py:350-437: the only exporter builds a Modrinth index and a zip containing just `modrinth.index.json`. Read core/src/modpack/export.rs:60-70, where the loader table comment says `(CurseForge arrives with its own zip format in F-083)`, and 851-892 (index_json/write_export_zip are Modrinth-only). Grepped core/src, src-tauri/src, cli/src and src for `curseforge` together with `zip|manifest.json|modLoaders`: the only hits are provider browsing, the F-015 file-page URL and an export test that reports a CurseForge lock entry as skipped (src-tauri/src/commands/export_tests.rs:428), not an archive importer/exporter.
+- القديم: `app/services/local_mod_metadata.py::_read_forge_like_metadata`
+- الجديد: `core/src/jar_reader/mod.rs::parse_forge_toml`
+- method: `test` · reviewer: `deepseek`
+- الانحراف: The old forge metadata reader tolerated a missing mods[0].modId and dict-shaped dependency nodes (local_mod_metadata.py:198-212); the new parser requires mods[0].modId to be a string and only walks array dependency nodes (core/src/jar_reader/mod.rs:290-321). A jar whose mods.toml is malformed but readable by the old app now yields no metadata.
+- الدليل: Read app/services/local_mod_metadata.py:198-212: META-INF/mods.toml is parsed with tomllib, `mods[0]` supplies modId/displayName/version/description, the loader is forge, and the first `dependencies` entry with `modId == "minecraft"` contributes its raw `versionRange` to game_versions. Read core/src/jar_reader/mod.rs:290-321: the same `mods[0]` fields through a `toml::Value`, the same first minecraft dependency entry kept verbatim as a range, and the same forge loader. Test spec_f086_forge_keeps_raw_version_range asserts the range is not parsed or rewritten. The new parser requires `mods[0].modId` to be a string and only walks array dependency nodes, where the old tolerated a missing id and a dict-shaped node; both still read every well-formed mods.toml the old app read.
 
 ### A-0092 — medium — behavior (F-092)
 
@@ -133,14 +133,6 @@
 - الانحراف: The old preview was a seventeen-column table that also showed the dependency delta (required/optional/embedded/incompatible counts), the compatibility reason, the safety/touched-files note and the backup plan for each row. The new preview lists only the file, the latest version number and a four-value status; dependency information and a per-row backup plan are not part of the preview or of the install plan, so the user sees less before choosing what to update.
 - الدليل: Read app/models.py:78-101: UpdatePreviewResult carries new_required_dependencies, new_optional_dependencies, new_embedded_dependencies, new_incompatible_dependencies, compatibility_reason and release types. Read app/ui/main_window.py:2668-2747: UpdatePreviewDialog builds a 17-column table including Version change, Dependencies, Compatibility reason, Safety / touched files and Backup plan. Read core/src/updates/mod.rs:41-63 and 201-241: UpdateCandidate has filename, current and latest ids/numbers/files/hashes/url/size/game versions and a status, with no dependency or backup field. Read src/app/pages/InstanceDetails.tsx:100-169: the preview renders the filename, the latest version number and the status only, and src/app/pages/UpdateInstallDialog.tsx:180-218 shows the plan entries and the safety contract without a dependency or backup-plan line.
 
-### A-0128 — medium — behavior (F-128)
-
-- القديم: `app/services/installed_mods_manifest.py::write_installed_mods_manifest`
-- الجديد: `core/src/instances/record.rs::record_install`
-- method: `code` · reviewer: `deepseek`
-- الانحراف: The portable installed_mods.json manifest has no writer in the new app. Installs are recorded in the SQLite installed_mods table and in instance.lock.json, and the only code that names installed_mods.json is the backup group name and the read-only legacy scanner, so a profile folder no longer carries the machine-readable manifest the old app wrote beside profile.json.
-- الدليل: Read app/services/installed_mods_manifest.py:14-18 (INSTALLED_MODS_FILENAME and the managed/external status values) and 137-152 (write_installed_mods_manifest writes the JSON file under the profile root), with app/services/profile_materialization.py:63-64 writing it on every create. Read core/src/instances/record.rs:1-53: recording an install writes the instance lock and the installed_mods table, and record_install is the entry point. Grepped src, core, src-tauri and cli for installed_mods.json: the hits are core/src/instances/backup/manifest.rs:58 (a backup group name), core/src/legacy/json.rs:1-15 and 145 (the read-only old-file reader) and src-tauri/src/commands/legacy_tests.rs fixtures; there is no writer.
-
 ### A-0129 — medium — behavior (F-129)
 
 - القديم: `app/ui/main_window.py::import_installed_scan_matches_to_profile`
@@ -172,22 +164,6 @@
 - method: `code` · reviewer: `deepseek`
 - الانحراف: Theme selection matches (system, light, dark, applied before paint, following the OS while system is chosen), but the accent colour choice is gone: the old apply_app_theme took an accent name and built the palette from it, and the old Settings page offered a colour combo, while the new app ships one fixed token palette with no accent picker and no accent setting. feature-parity.json F-170 records the three-way theme but not the missing accent colour.
 - الدليل: Read app/ui/main_window.py:1018-1060: apply_app_theme takes theme and accent_name, applies the stored palette or a Fusion light/dark palette, and calls _with_accent_roles and _theme_stylesheet with the accent for every branch. Read app/ui/main_window.py:1118-1124 and 1292-1293: SETTING_THEME and SETTING_ACCENT_COLOR are read and saved from a theme combo and an accent combo. Read src/app/preferences.ts:1-37: THEMES is system, dark, light and Preferences has no accent field. Read src/app/pages/SettingsPage.tsx:109-135: the general card offers language, theme and digits only. Grepped src for accent: every hit is the Tailwind token class or a comment about the fixed accent, and docs/spec/behaviors/settings.md:35 lists SETTING_ACCENT_COLOR as a persisted setting.
-
-### A-0186 — medium — data
-
-- القديم: `app/storage/schema_contract.py::CREATE_TABLE_STATEMENTS`
-- الجديد: `src/app/preferences.ts::Preferences`
-- method: `code` · reviewer: `deepseek`
-- الانحراف: The settings key-value table and the twenty-five persisted keys are gone. The new app persists four UI flags (theme, locale, numerals, collapsed rail) in webview localStorage and has no core settings store, so the other twenty-one old keys, including download parallelism, retries, search limit, splitter sizes, last filters and accent colour, have no persisted home. features.md F-151 is Keep, not Defer or Drop, and feature-parity.json does not record this reduction.
-- الدليل: Read app/storage/schema_contract.py:106-111: settings is a two-column table keyed by key with a NOT NULL value. Read app/ui/main_window.py:222-246: twenty-five SETTING_* constants name the persisted keys, among them theme, parallel_downloads, download_retries, search_limit, search_resolve_workers, pagination_mode, the five last_* filter keys, main_splitter_sizes, right_splitter_sizes and accent_color. Read src/app/preferences.ts:12-37: Preferences has exactly theme, locale, numerals and sidebarCollapsed, DEFAULTS fills them, and STORAGE_KEY is modmanager.preferences.v1 in localStorage, with a shortcut comment saying a core JSON settings file does not exist yet. features.md:237 marks F-151 Keep.
-
-### A-0195 — medium — ui (screens.md §3 #2 ActiveProfileSelectDialog)
-
-- القديم: `D:\latest_project\app\ui\main_window.py:1311`
-- الجديد: `src/app/pages/InstancesPage.tsx:149`
-- method: `browser` · reviewer: `browser`
-- الانحراف: The old app kept one active profile that every launch/install action read. The new app has no active-profile state at all: instances are independent rows and no screen or command selects an active one. No R-1..R-11 decision documents this removal.
-- الدليل: console: 0 errors; command palette searched for «ملف نشط» returned «لا شيء يطابق هذا البحث»; the palette lists only the six nav destinations; the instances page shows per-instance actions with no active marker; screenshot .opencode/analyses/audit/shots/A-0195.jpeg
 
 ### A-0198 — medium — ui (screens.md §3 #5 DownloadReportDialog)
 
@@ -221,6 +197,14 @@
 - الانحراف: The old app could export a profile as a launcher instance («Profile as Instance»). The new app treats the instance folder as the unit and has no export-to-launcher action; nothing in R-1..R-11 records the removal.
 - الدليل: console: 0 errors; palette searched for «المثيل» matched only the «اذهب إلى / المثيلات» destination and no command; the instance card exposes only افتح المجلد / المحتوى / إخفاء; screenshot .opencode/analyses/audit/shots/A-0207.jpeg
 
+### A-0215 — medium — ui (screens.md §3 #22 ProfileManagerDialog)
+
+- القديم: `D:\latest_project\app\ui\main_window.py:4226`
+- الجديد: `src/app/pages/InstancesPage.tsx:149`
+- method: `browser` · reviewer: `browser`
+- الانحراف: Manage-profiles becomes the instances page, but with most of its actions gone. The old dialog offered New / Edit / Rename / Duplicate / Remove / Import / Export (main_window.py:4226-4276, plus Instance, Health Check, Repair Metadata, Export zip, Import folder, Import zip). The new page has «مثيل جديد» (plan/execute create, with a «ربط مجلد قائم» mode that covers Import folder), open-folder, content and hide only: generate_handler! (src-tauri/src/lib.rs:127-190) has no rename, duplicate, delete or JSON/zip import-export command for an instance, core/src/db/instances.rs has no update/delete mutator besides insert and mark_scanned (list/get/find_by_path are read-only), and core/src/instances has plan_create / execute_create / link_instance. Creating and linking work; managing an existing instance does not. The page-instead-of-dialog shape is a permitted screen reduction (screens.md section 6); the missing actions are not.
+- الدليل: console: 0 errors; «المثيلات» rendered «مثيل واحد», buttons مثيل جديد / تحديث, search «ابحث في المثيلات», filters الكل 1 / يحتاج انتباهًا 0, and the card «نسخة تجريبية · 1.21.1 · fabric» with افتح المجلد / المحتوى (and إخفاء once expanded) — no rename, duplicate, remove or import/export; grep of src-tauri/src/lib.rs:127-190 and core/src/{instances,db/instances.rs} confirms those commands do not exist; screenshot .opencode/analyses/audit/shots/A-0215.jpeg
+
 ### A-0219 — medium — ui (screens.md §3 Saved mods (R-10))
 
 - القديم: `D:\latest_project\app\ui\main_window.py:11059`
@@ -233,9 +217,9 @@
 
 | البُعد | الوحدات | مطابق | موثّق | findings | غير مُتحقَّق |
 |---|---|---|---|---|---|
-| behavior | 181 | 115 | 47 | 19 | 0 |
+| behavior | 181 | 113 | 49 | 19 | 0 |
 | cli | 6 | 5 | 1 | 0 | 0 |
-| data | 12 | 9 | 2 | 1 | 0 |
+| data | 12 | 10 | 2 | 0 | 0 |
 | deps | 4 | 3 | 1 | 0 | 0 |
 | i18n | 4 | 4 | 0 | 0 | 0 |
 | lessons | 10 | 9 | 1 | 0 | 0 |
@@ -243,7 +227,7 @@
 | performance | 7 | 0 | 0 | 0 | 7 |
 | safety | 10 | 10 | 0 | 0 | 0 |
 | tests | 8 | 8 | 0 | 0 | 0 |
-| ui | 26 | 9 | 10 | 7 | 0 |
+| ui | 26 | 9 | 11 | 6 | 0 |
 
 ## غير قابل للتحقّق
 
@@ -325,7 +309,7 @@
 | A-0064 | behavior | F-064 | match | info |
 | A-0065 | behavior | F-065 | match | info |
 | A-0066 | behavior | F-066 | match | info |
-| A-0067 | behavior | F-067 | match | info |
+| A-0067 | behavior | F-067 | undocumented-deviation | medium |
 | A-0068 | behavior | F-068 | match | info |
 | A-0069 | behavior | F-069 | match | info |
 | A-0070 | behavior | F-070 | match | info |
@@ -341,10 +325,10 @@
 | A-0080 | behavior | F-080 | match | info |
 | A-0081 | behavior | F-081 | match | info |
 | A-0082 | behavior | F-082 | match | info |
-| A-0083 | behavior | F-083 | undocumented-deviation | medium |
+| A-0083 | behavior | F-083 | documented-deviation | low |
 | A-0084 | behavior | F-084 | documented-deviation | low |
 | A-0085 | behavior | F-085 | match | info |
-| A-0086 | behavior | F-086 | match | info |
+| A-0086 | behavior | F-086 | undocumented-deviation | medium |
 | A-0087 | behavior | F-087 | match | info |
 | A-0088 | behavior | F-088 | match | info |
 | A-0089 | behavior | F-089 | match | info |
@@ -386,7 +370,7 @@
 | A-0125 | behavior | F-125 | documented-deviation | low |
 | A-0126 | behavior | F-126 | match | info |
 | A-0127 | behavior | F-127 | match | info |
-| A-0128 | behavior | F-128 | undocumented-deviation | medium |
+| A-0128 | behavior | F-128 | documented-deviation | low |
 | A-0129 | behavior | F-129 | undocumented-deviation | medium |
 | A-0130 | behavior | F-130 | match | info |
 | A-0131 | behavior | F-131 | match | info |
@@ -444,7 +428,7 @@
 | A-0183 | data | — | documented-deviation | low |
 | A-0184 | data | — | match | info |
 | A-0185 | data | — | match | info |
-| A-0186 | data | — | undocumented-deviation | medium |
+| A-0186 | data | — | match | info |
 | A-0187 | data | — | match | info |
 | A-0188 | data | — | match | info |
 | A-0189 | data | — | match | info |
@@ -453,7 +437,7 @@
 | A-0192 | data | — | match | info |
 | A-0193 | data | — | match | info |
 | A-0194 | ui | screens.md §3 #1 SettingsDialog | match | info |
-| A-0195 | ui | screens.md §3 #2 ActiveProfileSelectDialog | undocumented-deviation | medium |
+| A-0195 | ui | screens.md §3 #2 ActiveProfileSelectDialog | documented-deviation | medium |
 | A-0196 | ui | screens.md §3 #3 DataPackWorldTargetDialog | documented-deviation | low |
 | A-0197 | ui | screens.md §3 #4 ProfileWorldsDialog | documented-deviation | low |
 | A-0198 | ui | screens.md §3 #5 DownloadReportDialog | undocumented-deviation | medium |
@@ -473,7 +457,7 @@
 | A-0212 | ui | screens.md §3 #19 ProfileExportZipImportPreviewDialog | match | info |
 | A-0213 | ui | screens.md §3 #20 ProfileFolderImportDialog | match | info |
 | A-0214 | ui | screens.md §3 #21 ProfileMetadataRepairDialog | documented-deviation | low |
-| A-0215 | ui | screens.md §3 #22 ProfileManagerDialog | undocumented-deviation | high |
+| A-0215 | ui | screens.md §3 #22 ProfileManagerDialog | undocumented-deviation | medium |
 | A-0216 | ui | screens.md §3 #23 PreLaunchActivationDialog | documented-deviation | info |
 | A-0217 | ui | screens.md §3 #24 OperationCenterDialog | match | info |
 | A-0218 | ui | screens.md §3 Target Version Planner (R-9) | match | info |
